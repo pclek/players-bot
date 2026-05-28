@@ -399,6 +399,22 @@ class Matching(commands.Cog):
         # 대기실을 완전히 나갔거나 일반 채널로 이동하면 큐 취소
         await remove_user_from_all_queues(member.id)
 
+    @commands.Cog.listener()
+    async def on_guild_channel_delete(
+        self,
+        channel: discord.abc.GuildChannel,
+    ):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                """
+                DELETE FROM matching_waiting_rooms
+                WHERE channel_id = ?
+                """,
+                (channel.id,),
+            )
+
+            await db.commit()    
+
     @app_commands.command(name="매칭", description="게임 매칭 큐에 참가합니다.")
     async def matching(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
