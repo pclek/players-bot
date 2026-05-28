@@ -1,2 +1,10 @@
 .env
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+database/*.db
+.venv/
+venv/
+.env.*
