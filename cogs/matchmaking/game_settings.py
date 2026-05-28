@@ -14,8 +14,10 @@ class GameNameModal(discord.ui.Modal):
         role: discord.Role,
         recruit_channel: discord.TextChannel,
         tempvoice_channel: discord.VoiceChannel,
+        default_game_name: str = "",
+        default_match_size: str = "",
     ):
-        super().__init__(title="게임 추가")
+        super().__init__(title="게임 추가/수정")
 
         self.role = role
         self.recruit_channel = recruit_channel
@@ -26,6 +28,7 @@ class GameNameModal(discord.ui.Modal):
             placeholder="예: 롤, 배그, 발로란트",
             required=True,
             max_length=50,
+            default=default_game_name,
         )
 
         self.match_size = discord.ui.TextInput(
@@ -33,6 +36,7 @@ class GameNameModal(discord.ui.Modal):
             placeholder="예: 롤 10, 배그 4, 발로란트 5",
             required=True,
             max_length=2,
+            default=default_match_size,
         )
 
         self.add_item(self.game_name)
@@ -211,14 +215,79 @@ class GameDeleteSelect(discord.ui.Select):
             ephemeral=True,
         )
 
+class GameEditSelect(discord.ui.Select):
+    def __init__(self, rows):
+        options = []
+
+        for game_name, *_ in rows[:25]:
+            options.append(
+                discord.SelectOption(
+                    label=game_name,
+                    value=game_name,
+                    description=f"{game_name} 설정을 수정합니다.",
+                )
+            )
+
+        super().__init__(
+            placeholder="수정할 게임을 선택하세요.",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        game_name = self.values[0]
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+            SELECT role_id, recruit_channel_id, tempvoice_creator_id, match_size
+            FROM game_settings
+            WHERE game_name = ?
+            """, (game_name,)) as cursor:
+                row = await cursor.fetchone()
+
+        if not row:
+            await interaction.response.send_message(
+                "❌ 해당 게임을 찾을 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        role_id, recruit_channel_id, tempvoice_creator_id, match_size = row
+
+        role = interaction.guild.get_role(role_id)
+        recruit_channel = interaction.guild.get_channel(recruit_channel_id)
+        tempvoice_channel = interaction.guild.get_channel(tempvoice_creator_id)
+
+        if not role or not recruit_channel or not tempvoice_channel:
+            await interaction.response.send_message(
+                "❌ 역할 또는 채널이 삭제되어 수정할 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_modal(
+            GameNameModal(
+                role,
+                recruit_channel,
+                tempvoice_channel,
+                default_game_name=game_name,
+                default_match_size=str(match_size),
+            )
+        )
 
 class GameMenuSelect(discord.ui.Select):
     def __init__(self):
         options = [
             discord.SelectOption(
-                label="게임 추가/수정",
-                description="게임 역할, 모집채널, 생성기채널을 설정합니다.",
+                label="게임 추가",
+                description="새 게임 설정을 추가합니다.",
                 value="add",
+            ),
+            discord.SelectOption(
+                label="게임 수정",
+                description="기존 게임 설정을 수정합니다.",
+                value="edit",
             ),
             discord.SelectOption(
                 label="게임 삭제",
@@ -248,6 +317,31 @@ class GameMenuSelect(discord.ui.Select):
 
             await interaction.response.send_message(
                 "🎭 모집 시 태그할 역할을 선택하세요.",
+                view=view,
+                ephemeral=True,
+            )
+            return
+
+        if selected == "edit":
+            async with aiosqlite.connect(DB_PATH) as db:
+                async with db.execute("""
+                SELECT game_name, role_id, recruit_channel_id, tempvoice_creator_id
+                FROM game_settings
+                """) as cursor:
+                    rows = await cursor.fetchall()
+
+            if not rows:
+                await interaction.response.send_message(
+                    "❌ 수정할 게임 설정이 없습니다.",
+                    ephemeral=True,
+                )
+                return
+
+            view = discord.ui.View(timeout=60)
+            view.add_item(GameEditSelect(rows))
+
+            await interaction.response.send_message(
+                "✏️ 수정할 게임을 선택하세요.",
                 view=view,
                 ephemeral=True,
             )
@@ -304,7 +398,7 @@ async def send_game_list(interaction: discord.Interaction):
 
     lines = []
 
-    for index, row in enumerate(rows, start=1):
+    for row in rows:
         game_name, role_id, recruit_channel_id, tempvoice_creator_id, match_size = row
 
         role = interaction.guild.get_role(role_id)
@@ -312,10 +406,10 @@ async def send_game_list(interaction: discord.Interaction):
         tempvoice_channel = interaction.guild.get_channel(tempvoice_creator_id)
 
         lines.append(
-            f"**#{index} {game_name}**\n"
+            f"🎮 **{game_name}**\n"
             f"역할: {role.mention if role else '삭제됨'}\n"
             f"모집채널: {recruit_channel.mention if recruit_channel else '삭제됨'}\n"
-            f"생성기: {tempvoice_channel.mention if tempvoice_channel else '삭제됨'}"
+            f"생성기: {tempvoice_channel.mention if tempvoice_channel else '삭제됨'}\n"
             f"매칭 인원: `{match_size}명`"
         )
 

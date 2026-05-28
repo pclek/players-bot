@@ -199,7 +199,97 @@ class StickyMessageModal(discord.ui.Modal):
             f"✅ {self.channel.mention} 채널에 스티키를 등록했습니다.",
             ephemeral=True,
         )
+class StickyEditModal(discord.ui.Modal):
+    def __init__(self, sticky_id: int, old_title: str, old_message: str, old_recruit_button: int):
+        super().__init__(title="스티키 메시지 수정")
+        self.sticky_id = sticky_id
 
+        self.title_input = discord.ui.TextInput(
+            label="제목",
+            required=True,
+            max_length=100,
+            default=old_title or "📌 안내",
+        )
+
+        self.message_input = discord.ui.TextInput(
+            label="내용",
+            required=True,
+            style=discord.TextStyle.paragraph,
+            max_length=1500,
+            default=old_message or "",
+        )
+
+        self.recruit_button = discord.ui.TextInput(
+            label="모집 버튼 사용",
+            placeholder="ON 또는 OFF 입력",
+            required=False,
+            default="ON" if old_recruit_button else "OFF",
+            max_length=4,
+        )
+
+        self.add_item(self.title_input)
+        self.add_item(self.message_input)
+        self.add_item(self.recruit_button)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        new_title = str(self.title_input.value).strip() or "📌 안내"
+        new_message = str(self.message_input.value).strip()
+        new_recruit_button = 1 if str(self.recruit_button.value).upper() == "ON" else 0
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+            SELECT channel_id, last_message_id
+            FROM sticky_messages
+            WHERE id = ?
+            """, (self.sticky_id,)) as cursor:
+                row = await cursor.fetchone()
+
+            if not row:
+                await interaction.response.send_message(
+                    "❌ 해당 스티키를 찾을 수 없습니다.",
+                    ephemeral=True,
+                )
+                return
+
+            channel_id, last_message_id = row
+
+            await db.execute("""
+            UPDATE sticky_messages
+            SET title = ?, message = ?, recruit_button = ?
+            WHERE id = ?
+            """, (
+                new_title,
+                new_message,
+                new_recruit_button,
+                self.sticky_id,
+            ))
+
+            await db.commit()
+
+        channel = interaction.guild.get_channel(channel_id)
+
+        if channel and last_message_id:
+            try:
+                old_sticky_message = await channel.fetch_message(last_message_id)
+                embed = make_sticky_embed(new_title, new_message)
+
+                if new_recruit_button:
+                    await old_sticky_message.edit(
+                        embed=embed,
+                        view=StickyRecruitView(),
+                    )
+                else:
+                    await old_sticky_message.edit(
+                        embed=embed,
+                        view=None,
+                    )
+            except discord.HTTPException:
+                pass
+
+        await interaction.response.send_message(
+            "✅ 스티키를 수정했습니다.",
+            ephemeral=True,
+        )
 
 class StickyChannelSelect(discord.ui.ChannelSelect):
     def __init__(self):
@@ -278,6 +368,57 @@ class StickyRemoveSelect(discord.ui.Select):
             ephemeral=True,
         )
 
+class StickyEditSelect(discord.ui.Select):
+    def __init__(self, rows):
+        options = []
+
+        for sticky_id, channel_id, title, message, recruit_button in rows[:25]:
+            short_title = title[:80] if title else "제목 없음"
+            short_message = message.replace("\n", " ")[:90] if message else "내용 없음"
+
+            options.append(
+                discord.SelectOption(
+                    label=short_title,
+                    value=str(sticky_id),
+                    description=short_message,
+                )
+            )
+
+        super().__init__(
+            placeholder="수정할 스티키를 선택하세요.",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        sticky_id = int(self.values[0])
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+            SELECT title, message, recruit_button
+            FROM sticky_messages
+            WHERE id = ?
+            """, (sticky_id,)) as cursor:
+                row = await cursor.fetchone()
+
+        if not row:
+            await interaction.response.send_message(
+                "❌ 해당 스티키를 찾을 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        title, message, recruit_button = row
+
+        await interaction.response.send_modal(
+            StickyEditModal(
+                sticky_id=sticky_id,
+                old_title=title,
+                old_message=message,
+                old_recruit_button=recruit_button,
+            )
+        )
 
 class StickyMenuSelect(discord.ui.Select):
     def __init__(self):
@@ -286,6 +427,11 @@ class StickyMenuSelect(discord.ui.Select):
                 label="스티키 설정",
                 description="채널에 새 스티키 임베드를 등록합니다.",
                 value="add",
+            ),
+            discord.SelectOption(
+                label="스티키 수정",
+                description="등록된 스티키의 제목/내용/모집 버튼을 수정합니다.",
+                value="edit",
             ),
             discord.SelectOption(
                 label="스티키 제거",
@@ -319,7 +465,50 @@ class StickyMenuSelect(discord.ui.Select):
                 ephemeral=True,
             )
             return
+        
+        if selected == "edit":
+            async with aiosqlite.connect(DB_PATH) as db:
+                async with db.execute("""
+                SELECT id, channel_id, title, message, recruit_button
+                FROM sticky_messages
+                ORDER BY id
+                """) as cursor:
+                    rows = await cursor.fetchall()
 
+            valid_rows = []
+
+            async with aiosqlite.connect(DB_PATH) as db:
+                for sticky_id, channel_id, title, message, recruit_button in rows:
+                    channel = interaction.guild.get_channel(channel_id)
+
+                    if channel is None:
+                        await db.execute("""
+                        DELETE FROM sticky_messages
+                        WHERE id = ?
+                        """, (sticky_id,))
+                        continue
+
+                    valid_rows.append((sticky_id, channel_id, title, message, recruit_button))
+
+                await db.commit()
+
+            if not valid_rows:
+                await interaction.response.send_message(
+                    "❌ 수정할 스티키가 없습니다.",
+                    ephemeral=True,
+                )
+                return
+
+            view = discord.ui.View(timeout=60)
+            view.add_item(StickyEditSelect(valid_rows))
+
+            await interaction.response.send_message(
+                "✏️ 수정할 스티키를 선택하세요.",
+                view=view,
+                ephemeral=True,
+            )
+            return
+            
         if selected == "remove":
             async with aiosqlite.connect(DB_PATH) as db:
                 async with db.execute("""
@@ -375,7 +564,20 @@ async def send_sticky_list(interaction: discord.Interaction):
 
     for sticky_id, channel_id, title, message in rows:
         channel = interaction.guild.get_channel(channel_id)
-        channel_text = channel.mention if channel else f"삭제된 채널 ID: `{channel_id}`"
+
+        # 삭제된 채널이면 DB에서도 제거
+        if channel is None:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("""
+                DELETE FROM sticky_messages
+                WHERE id = ?
+                """, (sticky_id,))
+
+                await db.commit()
+
+            continue
+
+        channel_text = channel.mention
 
         preview = message.replace("\n", " ")
 
@@ -383,7 +585,7 @@ async def send_sticky_list(interaction: discord.Interaction):
             preview = preview[:80] + "..."
 
         lines.append(
-            f"**#{sticky_id}** {channel_text}\n"
+            f"ㆍ{channel_text}\n"
             f"제목: `{title}`\n"
             f"내용: `{preview}`"
         )
