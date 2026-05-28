@@ -16,6 +16,117 @@ def make_sticky_embed(title: str, message: str):
     )
     return embed
 
+class StickyRecruitView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="🎮 모집하기",
+        style=discord.ButtonStyle.green,
+        custom_id="sticky_recruit_create",
+    )
+    async def create_recruit(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        if not interaction.user.voice or not interaction.user.voice.channel:
+            await interaction.response.send_message(
+                "❌ 먼저 음성채널에 입장해주세요.",
+                ephemeral=True,
+            )
+            return
+
+        voice_channel = interaction.user.voice.channel
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+            SELECT game_name, role_id
+            FROM game_settings
+            WHERE recruit_channel_id = ?
+            """, (interaction.channel.id,)) as cursor:
+                game = await cursor.fetchone()
+
+            if not game:
+                await interaction.response.send_message(
+                    "❌ 이 채널은 모집채널로 설정되지 않았습니다.",
+                    ephemeral=True,
+                )
+                return
+
+            async with db.execute("""
+            SELECT message_id
+            FROM recruit_posts
+            WHERE voice_channel_id = ?
+            """, (voice_channel.id,)) as cursor:
+                existing = await cursor.fetchone()
+
+        if existing:
+            await interaction.response.send_message(
+                "❌ 현재 음성채널에는 이미 모집글이 존재합니다.",
+                ephemeral=True,
+            )
+            return
+
+        game_name, role_id = game
+
+        role = interaction.guild.get_role(role_id)
+
+        embed = discord.Embed(
+            title=f"🎮 {game_name} 모집",
+            description=(
+                f"👑 모집장: {interaction.user.mention}\n"
+                f"🎧 음성채널: {voice_channel.mention}\n"
+                f"👥 참여자: `1명`\n\n"
+                f"**참여자 목록**\n"
+                f"- {interaction.user.mention}"
+            ),
+            color=discord.Color.green(),
+        )
+
+        content = role.mention if role else ""
+
+        message = await interaction.channel.send(
+            content=content,
+            embed=embed,
+            view=RecruitPostView(is_full=False),
+        )
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+            INSERT INTO recruit_posts (
+                message_id,
+                game_name,
+                host_id,
+                channel_id,
+                voice_channel_id
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """, (
+                message.id,
+                game_name,
+                interaction.user.id,
+                interaction.channel.id,
+                voice_channel.id,
+            ))
+
+            await db.execute("""
+            INSERT OR IGNORE INTO recruit_members (
+                message_id,
+                user_id
+            )
+            VALUES (?, ?)
+            """, (
+                message.id,
+                interaction.user.id,
+            ))
+
+            await db.commit()
+
+        await interaction.response.send_message(
+            "✅ 모집글을 생성했습니다.",
+            ephemeral=True,
+        )
 
 class StickyMessageModal(discord.ui.Modal):
     def __init__(self, channel: discord.TextChannel):
@@ -36,9 +147,16 @@ class StickyMessageModal(discord.ui.Modal):
             style=discord.TextStyle.paragraph,
             max_length=1500,
         )
-
+        self.recruit_button = discord.ui.TextInput(
+            label="모집 버튼 사용",
+            placeholder="ON 또는 OFF 입력",
+            required=False,
+            default="OFF",
+            max_length=4,
+        )
         self.add_item(self.title_input)
         self.add_item(self.message_input)
+        self.add_item(self.recruit_button)
 
     async def on_submit(self, interaction: discord.Interaction):
         sticky_title = str(self.title_input.value).strip()
@@ -53,13 +171,15 @@ class StickyMessageModal(discord.ui.Modal):
                 channel_id,
                 title,
                 message,
+                recruit_button,
                 last_message_id
             )
-            VALUES (?, ?, ?, NULL)
+            VALUES (?, ?, ?, ?, NULL)
             """, (
                 self.channel.id,
                 sticky_title,
                 sticky_text,
+                1 if str(self.recruit_button.value).upper() == "ON" else 0,
             ))
 
             await db.commit()
@@ -310,7 +430,7 @@ class Sticky(commands.Cog):
 
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("""
-            SELECT id, title, message, last_message_id
+            SELECT id, title, message, recruit_button, last_message_id
             FROM sticky_messages
             WHERE channel_id = ?
             ORDER BY id
@@ -323,7 +443,7 @@ class Sticky(commands.Cog):
         self.processing_channels.add(channel_id)
 
         try:
-            for sticky_id, title, sticky_text, last_message_id in rows:
+            for sticky_id, title, sticky_text, recruit_button, last_message_id in rows:
                 if last_message_id:
                     try:
                         old_message = await message.channel.fetch_message(last_message_id)
@@ -332,7 +452,13 @@ class Sticky(commands.Cog):
                         pass
 
                 embed = make_sticky_embed(title, sticky_text)
-                new_message = await message.channel.send(embed=embed)
+                if recruit_button:
+                    new_message = await message.channel.send(
+                        embed=embed,
+                        view=StickyRecruitView(),
+                    )
+                else:
+                    new_message = await message.channel.send(embed=embed)
 
                 async with aiosqlite.connect(DB_PATH) as db:
                     await db.execute("""

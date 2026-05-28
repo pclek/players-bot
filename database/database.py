@@ -136,9 +136,18 @@ async def setup_database():
             channel_id INTEGER,
             title TEXT,
             message TEXT,
+            recruit_button INTEGER DEFAULT 0,
             last_message_id INTEGER
         )
+                         
         """)
+        try:
+            await db.execute("""
+            ALTER TABLE sticky_messages
+            ADD COLUMN recruit_button INTEGER DEFAULT 0
+            """)
+        except Exception:
+            pass
 
         try:
             await db.execute("""
