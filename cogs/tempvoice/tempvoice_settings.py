@@ -134,19 +134,38 @@ class TempVoiceMenuSelect(discord.ui.Select):
             return
 
         lines = []
+        display_index = 1
+        deleted_creator_ids = []
 
-        for index, (creator_id,) in enumerate(rows, start=1):
+        for (creator_id,) in rows:
             channel = interaction.guild.get_channel(creator_id)
 
             if channel:
-                category_name = (
-                    channel.category.name if channel.category else "카테고리 없음"
-                )
+                category_name = channel.category.name if channel.category else "카테고리 없음"
                 lines.append(
-                    f"**#{index}** {channel.mention}\n" f"카테고리: `{category_name}`"
+                    f"**#{display_index}** {channel.mention}\n"
+                    f"카테고리: `{category_name}`"
                 )
+                display_index += 1
             else:
-                lines.append(f"**#{index}** 삭제된 채널 ID: `{creator_id}`")
+                deleted_creator_ids.append(creator_id)
+
+        if deleted_creator_ids:
+            async with aiosqlite.connect(DB_PATH) as db:
+                for creator_id in deleted_creator_ids:
+                    await db.execute("""
+                    DELETE FROM tempvoice_creators
+                    WHERE creator_channel_id = ?
+                    """, (creator_id,))
+
+                await db.commit()
+
+        if not lines:
+            await interaction.response.send_message(
+                "📋 등록된 채널 생성기가 없습니다.",
+                ephemeral=True
+            )
+            return
 
         embed = discord.Embed(
             title="📋 채널 생성기 목록",

@@ -116,11 +116,39 @@ async def create_match_channel_and_move(
 
     overwrites = dict(creator_channel.overwrites)
 
+    existing_numbers = []
+
+    for channel in creator_channel.category.voice_channels:
+        if channel.name.startswith(f"{game_name}매칭 #"):
+            try:
+                number = int(channel.name.split("#")[1])
+                existing_numbers.append(number)
+            except (IndexError, ValueError):
+                pass
+
+    next_number = 1
+
+    while next_number in existing_numbers:
+        next_number += 1
+
     match_channel = await guild.create_voice_channel(
-        name=f"{game_name} 매칭방",
+        name=f"{game_name}매칭 #{next_number}",
         category=creator_channel.category,
         overwrites=overwrites,
     )
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        INSERT OR REPLACE INTO tempvoice_channels (
+            channel_id,
+            owner_id
+        )
+        VALUES (?, ?)
+        """, (
+            match_channel.id,
+            0,
+        ))
+
+        await db.commit()
 
     member_lines = []
 
@@ -398,22 +426,7 @@ class Matching(commands.Cog):
 
         # 대기실을 완전히 나갔거나 일반 채널로 이동하면 큐 취소
         await remove_user_from_all_queues(member.id)
-
-    @commands.Cog.listener()
-    async def on_guild_channel_delete(
-        self,
-        channel: discord.abc.GuildChannel,
-    ):
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                """
-                DELETE FROM matching_waiting_rooms
-                WHERE channel_id = ?
-                """,
-                (channel.id,),
-            )
-
-            await db.commit()    
+        
 
     @app_commands.command(name="매칭", description="게임 매칭 큐에 참가합니다.")
     async def matching(self, interaction: discord.Interaction):
