@@ -30,103 +30,113 @@ class StickyRecruitView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button,
     ):
-        if not interaction.user.voice or not interaction.user.voice.channel:
-            await interaction.response.send_message(
-                "❌ 먼저 음성채널에 입장해주세요.",
-                ephemeral=True,
-            )
-            return
+        await interaction.response.defer(ephemeral=True)
 
-        voice_channel = interaction.user.voice.channel
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute("""
-            SELECT game_name, role_id
-            FROM game_settings
-            WHERE recruit_channel_id = ?
-            """, (interaction.channel.id,)) as cursor:
-                game = await cursor.fetchone()
-
-            if not game:
-                await interaction.response.send_message(
-                    "❌ 이 채널은 모집채널로 설정되지 않았습니다.",
+        try:
+            if not interaction.user.voice or not interaction.user.voice.channel:
+                await interaction.followup.send(
+                    "❌ 먼저 음성채널에 입장해주세요.",
                     ephemeral=True,
                 )
                 return
 
-            async with db.execute("""
-            SELECT message_id
-            FROM recruit_posts
-            WHERE voice_channel_id = ?
-            """, (voice_channel.id,)) as cursor:
-                existing = await cursor.fetchone()
+            voice_channel = interaction.user.voice.channel
 
-        if existing:
-            await interaction.response.send_message(
-                "❌ 현재 음성채널에는 이미 모집글이 존재합니다.",
+            async with aiosqlite.connect(DB_PATH) as db:
+                async with db.execute("""
+                SELECT game_name, role_id
+                FROM game_settings
+                WHERE recruit_channel_id = ?
+                """, (interaction.channel.id,)) as cursor:
+                    game = await cursor.fetchone()
+
+                if not game:
+                    await interaction.followup.send(
+                        "❌ 이 채널은 모집채널로 설정되지 않았습니다.",
+                        ephemeral=True,
+                    )
+                    return
+
+                async with db.execute("""
+                SELECT message_id
+                FROM recruit_posts
+                WHERE voice_channel_id = ?
+                """, (voice_channel.id,)) as cursor:
+                    existing = await cursor.fetchone()
+
+            if existing:
+                await interaction.followup.send(
+                    "❌ 현재 음성채널에는 이미 모집글이 존재합니다.",
+                    ephemeral=True,
+                )
+                return
+
+            game_name, role_id = game
+            role = interaction.guild.get_role(role_id)
+
+            embed = discord.Embed(
+                title=f"🎮 {game_name} 모집",
+                description=(
+                    f"👑 모집장: {interaction.user.mention}\n"
+                    f"🎧 음성채널: {voice_channel.mention}\n"
+                    f"👥 참여자: `1명`\n\n"
+                    f"**참여자 목록**\n"
+                    f"- {interaction.user.mention}"
+                ),
+                color=discord.Color.green(),
+            )
+
+            content = role.mention if role else ""
+
+            message = await interaction.channel.send(
+                content=content,
+                embed=embed,
+                view=RecruitPostView(is_full=False),
+            )
+
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("""
+                INSERT INTO recruit_posts (
+                    message_id,
+                    game_name,
+                    host_id,
+                    channel_id,
+                    voice_channel_id
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """, (
+                    message.id,
+                    game_name,
+                    interaction.user.id,
+                    interaction.channel.id,
+                    voice_channel.id,
+                ))
+
+                await db.execute("""
+                INSERT OR IGNORE INTO recruit_members (
+                    message_id,
+                    user_id
+                )
+                VALUES (?, ?)
+                """, (
+                    message.id,
+                    interaction.user.id,
+                ))
+
+                await db.commit()
+
+            await interaction.followup.send(
+                "✅ 모집글을 생성했습니다.",
                 ephemeral=True,
             )
-            return
 
-        game_name, role_id = game
+        except Exception as e:
+            print(f"[StickyRecruit] 모집 버튼 오류: {e}")
 
-        role = interaction.guild.get_role(role_id)
-
-        embed = discord.Embed(
-            title=f"🎮 {game_name} 모집",
-            description=(
-                f"👑 모집장: {interaction.user.mention}\n"
-                f"🎧 음성채널: {voice_channel.mention}\n"
-                f"👥 참여자: `1명`\n\n"
-                f"**참여자 목록**\n"
-                f"- {interaction.user.mention}"
-            ),
-            color=discord.Color.green(),
-        )
-
-        content = role.mention if role else ""
-
-        message = await interaction.channel.send(
-            content=content,
-            embed=embed,
-            view=RecruitPostView(is_full=False),
-        )
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("""
-            INSERT INTO recruit_posts (
-                message_id,
-                game_name,
-                host_id,
-                channel_id,
-                voice_channel_id
+            await interaction.followup.send(
+                f"❌ 모집글 생성 중 오류가 발생했습니다.\n`{type(e).__name__}: {e}`",
+                ephemeral=True,
             )
-            VALUES (?, ?, ?, ?, ?)
-            """, (
-                message.id,
-                game_name,
-                interaction.user.id,
-                interaction.channel.id,
-                voice_channel.id,
-            ))
-
-            await db.execute("""
-            INSERT OR IGNORE INTO recruit_members (
-                message_id,
-                user_id
-            )
-            VALUES (?, ?)
-            """, (
-                message.id,
-                interaction.user.id,
-            ))
-
-            await db.commit()
-
-        await interaction.response.send_message(
-            "✅ 모집글을 생성했습니다.",
-            ephemeral=True,
-        )
 
 class StickyMessageModal(discord.ui.Modal):
     def __init__(self, channel: discord.TextChannel):
