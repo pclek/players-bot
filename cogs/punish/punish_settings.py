@@ -43,6 +43,50 @@ class PunishRoleSelect(discord.ui.RoleSelect):
         await interaction.response.send_message(
             f"✅ {role.mention} 역할로 설정했습니다.", ephemeral=True
         )
+class RejoinNoticeChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self):
+        super().__init__(
+            placeholder="재입장 안내를 보낼 채널을 선택하세요.",
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        channel = self.values[0]
+
+        await set_setting("rejoin_notice_channel_id", str(channel.id))
+
+        await interaction.response.send_message(
+            f"✅ 재입장 안내 채널을 {channel.mention} 으로 설정했습니다.",
+            ephemeral=True,
+        )
+
+
+class RejoinNoticeMessageModal(discord.ui.Modal):
+    def __init__(self):
+        super().__init__(title="재입장 안내 문구 설정")
+
+        self.message = discord.ui.TextInput(
+            label="안내 문구",
+            placeholder="{mention} 님이 재입장하여 격리 처리되었습니다.",
+            required=True,
+            style=discord.TextStyle.paragraph,
+            max_length=1000,
+        )
+
+        self.add_item(self.message)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        notice_message = str(self.message.value).strip()
+
+        await set_setting("rejoin_notice_message", notice_message)
+
+        await interaction.response.send_message(
+            "✅ 재입장 안내 문구를 저장했습니다.",
+            ephemeral=True,
+        )
+
 class InactiveBaseRoleSelect(discord.ui.RoleSelect):
     def __init__(self):
         super().__init__(
@@ -152,6 +196,16 @@ class PunishMenuSelect(discord.ui.Select):
                 value="inactive",
             ),
             discord.SelectOption(
+                label="재입장 안내 채널 설정",
+                description="들낙/재입장 격리 안내를 보낼 채널을 설정합니다.",
+                value="rejoin_notice_channel",
+            ),
+            discord.SelectOption(
+                label="재입장 안내 문구 설정",
+                description="재입장 격리 시 출력할 안내 문구를 설정합니다.",
+                value="rejoin_notice_message",
+            ),
+            discord.SelectOption(
                 label="현재 설정 조회",
                 description="현재 제재 설정을 확인합니다.",
                 value="view",
@@ -201,16 +255,34 @@ class PunishMenuSelect(discord.ui.Select):
                 ephemeral=True,
             )
             return
+        if selected == "rejoin_notice_channel":
+            view = discord.ui.View(timeout=60)
+            view.add_item(RejoinNoticeChannelSelect())
+
+            await interaction.response.send_message(
+                "📢 재입장 안내를 보낼 채널을 선택하세요.",
+                view=view,
+                ephemeral=True,
+            )
+            return
+
+        if selected == "rejoin_notice_message":
+            await interaction.response.send_modal(RejoinNoticeMessageModal())
+            return        
 
         quarantine_role_id = await get_setting("quarantine_role_id")
         exempt_role_id = await get_setting("punish_exempt_role_id")
         inactive_base_role_id = await get_setting("inactive_base_role_id")
         inactive_days = await get_setting("inactive_days")
         inactive_role_id = await get_setting("inactive_role_id")
+        rejoin_notice_channel_id = await get_setting("rejoin_notice_channel_id")
+        rejoin_notice_message = await get_setting("rejoin_notice_message")
 
         quarantine_text = "설정 안 됨"
         exempt_text = "설정 안 됨"
         inactive_text = "설정 안 됨"
+        rejoin_channel_text = "설정 안 됨"
+        rejoin_message_text = rejoin_notice_message if rejoin_notice_message else "설정 안 됨"
 
         if quarantine_role_id:
             role = interaction.guild.get_role(int(quarantine_role_id))
@@ -245,12 +317,20 @@ class PunishMenuSelect(discord.ui.Select):
                 f"기간: `{inactive_days}일`\n"
                 f"지급 역할: {role_text}"
             )
-
+        if rejoin_notice_channel_id:
+            channel = interaction.guild.get_channel(int(rejoin_notice_channel_id))
+            rejoin_channel_text = (
+                channel.mention
+                if channel
+                else f"삭제된 채널 ID: `{rejoin_notice_channel_id}`"
+            )
         embed = discord.Embed(title="🛡 제재 설정", color=discord.Color.red())
 
         embed.add_field(name="격리 역할", value=quarantine_text, inline=False)
         embed.add_field(name="제재 면역 역할", value=exempt_text, inline=False)
         embed.add_field(name="장기 미활동 설정", value=inactive_text, inline=False)
+        embed.add_field(name="재입장 안내 채널", value=rejoin_channel_text, inline=False)
+        embed.add_field(name="재입장 안내 문구", value=rejoin_message_text, inline=False)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 

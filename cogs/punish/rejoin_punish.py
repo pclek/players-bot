@@ -68,12 +68,60 @@ class RejoinPunish(commands.Cog):
 
         try:
             await member.add_roles(
-                quarantine_role, reason="재입장 감지로 인한 자동 격리"
+                quarantine_role,
+                reason="재입장 감지로 인한 자동 격리",
             )
         except discord.Forbidden:
             return
         except discord.HTTPException:
             return
+
+        rejoin_notice_channel_id = await get_setting("rejoin_notice_channel_id")
+        rejoin_notice_message = await get_setting("rejoin_notice_message")
+
+        if not rejoin_notice_channel_id:
+            return
+
+        notice_channel = member.guild.get_channel(int(rejoin_notice_channel_id))
+
+        if not notice_channel:
+            return
+
+        if not rejoin_notice_message:
+            rejoin_notice_message = (
+                "{mention} 님이 서버에 재입장하여 자동 격리 처리되었습니다.\n"
+                "관리자 확인 후 안내에 따라 조치해주세요."
+            )
+
+        notice_text = (
+            rejoin_notice_message
+            .replace("{mention}", member.mention)
+            .replace("{user}", str(member))
+            .replace("{user_id}", str(member.id))
+            .replace("{server}", member.guild.name)
+        )
+
+        embed = discord.Embed(
+            title="🔒 재입장 격리 안내",
+            description=notice_text,
+            color=discord.Color.red(),
+        )
+
+        embed.add_field(
+            name="대상",
+            value=f"{member.mention}\n`{member.id}`",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="지급 역할",
+            value=quarantine_role.mention,
+            inline=False,
+        )
+
+        embed.set_thumbnail(url=member.display_avatar.url)
+
+        await notice_channel.send(embed=embed)
 
 
 async def setup(bot: commands.Bot):
