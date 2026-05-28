@@ -142,14 +142,34 @@ class MatchingSettingsSelect(discord.ui.Select):
             return
 
         lines = []
+        display_index = 1
+        deleted_channel_ids = []
 
-        for index, (channel_id,) in enumerate(rows, start=1):
+        for (channel_id,) in rows:
             channel = interaction.guild.get_channel(channel_id)
 
             if channel:
-                lines.append(f"**#{index}** {channel.mention}")
+                lines.append(f"**#{display_index}** {channel.mention}")
+                display_index += 1
             else:
-                lines.append(f"**#{index}** 삭제된 채널 ID: `{channel_id}`")
+                deleted_channel_ids.append(channel_id)
+
+        if deleted_channel_ids:
+            async with aiosqlite.connect(DB_PATH) as db:
+                for channel_id in deleted_channel_ids:
+                    await db.execute("""
+                    DELETE FROM matching_waiting_rooms
+                    WHERE channel_id = ?
+                    """, (channel_id,))
+
+                await db.commit()
+
+        if not lines:
+            await interaction.response.send_message(
+                "📋 등록된 매칭 대기실이 없습니다.",
+                ephemeral=True,
+            )
+            return
 
         embed = discord.Embed(
             title="📋 매칭 대기실 목록",
