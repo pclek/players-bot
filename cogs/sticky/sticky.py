@@ -4,6 +4,7 @@ from discord.ext import commands
 import aiosqlite
 
 from utils.checks import is_bot_admin
+from cogs.matchmaking.recruit import RecruitPostView
 
 DB_PATH = "database/bot.db"
 
