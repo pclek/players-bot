@@ -4,8 +4,22 @@ from discord.ext import commands
 import aiosqlite
 import random
 from datetime import datetime, timedelta
+from cogs.adventure.crafting import CraftView
+from cogs.adventure.blacksmith import BlacksmithMenuView
+from cogs.adventure.equipment import EquipView
 
-from cogs.adventure.adventure_utils import ensure_adventure_profile, add_adventure_item, get_adventure_profile, set_user_hp
+from cogs.adventure.adventure_utils import (
+    ensure_adventure_profile,
+    add_adventure_item,
+    get_adventure_profile,
+    set_user_hp,
+    get_adventure_item_count,
+    remove_adventure_item,
+    get_adventure_inventory,
+)
+
+from cogs.adventure.hunting import HuntView, ARMOR_SHIELDS
+from cogs.adventure.hunting import WEAPON_STATS
 
 DB_PATH = "database/bot.db"
 
@@ -37,6 +51,24 @@ class AdventureSelect(discord.ui.Select):
                 emoji="⚔️",
                 value="hunting",
             ),
+            discord.SelectOption(
+                label="제작",
+                description="모험 재료로 요리를 제작합니다.",
+                emoji="🍳",
+                value="crafting",
+            ),
+            discord.SelectOption(
+                label="대장간",
+                description="제련, 장비 제작, 수리를 진행합니다.",
+                emoji="⚒️",
+                value="blacksmith",
+            ),
+            discord.SelectOption(
+                label="장착",
+                description="무기와 방어구를 장착합니다.",
+                emoji="🧰",
+                value="equipment",
+            ),
         ]
 
         super().__init__(
@@ -53,8 +85,140 @@ class AdventureSelect(discord.ui.Select):
         await ensure_adventure_profile(user_id)
 
         if job_type == "hunting":
+            profile = await get_adventure_profile(user_id)
+
+            current_hp = profile[0]
+            weapon_name = profile[1] or "녹슨검"
+            armor_name = profile[2] or ""
+
+            if current_hp <= 1:
+                await interaction.response.send_message(
+                    "❌ 체력이 너무 낮아 사냥을 시작할 수 없습니다.",
+                    ephemeral=True,
+                )
+                return
+
+            shield = ARMOR_SHIELDS.get(armor_name, 0)
+
+            async with aiosqlite.connect(DB_PATH) as db:
+                async with db.execute("""
+                SELECT is_damaged
+                FROM adventure_equipment
+                WHERE user_id = ?
+                AND item_name = ?
+                """, (
+                    user_id,
+                    armor_name,
+                )) as cursor:
+                    armor_row = await cursor.fetchone()
+
+            if armor_row and armor_row[0] == 1:
+                shield = shield // 2
+
+            view = HuntView(
+                user_id=user_id,
+                player_hp=current_hp,
+                shield=shield,
+                weapon_name=weapon_name,
+                armor_name=armor_name,
+            )
+
             await interaction.response.send_message(
-                "⚔️ 사냥은 다음 단계에서 추가됩니다.",
+                embed=view.make_embed("전투를 시작합니다."),
+                view=view,
+            )
+            return
+        
+        if job_type == "crafting":
+            embed = discord.Embed(
+                title="🍳 제작",
+                description=(
+                    "요리를 제작할 수 있습니다.\n\n"
+                    "`빵` : 밀 x3\n"
+                    "`허브감자` : 감자 x2 + 허브 x1\n"
+                    "`생선스테이크` : 생선 x1 + 허브 x1\n"
+                    "`피쉬앤칩스` : 생선 x1 + 감자 x1 + 밀 x1\n"
+                    "`황금정식` : 황금감자 x1 + 황금잉어 x1"
+                ),
+                color=discord.Color.orange(),
+            )
+
+            await interaction.response.send_message(
+                embed=embed,
+                view=CraftView(),
+                ephemeral=True,
+            )
+            return
+
+        if job_type == "blacksmith":
+            embed = discord.Embed(
+                title="⚒️ 대장간",
+                description="원하는 작업을 선택하세요.",
+                color=discord.Color.dark_orange(),
+            )
+
+            embed.add_field(
+                name="🔥 제련",
+                value="광석과 석탄으로 주괴를 만듭니다.",
+                inline=False,
+            )
+
+            embed.add_field(
+                name="⚒️ 장비 제작",
+                value="무기와 방어구를 제작합니다.",
+                inline=False,
+            )
+
+            embed.add_field(
+                name="🛠️ 수리",
+                value="손상된 방어구를 수리합니다.",
+                inline=False,
+            )
+
+            await interaction.response.send_message(
+                embed=embed,
+                view=BlacksmithMenuView(),
+                ephemeral=True,
+            )
+            return
+
+        if job_type == "equipment":
+            rows = await get_adventure_inventory(user_id)
+
+            equip_rows = [
+                row for row in rows
+                if row[0] in [
+                    "녹슨검",
+                    "구리검",
+                    "철검",
+                    "은검",
+                    "금검",
+                    "다이아검",
+                    "비브라늄검",
+                    "철갑옷",
+                    "은갑옷",
+                    "금갑옷",
+                    "다이아갑옷",
+                    "비브라늄갑옷",
+                ]
+            ]
+
+            if not equip_rows:
+                await interaction.response.send_message(
+                    "❌ 장착할 수 있는 장비가 없습니다.",
+                    ephemeral=True,
+                )
+                return
+
+            embed = discord.Embed(
+                title="🧰 장비 장착",
+                description="장착할 무기 또는 방어구를 선택하세요.",
+                color=discord.Color.blurple(),
+            )
+
+            await interaction.response.send_message(
+                embed=embed,
+                view=EquipView(equip_rows),
                 ephemeral=True,
             )
             return
@@ -79,6 +243,30 @@ class AdventureSelect(discord.ui.Select):
                 return
 
             now = datetime.now()
+
+            if job_type == "fishing":
+                bait_count = await get_adventure_item_count(user_id, "랜덤미끼")
+
+                if bait_count < 1:
+                    await interaction.response.send_message(
+                        "❌ 낚시를 시작하려면 `랜덤미끼 x1` 이 필요합니다.",
+                        ephemeral=True,
+                    )
+                    return
+
+                await remove_adventure_item(user_id, "랜덤미끼", 1)
+
+            if job_type == "farming":
+                seed_count = await get_adventure_item_count(user_id, "랜덤씨앗")
+
+                if seed_count < 1:
+                    await interaction.response.send_message(
+                        "❌ 농장을 시작하려면 `랜덤씨앗 x1` 이 필요합니다.",
+                        ephemeral=True,
+                    )
+                    return
+
+                await remove_adventure_item(user_id, "랜덤씨앗", 1)            
 
             if job_type == "fishing":
                 minutes = random.randint(0, 5)
@@ -247,6 +435,24 @@ class Adventure(commands.Cog):
         embed.add_field(
             name="⚔️ 사냥",
             value="전투 시스템 추가 후 사용 가능합니다.",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="🍳 제작",
+            value="음식을 제작합니다.",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="⚒️ 대장간",
+            value="제련, 장비 제작, 수리를 진행합니다.",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="🧰 장착",
+            value="무기와 방어구를 장착합니다.",
             inline=False,
         )
 

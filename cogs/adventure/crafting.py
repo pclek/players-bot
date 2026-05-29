@@ -199,28 +199,6 @@ class Crafting(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="제작", description="모험 재료로 요리를 제작합니다.")
-    async def crafting(self, interaction: discord.Interaction):
-        await ensure_adventure_profile(interaction.user.id)
-
-        embed = discord.Embed(
-            title="🍳 제작",
-            description=(
-                "요리를 제작할 수 있습니다.\n\n"
-                "`빵` : 밀 x3\n"
-                "`허브감자` : 감자 x2 + 허브 x1\n"
-                "`생선스테이크` : 생선 x1 + 허브 x1\n"
-                "`피쉬앤칩스` : 생선 x1 + 감자 x1 + 밀 x1\n"
-                "`황금정식` : 황금감자 x1 + 황금잉어 x1"
-            ),
-            color=discord.Color.orange(),
-        )
-
-        await interaction.response.send_message(
-            embed=embed,
-            view=CraftView(),
-            ephemeral=True,
-        )
 
 
 async def setup(bot: commands.Bot):
