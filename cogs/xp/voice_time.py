@@ -142,6 +142,8 @@ class VoiceTime(commands.Cog):
                     actual_units = min(reward_units, payable_units)
 
                     reward_points = actual_units * VOICE_REWARD_POINTS
+                    reward_xp = actual_units * VOICE_REWARD_XP
+
                     used_seconds = actual_units * VOICE_REWARD_SECONDS
 
                     new_accumulated_seconds = total_accumulated_seconds - used_seconds

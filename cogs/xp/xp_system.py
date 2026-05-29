@@ -11,8 +11,8 @@ KST = timezone(timedelta(hours=9))
 
 xp_cooldown = {}
 
-CHAT_XP = 15
-CHAT_POINTS = 5
+CHAT_XP = 8
+CHAT_POINTS = 3
 CHAT_COOLDOWN = 60
 DAILY_POINT_LIMIT = 500
 
