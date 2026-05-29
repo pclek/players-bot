@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 import aiosqlite
 from datetime import datetime, timedelta, timezone
+from cogs.adventure.adventure_utils import get_adventure_profile
 
 DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
@@ -63,6 +64,25 @@ def format_voice_time(seconds: int) -> str:
     minutes = (seconds % 3600) // 60
     return f"{hours}시간 {minutes}분"
 
+WEAPON_STATS = {
+    "녹슨검": (1, 3),
+    "구리검": (5, 8),
+    "철검": (8, 12),
+    "은검": (10, 15),
+    "금검": (12, 18),
+    "다이아검": (18, 26),
+    "비브라늄검": (25, 40),
+}
+
+ARMOR_SHIELDS = {
+    "": 0,
+    "없음": 0,
+    "철갑옷": 50,
+    "은갑옷": 70,
+    "금갑옷": 100,
+    "다이아갑옷": 150,
+    "비브라늄갑옷": 250,
+}
 
 async def get_level_rank(guild: discord.Guild, user_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -86,6 +106,20 @@ async def make_profile_embed(member: discord.Member):
     data = await get_or_create_user(member.id)
     xp, level, points, attendance, voice_time, warnings = data
 
+    adventure_profile = await get_adventure_profile(member.id)
+
+    current_hp = 100
+    equipped_weapon = "녹슨검"
+    equipped_armor = "없음"
+
+    if adventure_profile:
+        current_hp = adventure_profile[0]
+        equipped_weapon = adventure_profile[1] or "녹슨검"
+        equipped_armor = adventure_profile[2] or "없음"
+
+    attack_min, attack_max = WEAPON_STATS.get(equipped_weapon, (1, 3))
+    shield = ARMOR_SHIELDS.get(equipped_armor, 0)
+
     need_xp = required_xp(level)
     rank, total = await get_level_rank(member.guild, member.id)
 
@@ -107,6 +141,26 @@ async def make_profile_embed(member: discord.Member):
     embed.add_field(name="📅 출석일수", value=f"`{attendance}일`", inline=True)
     embed.add_field(name="🎧 음성채팅 시간", value=f"`{format_voice_time(voice_time)}`", inline=True)
     embed.add_field(name="\u200b", value="\u200b", inline=True)
+
+    embed.add_field(
+        name="❤️ 체력",
+        value=f"`{current_hp}(+{shield})`",
+        inline=True
+    )
+
+    embed.add_field(
+        name="⚔ 공격력",
+        value=f"`{attack_min} ~ {attack_max}`",
+        inline=True
+    )
+
+    embed.add_field(name="\u200b", value="\u200b", inline=True)
+
+    embed.add_field(
+        name=f"🛡 {equipped_armor}      🗡 {equipped_weapon}",
+        value="\u200b",
+        inline=False
+    )
 
     embed.set_thumbnail(url=member.display_avatar.url)
 
@@ -158,7 +212,7 @@ class Profile(commands.Cog):
                 )
                 return
 
-            reward_points = 100
+            reward_points = 30
             reward_xp = 50
 
             await db.execute("""

@@ -1,6 +1,7 @@
 import aiosqlite
 import os
 
+
 DB_PATH = "database/bot.db"
 
 
@@ -201,4 +202,144 @@ async def setup_database():
             log_channel_id INTEGER
         )
         """)
+        try:
+            await db.execute("""
+            ALTER TABLE shop_settings
+            ADD COLUMN shop_channel_id INTEGER
+            """)
+        except Exception:
+            pass
+
+        try:
+            await db.execute("""
+            ALTER TABLE shop_settings
+            ADD COLUMN shop_message_id INTEGER
+            """)
+        except Exception:
+            pass
+
+        try:
+            await db.execute("""
+            ALTER TABLE shop_settings
+            ADD COLUMN shop_last_sticky_at TEXT
+            """)
+        except Exception:
+            pass        
+        # 모험 아이템
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS adventure_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE,
+            category TEXT,
+            description TEXT,
+            buy_price INTEGER DEFAULT 0,
+            sell_price INTEGER DEFAULT 0,
+            shop_enabled INTEGER DEFAULT 0
+        )
+        """)        
+        # 모험 인벤토리
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS adventure_inventory (
+            user_id INTEGER,
+            item_name TEXT,
+            quantity INTEGER DEFAULT 0,
+            PRIMARY KEY (user_id, item_name)
+        )
+        """)
+        # 모험 프로필
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS adventure_profiles (
+            user_id INTEGER PRIMARY KEY,
+
+            current_hp INTEGER DEFAULT 100,
+
+            equipped_weapon TEXT DEFAULT '녹슨검',
+            equipped_armor TEXT DEFAULT '',
+
+            hunt_count INTEGER DEFAULT 0,
+            hunt_day TEXT
+        )
+        """)
+        # 모험 진행 상태
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS adventure_jobs (
+            user_id INTEGER PRIMARY KEY,
+
+            job_type TEXT,
+            started_at TEXT,
+            end_at TEXT
+        )
+        """)
+        # 장비 상태
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS adventure_equipment (
+            user_id INTEGER,
+            item_name TEXT,
+
+            is_damaged INTEGER DEFAULT 0,
+
+            PRIMARY KEY (user_id, item_name)
+        )
+        """)
+        # 모험 기본 아이템 등록
+        adventure_items = [
+            ("석탄", "광산", "대장간 제련에 사용되는 기본 연료입니다.", 0, 2, 0),
+            ("구리광석", "광산", "구리 장비 제작에 사용되는 광석입니다.", 0, 4, 0),
+            ("철광석", "광산", "철 장비 제작에 사용되는 광석입니다.", 0, 7, 0),
+            ("은광석", "광산", "은 장비 제작에 사용되는 광석입니다.", 0, 10, 0),
+            ("금광석", "광산", "금 장비 제작에 사용되는 광석입니다.", 0, 14, 0),
+            ("다이아원석", "광산", "희귀 장비 제작에 사용되는 원석입니다.", 0, 30, 0),
+            ("비브라늄원석", "광산", "최상급 장비 제작에 사용되는 희귀 원석입니다.", 0, 80, 0),
+
+            ("감자", "농장", "요리에 사용되는 작물입니다.", 0, 3, 0),
+            ("밀", "농장", "빵과 요리에 사용되는 작물입니다.", 0, 3, 0),
+            ("허브", "농장", "회복 음식 제작에 사용되는 약초입니다.", 0, 8, 0),
+            ("황금감자", "농장", "희귀 요리에 사용되는 특별한 감자입니다.", 0, 40, 0),
+
+            ("고등어", "낚시", "요리에 사용되는 평범한 생선입니다.", 0, 5, 0),
+            ("연어", "낚시", "요리에 사용되는 좋은 생선입니다.", 0, 10, 0),
+            ("참치", "낚시", "고급 요리에 사용되는 생선입니다.", 0, 18, 0),
+            ("황금잉어", "낚시", "희귀 요리에 사용되는 특별한 물고기입니다.", 0, 50, 0),
+            ("전설의심해어", "낚시", "전설급 제작에 사용될 수 있는 희귀 물고기입니다.", 0, 150, 0),
+
+
+            ("구리주괴", "대장간", "구리 장비 제작에 사용됩니다.", 0, 15, 0),
+            ("철주괴", "대장간", "철 장비 제작에 사용됩니다.", 0, 25, 0),
+            ("은주괴", "대장간", "은 장비 제작에 사용됩니다.", 0, 35, 0),
+            ("금주괴", "대장간", "금 장비 제작에 사용됩니다.", 0, 50, 0),
+            ("다이아결정", "대장간", "다이아 장비 제작에 사용됩니다.", 0, 120, 0),
+            ("비브라늄주괴", "대장간", "최상급 장비 제작에 사용됩니다.", 0, 300, 0),
+
+            ("빵", "음식", "전투 중 체력을 15 회복합니다.", 0, 8, 0),
+            ("허브감자", "음식", "전투 중 체력을 30 회복합니다.", 0, 18, 0),
+            ("생선스테이크", "음식", "전투 중 체력을 50 회복합니다.", 0, 35, 0),
+            ("피쉬앤칩스", "음식", "전투 중 체력을 80 회복합니다.", 0, 60, 0),
+            ("황금정식", "음식", "전투 중 체력을 전부 회복합니다.", 0, 150, 0),
+
+            ("녹슨검", "무기", "기본 무기입니다.", 0, 0, 0),
+            ("구리검", "무기", "구리로 만든 무기입니다.", 0, 30, 0),
+            ("철검", "무기", "철로 만든 무기입니다.", 0, 60, 0),
+            ("은검", "무기", "은으로 만든 무기입니다.", 0, 90, 0),
+            ("금검", "무기", "금으로 만든 무기입니다.", 0, 130, 0),
+            ("다이아검", "무기", "다이아 결정으로 만든 강력한 무기입니다.", 0, 300, 0),
+            ("비브라늄검", "무기", "최상급 무기입니다.", 0, 800, 0),
+
+            ("철갑옷", "방어구", "철로 만든 방어구입니다.", 0, 80, 0),
+            ("은갑옷", "방어구", "은으로 만든 방어구입니다.", 0, 120, 0),
+            ("금갑옷", "방어구", "금으로 만든 방어구입니다.", 0, 180, 0),
+            ("다이아갑옷", "방어구", "다이아 결정으로 만든 방어구입니다.", 0, 400, 0),
+            ("비브라늄갑옷", "방어구", "최상급 방어구입니다.", 0, 1000, 0),
+        ]
+
+        await db.executemany("""
+        INSERT OR IGNORE INTO adventure_items (
+            name,
+            category,
+            description,
+            buy_price,
+            sell_price,
+            shop_enabled
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, adventure_items)        
         await db.commit()

@@ -130,6 +130,107 @@ class ShopItemModal(discord.ui.Modal):
             ephemeral=True,
         )
 
+class AdventureShopPriceModal(discord.ui.Modal):
+    def __init__(self, item_name: str):
+        super().__init__(title=f"{item_name} 판매 설정")
+        self.item_name = item_name
+
+        self.price = discord.ui.TextInput(
+            label="가격",
+            placeholder="예: 10",
+            required=True,
+            max_length=10,
+        )
+
+        self.stock = discord.ui.TextInput(
+            label="재고",
+            placeholder="예: 100",
+            required=True,
+            max_length=10,
+        )
+
+        self.user_limit = discord.ui.TextInput(
+            label="1인당 일일 구매 제한",
+            placeholder="예: 20 (0=무제한)",
+            required=True,
+            max_length=10,
+        )
+
+        self.add_item(self.price)
+        self.add_item(self.stock)
+        self.add_item(self.user_limit)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            price = int(str(self.price.value))
+            stock = int(str(self.stock.value))
+            user_limit = int(str(self.user_limit.value))
+        except ValueError:
+            await interaction.response.send_message(
+                "❌ 가격, 재고, 구매 제한은 숫자로 입력해주세요.",
+                ephemeral=True,
+            )
+            return
+
+        if price < 0 or stock < 1 or user_limit < 0:
+            await interaction.response.send_message(
+                "❌ 가격은 0 이상, 재고는 1 이상, 구매 제한은 0 이상이어야 합니다.",
+                ephemeral=True,
+            )
+            return
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+            INSERT INTO adventure_shop_items (
+                item_name,
+                price,
+                stock,
+                user_limit,
+                limit_type,
+                enabled
+            )
+            VALUES (?, ?, ?, ?, 'daily', 1)
+            """, (
+                self.item_name,
+                price,
+                stock,
+                user_limit,
+            ))
+
+            await db.commit()
+
+        await interaction.response.send_message(
+            f"✅ 모험상품 `{self.item_name}` 등록 완료\n"
+            f"가격: `{price}P` / 재고: `{stock}개` / 일일 제한: `{user_limit}개`",
+            ephemeral=True,
+        )
+
+
+class AdventureShopItemSelect(discord.ui.Select):
+    def __init__(self, rows):
+        options = []
+
+        for name, category in rows[:25]:
+            options.append(
+                discord.SelectOption(
+                    label=name[:100],
+                    value=name,
+                    description=f"카테고리: {category}"[:100],
+                )
+            )
+
+        super().__init__(
+            placeholder="판매할 모험 아이템을 선택하세요.",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        item_name = self.values[0]
+        await interaction.response.send_modal(
+            AdventureShopPriceModal(item_name)
+        )
 
 class ShopItemSelect(discord.ui.Select):
     def __init__(self, rows, mode: str):
@@ -607,6 +708,11 @@ class ShopAdminMenuSelect(discord.ui.Select):
                 value="add",
             ),
             discord.SelectOption(
+                label="모험상품 등록",
+                description="랜덤미끼, 랜덤씨앗 등 모험 상품을 등록합니다.",
+                value="adventure_add",
+            ),
+            discord.SelectOption(
                 label="상품 삭제",
                 description="상품을 완전히 삭제합니다.",
                 value="delete",
@@ -656,6 +762,33 @@ class ShopAdminMenuSelect(discord.ui.Select):
 
         if selected == "add":
             await interaction.response.send_modal(ShopItemModal())
+            return
+
+        if selected == "adventure_add":
+            async with aiosqlite.connect(DB_PATH) as db:
+                async with db.execute("""
+                SELECT name, category
+                FROM adventure_items
+                WHERE category IN ('소모품', '음식')
+                ORDER BY category, name
+                """) as cursor:
+                    rows = await cursor.fetchall()
+
+            if not rows:
+                await interaction.response.send_message(
+                    "❌ 등록 가능한 모험 아이템이 없습니다.",
+                    ephemeral=True,
+                )
+                return
+
+            view = discord.ui.View(timeout=60)
+            view.add_item(AdventureShopItemSelect(rows))
+
+            await interaction.response.send_message(
+                "🧭 판매할 모험 아이템을 선택하세요.",
+                view=view,
+                ephemeral=True,
+            )
             return
 
         if selected == "list":

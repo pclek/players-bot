@@ -51,6 +51,11 @@ async def setup_hook():
     await bot.load_extension("cogs.shop.shop_admin")
     await bot.load_extension("cogs.points.shop")
     await bot.load_extension("cogs.punish.inactive_role")
+    await bot.load_extension("cogs.adventure.adventure")
+    await bot.load_extension("cogs.adventure.crafting")
+    await bot.load_extension("cogs.adventure.blacksmith")
+    await bot.load_extension("cogs.adventure.equipment")
+    await bot.load_extension("cogs.adventure.hunting")
 
     synced = await bot.tree.sync()
 

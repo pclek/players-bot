@@ -3,6 +3,13 @@ from discord import app_commands
 from discord.ext import commands
 import aiosqlite
 from datetime import datetime, timedelta
+from cogs.profile.profile import get_attendance_day_key
+from cogs.adventure.adventure_utils import (
+    get_adventure_inventory,
+    add_adventure_item,
+    remove_adventure_item,
+    get_adventure_profile,
+)
 
 DB_PATH = "database/bot.db"
 
@@ -331,6 +338,341 @@ class ShopView(discord.ui.View):
         super().__init__(timeout=60)
         self.add_item(ShopSelect(rows))
 
+class AdventureShopSelect(discord.ui.Select):
+    def __init__(self, rows, user_id: int):
+        self.rows = rows
+        self.user_id = user_id
+
+        options = []
+
+        for shop_id, item_name, price, stock, user_limit, purchased_count in rows[:25]:
+            if user_limit > 0:
+                limit_text = f"오늘 {purchased_count}/{user_limit}개 구매"
+            else:
+                limit_text = "구매 제한 없음"
+
+            options.append(
+                discord.SelectOption(
+                    label=item_name[:100],
+                    value=str(shop_id),
+                    description=f"{price}P / 재고 {stock}개 / {limit_text}"[:100],
+                )
+            )
+
+        super().__init__(
+            placeholder="구매할 모험상품을 선택하세요.",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        shop_id = int(self.values[0])
+        user_id = interaction.user.id
+        today_key = get_attendance_day_key()
+
+        selected = None
+
+        for row in self.rows:
+            if row[0] == shop_id:
+                selected = row
+                break
+
+        if not selected:
+            await interaction.response.send_message(
+                "❌ 상품을 찾을 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        shop_id, item_name, price, stock, user_limit, purchased_count = selected
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+            SELECT points
+            FROM users
+            WHERE user_id = ?
+            """, (user_id,)) as cursor:
+                user_row = await cursor.fetchone()
+
+            if not user_row:
+                await interaction.response.send_message(
+                    "❌ 유저 데이터를 찾을 수 없습니다.",
+                    ephemeral=True,
+                )
+                return
+
+            points = user_row[0]
+
+            if points < price:
+                await interaction.response.send_message(
+                    f"❌ 포인트가 부족합니다.\n현재 포인트: `{points}P`\n필요 포인트: `{price}P`",
+                    ephemeral=True,
+                )
+                return
+
+            async with db.execute("""
+            SELECT item_name, price, stock, user_limit, enabled
+            FROM adventure_shop_items
+            WHERE id = ?
+            """, (shop_id,)) as cursor:
+                shop_row = await cursor.fetchone()
+
+            if not shop_row:
+                await interaction.response.send_message(
+                    "❌ 존재하지 않는 모험상품입니다.",
+                    ephemeral=True,
+                )
+                return
+
+            item_name, price, stock, user_limit, enabled = shop_row
+
+            if not enabled:
+                await interaction.response.send_message(
+                    "❌ 현재 판매중지된 모험상품입니다.",
+                    ephemeral=True,
+                )
+                return
+
+            if stock <= 0:
+                await interaction.response.send_message(
+                    "❌ 재고가 부족합니다.",
+                    ephemeral=True,
+                )
+                return
+
+            async with db.execute("""
+            SELECT quantity
+            FROM adventure_shop_purchases
+            WHERE user_id = ?
+            AND shop_item_id = ?
+            AND purchase_date = ?
+            """, (
+                user_id,
+                shop_id,
+                today_key,
+            )) as cursor:
+                limit_row = await cursor.fetchone()
+
+            today_purchased = limit_row[0] if limit_row else 0
+
+            if user_limit > 0 and today_purchased >= user_limit:
+                await interaction.response.send_message(
+                    f"❌ 오늘 구매 제한에 도달했습니다.\n일일 제한: `{user_limit}개`",
+                    ephemeral=True,
+                )
+                return
+
+            await db.execute("""
+            UPDATE users
+            SET points = points - ?
+            WHERE user_id = ?
+            """, (
+                price,
+                user_id,
+            ))
+
+            await db.execute("""
+            UPDATE adventure_shop_items
+            SET stock = stock - 1
+            WHERE id = ?
+            """, (shop_id,))
+
+            await db.execute("""
+            INSERT INTO adventure_shop_purchases (
+                user_id,
+                shop_item_id,
+                purchase_date,
+                quantity
+            )
+            VALUES (?, ?, ?, 1)
+            ON CONFLICT(user_id, shop_item_id, purchase_date)
+            DO UPDATE SET quantity = quantity + 1
+            """, (
+                user_id,
+                shop_id,
+                today_key,
+            ))
+
+            await db.commit()
+
+        await add_adventure_item(user_id, item_name, 1)
+
+        embed = discord.Embed(
+            title="✅ 모험상품 구매 완료",
+            description=(
+                f"구매 상품 : `{item_name} x1`\n"
+                f"사용 포인트 : `{price}P`\n"
+                f"남은 재고 : `{stock - 1}개`"
+            ),
+            color=discord.Color.green(),
+        )
+
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True,
+        )
+
+
+class AdventureShopView(discord.ui.View):
+    def __init__(self, rows, user_id: int):
+        super().__init__(timeout=60)
+        self.add_item(AdventureShopSelect(rows, user_id))
+
+class AdventureInventorySelect(discord.ui.Select):
+    def __init__(self, rows, profile):
+        self.rows = rows
+        self.profile = profile
+
+        equipped_weapon = profile[1] if profile else "녹슨검"
+        equipped_armor = profile[2] if profile else ""
+
+        options = []
+
+        for item_name, quantity, category in rows[:25]:
+            if item_name == "녹슨검":
+                continue
+
+            if item_name == equipped_weapon or item_name == equipped_armor:
+                continue
+
+            options.append(
+                discord.SelectOption(
+                    label=f"{item_name} x{quantity}"[:100],
+                    value=item_name,
+                    description=f"카테고리: {category or '기타'}"[:100],
+                )
+            )
+
+        if not options:
+            options.append(
+                discord.SelectOption(
+                    label="관리 가능한 아이템 없음",
+                    value="none",
+                    description="장착 중이거나 버릴 수 없는 아이템만 있습니다.",
+                )
+            )
+
+        super().__init__(
+            placeholder="관리할 모험 아이템을 선택하세요.",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        item_name = self.values[0]
+
+        if item_name == "none":
+            await interaction.response.send_message(
+                "❌ 관리 가능한 아이템이 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        view = discord.ui.View(timeout=60)
+        view.add_item(AdventureItemDiscardButton(item_name))
+
+        embed = discord.Embed(
+            title="🎒 모험 아이템 관리",
+            description=f"`{item_name}` 아이템을 어떻게 처리할까요?",
+            color=discord.Color.blurple(),
+        )
+
+        await interaction.response.send_message(
+            embed=embed,
+            view=view,
+            ephemeral=True,
+        )
+
+
+class AdventureItemDiscardButton(discord.ui.Button):
+    def __init__(self, item_name: str):
+        super().__init__(
+            label="버리기",
+            style=discord.ButtonStyle.red,
+        )
+
+        self.item_name = item_name
+
+    async def callback(self, interaction: discord.Interaction):
+        view = discord.ui.View(timeout=60)
+        view.add_item(AdventureItemDiscardConfirmButton(self.item_name))
+        view.add_item(AdventureItemDiscardCancelButton())
+
+        await interaction.response.send_message(
+            f"⚠️ `{self.item_name}` 1개를 정말 버릴까요?",
+            view=view,
+            ephemeral=True,
+        )
+
+
+class AdventureItemDiscardConfirmButton(discord.ui.Button):
+    def __init__(self, item_name: str):
+        super().__init__(
+            label="버리기 확인",
+            style=discord.ButtonStyle.red,
+        )
+
+        self.item_name = item_name
+
+    async def callback(self, interaction: discord.Interaction):
+        profile = await get_adventure_profile(interaction.user.id)
+
+        equipped_weapon = profile[1] if profile else "녹슨검"
+        equipped_armor = profile[2] if profile else ""
+
+        if self.item_name == "녹슨검":
+            await interaction.response.send_message(
+                "❌ 기본 무기는 버릴 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        if self.item_name == equipped_weapon or self.item_name == equipped_armor:
+            await interaction.response.send_message(
+                "❌ 장착 중인 장비는 버릴 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        success = await remove_adventure_item(
+            interaction.user.id,
+            self.item_name,
+            1,
+        )
+
+        if not success:
+            await interaction.response.send_message(
+                "❌ 아이템을 찾을 수 없거나 수량이 부족합니다.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            f"🗑 `{self.item_name}` 1개를 버렸습니다.",
+            ephemeral=True,
+        )
+
+
+class AdventureItemDiscardCancelButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="취소",
+            style=discord.ButtonStyle.gray,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message(
+            "✅ 취소했습니다.",
+            ephemeral=True,
+        )
+
+
+class AdventureInventoryManageView(discord.ui.View):
+    def __init__(self, rows, profile):
+        super().__init__(timeout=60)
+        self.add_item(AdventureInventorySelect(rows, profile))
 
 class Shop(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -349,21 +691,78 @@ class Shop(commands.Cog):
             """) as cursor:
                 rows = await cursor.fetchall()
 
-        if not rows:
+        today_key = get_attendance_day_key()
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+            SELECT
+                asi.id,
+                asi.item_name,
+                asi.price,
+                asi.stock,
+                asi.user_limit,
+                COALESCE(asp.quantity, 0)
+            FROM adventure_shop_items asi
+            LEFT JOIN adventure_shop_purchases asp
+            ON asi.id = asp.shop_item_id
+            AND asp.user_id = ?
+            AND asp.purchase_date = ?
+            WHERE asi.enabled = 1
+            AND asi.stock > 0
+            ORDER BY asi.id
+            """, (
+                interaction.user.id,
+                today_key,
+            )) as cursor:
+                adventure_rows = await cursor.fetchall()
+
+        if not rows and not adventure_rows:
             await interaction.followup.send(
                 "❌ 현재 판매중인 상품이 없습니다.",
                 ephemeral=True,
             )
             return
 
-        embed, rows = await make_shop_embed(interaction.guild)
+        embeds = []
+        views = []
 
-        await interaction.followup.send(
-            embed=embed,
-            view=ShopView(rows),
-            ephemeral=True,
-        )
-        
+        if rows:
+            shop_embed, rows = await make_shop_embed(interaction.guild)
+            embeds.append(shop_embed)
+            views.append(ShopView(rows))
+
+        if adventure_rows:
+            lines = []
+
+            for shop_id, item_name, price, stock, user_limit, purchased_count in adventure_rows:
+                if user_limit > 0:
+                    limit_text = f"오늘 `{purchased_count}/{user_limit}`"
+                else:
+                    limit_text = "무제한"
+
+                lines.append(
+                    f"🧭 **{item_name}**\n"
+                    f"└ 💰 `{price}P`　📦 재고 `{stock}개`　🧾 {limit_text}"
+                )
+
+            adventure_embed = discord.Embed(
+                title="🧭 모험상품 상점",
+                description="\n\n".join(lines),
+                color=discord.Color.green(),
+            )
+
+            adventure_embed.set_footer(text="아래 드롭다운에서 모험상품을 구매할 수 있습니다.")
+
+            embeds.append(adventure_embed)
+            views.append(AdventureShopView(adventure_rows, interaction.user.id))
+
+        for index, embed in enumerate(embeds):
+            await interaction.followup.send(
+                embed=embed,
+                view=views[index],
+                ephemeral=True,
+            )
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot:
@@ -439,12 +838,6 @@ class Shop(commands.Cog):
             """, (interaction.user.id,)) as cursor:
                 rows = await cursor.fetchall()
 
-        if not rows:
-            await interaction.followup.send(
-                "📦 인벤토리가 비어있습니다.",
-                ephemeral=True,
-            )
-            return
 
         lines = []
 
@@ -462,20 +855,58 @@ class Shop(commands.Cog):
                 f"📦 **{item_name}**\n"
                 f"`{status_text}`"
             )
+            
+        adventure_rows = await get_adventure_inventory(interaction.user.id)
+
+        adventure_lines = []
+
+        for item_name, quantity, category in adventure_rows:
+
+            category_text = category if category else "기타"
+            adventure_lines.append(
+                f"`{category_text}` {item_name} x{quantity}"
+            )
+
+        description = ""
+
+        if lines:
+            description += "## 🛒 상점 인벤토리\n"
+            description += "\n\n".join(lines)
+
+        if adventure_lines:
+            if description:
+                description += "\n\n━━━━━━━━━━━━━━━━━━\n\n"
+
+            description += "## 🧭 모험 인벤토리\n"
+            description += "\n".join(adventure_lines[:30])
+
+        if not description:
+            description = "📦 인벤토리가 비어있습니다."
 
         embed = discord.Embed(
             title="🎒 내 인벤토리",
-            description="\n\n".join(lines),
+            description=description,
             color=discord.Color.blurple(),
         )
 
         embed.set_thumbnail(
             url=interaction.user.display_avatar.url)
 
+        manage_view = None
+
+        if adventure_rows:
+            adventure_profile = await get_adventure_profile(interaction.user.id)
+            manage_view = AdventureInventoryManageView(
+                adventure_rows,
+                adventure_profile,
+            )
+
         await interaction.followup.send(
             embed=embed,
+            view=manage_view,
             ephemeral=True,
         )
+        
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
         async with aiosqlite.connect(DB_PATH) as db:
