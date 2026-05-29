@@ -2,10 +2,55 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import aiosqlite
-from datetime import datetime
+from datetime import datetime, timedelta
 
 DB_PATH = "database/bot.db"
 
+SHOP_STICKY_COOLDOWN_MINUTES = 30
+
+
+async def make_shop_embed(guild: discord.Guild):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT id, name, description, price, stock
+        FROM shop_items
+        WHERE is_active = 1
+        AND stock > 0
+        ORDER BY id
+        """) as cursor:
+            rows = await cursor.fetchall()
+
+    if not rows:
+        embed = discord.Embed(
+            title="🛒 포인트 상점",
+            description="현재 판매중인 상품이 없습니다.",
+            color=discord.Color.blurple(),
+        )
+        return embed, rows
+
+    lines = []
+
+    for item_id, name, description, price, stock in rows:
+        preview = description.replace("\n", " ")
+
+        if len(preview) > 60:
+            preview = preview[:60] + "..."
+
+        lines.append(
+            f"📦 **{name}**\n"
+            f"└ 💰 `{price}P`　📦 재고 `{stock}개`\n"
+            f"└ 📝 {preview}"
+        )
+
+    embed = discord.Embed(
+        title="🛒 포인트 상점",
+        description="\n\n".join(lines),
+        color=discord.Color.blurple(),
+    )
+
+    embed.set_footer(text="상품 구매는 /상점 명령어를 사용해주세요.")
+
+    return embed, rows
 
 class BuyButton(discord.ui.Button):
     def __init__(self, item_data):
@@ -311,28 +356,76 @@ class Shop(commands.Cog):
             )
             return
 
-        lines = []
-
-        for item_id, name, description, price, stock in rows:
-            lines.append(
-                f"📦 **{name}**\n"
-                f"`{price}P` ・ 재고 `{stock}개`"
-            )
-
-        embed = discord.Embed(
-            title="🛒 포인트 상점",
-            description="\n\n".join(lines),
-            color=discord.Color.blurple(),
-        )
-
-        if interaction.guild.icon:
-            embed.set_thumbnail(url=interaction.guild.icon.url)
+        embed, rows = await make_shop_embed(interaction.guild)
 
         await interaction.followup.send(
             embed=embed,
             view=ShopView(rows),
             ephemeral=True,
         )
+        
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.author.bot:
+            return
+
+        if not message.guild:
+            return
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+            SELECT shop_channel_id, shop_message_id, shop_last_sticky_at
+            FROM shop_settings
+            WHERE guild_id = ?
+            """, (message.guild.id,)) as cursor:
+                row = await cursor.fetchone()
+
+        if not row:
+            return
+
+        shop_channel_id, shop_message_id, shop_last_sticky_at = row
+
+        if not shop_channel_id:
+            return
+
+        if message.channel.id != shop_channel_id:
+            return
+
+        now = datetime.now()
+
+        if shop_last_sticky_at:
+            try:
+                last_time = datetime.fromisoformat(shop_last_sticky_at)
+
+                if now - last_time < timedelta(minutes=SHOP_STICKY_COOLDOWN_MINUTES):
+                    return
+            except ValueError:
+                pass
+
+        if shop_message_id:
+            try:
+                old_message = await message.channel.fetch_message(shop_message_id)
+                await old_message.delete()
+            except discord.HTTPException:
+                pass
+
+        embed, rows = await make_shop_embed(message.guild)
+
+        new_message = await message.channel.send(embed=embed)
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+            UPDATE shop_settings
+            SET shop_message_id = ?,
+                shop_last_sticky_at = ?
+            WHERE guild_id = ?
+            """, (
+                new_message.id,
+                now.isoformat(),
+                message.guild.id,
+            ))
+
+            await db.commit()        
     @app_commands.command(name="인벤토리", description="구매한 상품 목록을 확인합니다.")
     async def inventory(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)

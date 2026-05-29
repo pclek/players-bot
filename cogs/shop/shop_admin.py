@@ -238,6 +238,49 @@ class ShopLogChannelSelect(discord.ui.ChannelSelect):
             ephemeral=True,
         )
 
+class ShopBoardChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self):
+        super().__init__(
+            placeholder="상점 게시판 채널 선택",
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        channel = self.values[0]
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+            INSERT OR REPLACE INTO shop_settings (
+                guild_id,
+                shop_channel_id
+            )
+            VALUES (?, ?)
+            ON CONFLICT(guild_id) DO UPDATE SET
+                shop_channel_id = excluded.shop_channel_id
+            """, (
+                interaction.guild.id,
+                channel.id,
+            ))
+
+            await db.commit()
+
+        embed = discord.Embed(
+            title="🛒 상점 게시판 설정 완료",
+            description=(
+                f"📌 상점 게시판\n"
+                f"└ {channel.mention}\n\n"
+                f"이 채널에 채팅이 올라오면 30분 쿨타임 기준으로 상점 목록이 하단에 갱신됩니다."
+            ),
+            color=discord.Color.green(),
+        )
+
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True,
+        )
+
 class InventoryStatusButton(discord.ui.Button):
     def __init__(self, label_text: str, status: str):
         super().__init__(
@@ -591,6 +634,11 @@ class ShopAdminMenuSelect(discord.ui.Select):
                 description="구매 및 지급 로그 채널을 설정합니다.",
                 value="log_channel",
             ),
+            discord.SelectOption(
+                label="상점게시판 설정",
+                description="상점 목록이 유지될 채널을 설정합니다.",
+                value="shop_board_channel",
+            ),            
             
         ]
 
@@ -625,6 +673,17 @@ class ShopAdminMenuSelect(discord.ui.Select):
                 ephemeral=True,
             )
             return
+        
+        if selected == "shop_board_channel":
+            view = discord.ui.View(timeout=60)
+            view.add_item(ShopBoardChannelSelect())
+
+            await interaction.response.send_message(
+                "🛒 상점 게시판으로 사용할 채널을 선택하세요.",
+                view=view,
+                ephemeral=True,
+            )
+            return        
         
         if selected == "sales_log":
             view = discord.ui.View(timeout=60)
