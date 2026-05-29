@@ -89,6 +89,28 @@ EQUIPMENT_RECIPES = {
         "materials": {"비브라늄주괴": 10, "다이아결정": 5},
     },
 }
+REPAIR_RECIPES = {
+    "철갑옷": {
+        "materials": {"철주괴": 2},
+        "fail_rate": 10,
+    },
+    "은갑옷": {
+        "materials": {"은주괴": 2},
+        "fail_rate": 8,
+    },
+    "금갑옷": {
+        "materials": {"금주괴": 2},
+        "fail_rate": 7,
+    },
+    "다이아갑옷": {
+        "materials": {"다이아결정": 1, "철주괴": 1},
+        "fail_rate": 4,
+    },
+    "비브라늄갑옷": {
+        "materials": {"비브라늄주괴": 1, "다이아결정": 1},
+        "fail_rate": 1,
+    },
+}
 
 class SmeltSelect(discord.ui.Select):
     def __init__(self):
@@ -248,6 +270,146 @@ class EquipmentCraftSelect(discord.ui.Select):
 
         await interaction.response.send_message(embed=embed)
 
+class RepairSelect(discord.ui.Select):
+    def __init__(self, rows):
+        options = []
+
+        for item_name, is_damaged in rows[:25]:
+            recipe = REPAIR_RECIPES.get(item_name)
+
+            if not recipe:
+                continue
+
+            material_text = ", ".join(
+                [f"{item} x{amount}" for item, amount in recipe["materials"].items()]
+            )
+
+            options.append(
+                discord.SelectOption(
+                    label=f"🛠 {item_name}",
+                    value=item_name,
+                    description=f"{material_text} / 실패 {recipe['fail_rate']}%",
+                )
+            )
+
+        super().__init__(
+            placeholder="수리할 방어구를 선택하세요.",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        armor_name = self.values[0]
+
+        await ensure_adventure_profile(user_id)
+
+        recipe = REPAIR_RECIPES.get(armor_name)
+
+        if not recipe:
+            await interaction.response.send_message(
+                "❌ 수리할 수 없는 장비입니다.",
+                ephemeral=True,
+            )
+            return
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+            SELECT is_damaged
+            FROM adventure_equipment
+            WHERE user_id = ?
+            AND item_name = ?
+            """, (
+                user_id,
+                armor_name,
+            )) as cursor:
+                row = await cursor.fetchone()
+
+        if not row or row[0] != 1:
+            await interaction.response.send_message(
+                "❌ 손상된 방어구만 수리할 수 있습니다.",
+                ephemeral=True,
+            )
+            return
+
+        missing = []
+
+        for item_name, needed in recipe["materials"].items():
+            count = await get_adventure_item_count(user_id, item_name)
+
+            if count < needed:
+                missing.append(f"{item_name} `{count}/{needed}`")
+
+        if missing:
+            await interaction.response.send_message(
+                "❌ 수리 재료가 부족합니다.\n"
+                f"부족한 재료 : {', '.join(missing)}",
+                ephemeral=True,
+            )
+            return
+
+        for item_name, needed in recipe["materials"].items():
+            await remove_adventure_item(user_id, item_name, needed)
+
+        fail_roll = random.randint(1, 100)
+        failed = fail_roll <= recipe["fail_rate"]
+
+        if failed:
+            await remove_adventure_item(user_id, armor_name, 1)
+
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("""
+                DELETE FROM adventure_equipment
+                WHERE user_id = ?
+                AND item_name = ?
+                """, (
+                    user_id,
+                    armor_name,
+                ))
+
+                await db.execute("""
+                UPDATE adventure_profiles
+                SET equipped_armor = ''
+                WHERE user_id = ?
+                AND equipped_armor = ?
+                """, (
+                    user_id,
+                    armor_name,
+                ))
+
+                await db.commit()
+
+            embed = discord.Embed(
+                title="💥 수리 실패",
+                description=(
+                    f"`{armor_name}` 수리에 실패했습니다.\n"
+                    f"방어구가 파괴되었습니다."
+                ),
+                color=discord.Color.red(),
+            )
+
+        else:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("""
+                UPDATE adventure_equipment
+                SET is_damaged = 0
+                WHERE user_id = ?
+                AND item_name = ?
+                """, (
+                    user_id,
+                    armor_name,
+                ))
+
+                await db.commit()
+
+            embed = discord.Embed(
+                title="🛠 수리 완료",
+                description=f"`{armor_name}` 수리에 성공했습니다.",
+                color=discord.Color.green(),
+            )
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         
 class BlacksmithMenuSelect(discord.ui.Select):
     def __init__(self):
@@ -325,8 +487,34 @@ class BlacksmithMenuSelect(discord.ui.Select):
             return
 
         if selected == "repair":
+            async with aiosqlite.connect(DB_PATH) as db:
+                async with db.execute("""
+                SELECT item_name, is_damaged
+                FROM adventure_equipment
+                WHERE user_id = ?
+                AND is_damaged = 1
+                """, (interaction.user.id,)) as cursor:
+                    rows = await cursor.fetchall()
+
+            if not rows:
+                await interaction.response.send_message(
+                    "✅ 현재 손상된 방어구가 없습니다.",
+                    ephemeral=True,
+                )
+                return
+
+            view = discord.ui.View(timeout=60)
+            view.add_item(RepairSelect(rows))
+
+            embed = discord.Embed(
+                title="🛠 방어구 수리",
+                description="수리할 손상 방어구를 선택하세요.\n수리 실패 시 방어구가 파괴됩니다.",
+                color=discord.Color.orange(),
+            )
+
             await interaction.response.send_message(
-                "🛠️ 수리는 다음 단계에서 추가됩니다.",
+                embed=embed,
+                view=view,
                 ephemeral=True,
             )
             return
@@ -342,39 +530,7 @@ class Blacksmith(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="대장간", description="제련, 장비 제작, 수리를 진행합니다.")
-    async def blacksmith(self, interaction: discord.Interaction):
-        await ensure_adventure_profile(interaction.user.id)
-
-        embed = discord.Embed(
-            title="⚒️ 대장간",
-            description="원하는 작업을 선택하세요.",
-            color=discord.Color.dark_orange(),
-        )
-
-        embed.add_field(
-            name="🔥 제련",
-            value="광석과 석탄으로 주괴를 만듭니다.",
-            inline=False,
-        )
-
-        embed.add_field(
-            name="⚒️ 장비 제작",
-            value="무기와 방어구 제작 기능입니다. 다음 단계에서 추가됩니다.",
-            inline=False,
-        )
-
-        embed.add_field(
-            name="🛠️ 수리",
-            value="손상된 방어구 수리 기능입니다. 다음 단계에서 추가됩니다.",
-            inline=False,
-        )
-
-        await interaction.response.send_message(
-            embed=embed,
-            view=BlacksmithMenuView(),
-            ephemeral=True,
-        )
+    
 
 
 async def setup(bot: commands.Bot):
