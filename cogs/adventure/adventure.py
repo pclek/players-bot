@@ -47,7 +47,7 @@ class AdventureSelect(discord.ui.Select):
             ),
             discord.SelectOption(
                 label="사냥",
-                description="몬스터를 찾아 전투를 시작합니다. 추후 추가 예정.",
+                description="몬스터를 찾아 전투를 시작합니다.",
                 emoji="⚔️",
                 value="hunting",
             ),
