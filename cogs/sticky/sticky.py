@@ -177,6 +177,18 @@ class StickyMessageModal(discord.ui.Modal):
             sticky_title = "📌 안내"
 
         async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+            SELECT last_message_id
+            FROM sticky_messages
+            WHERE channel_id = ?
+            """, (self.channel.id,)) as cursor:
+                old_rows = await cursor.fetchall()
+
+            await db.execute("""
+            DELETE FROM sticky_messages
+            WHERE channel_id = ?
+            """, (self.channel.id,))
+
             await db.execute("""
             INSERT INTO sticky_messages (
                 channel_id,
@@ -194,6 +206,14 @@ class StickyMessageModal(discord.ui.Modal):
             ))
 
             await db.commit()
+
+        for (old_message_id,) in old_rows:
+            if old_message_id:
+                try:
+                    old_message = await self.channel.fetch_message(old_message_id)
+                    await old_message.delete()
+                except discord.HTTPException:
+                    pass
 
         await interaction.response.send_message(
             f"✅ {self.channel.mention} 채널에 스티키를 등록했습니다.",
