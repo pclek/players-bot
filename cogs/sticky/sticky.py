@@ -666,9 +666,30 @@ class Sticky(commands.Cog):
             SELECT id, title, message, recruit_button, last_message_id
             FROM sticky_messages
             WHERE channel_id = ?
-            ORDER BY id
+            ORDER BY id DESC
             """, (channel_id,)) as cursor:
                 rows = await cursor.fetchall()
+
+            if len(rows) > 1:
+                keep_id = rows[0][0]
+                delete_rows = rows[1:]
+
+                for old_sticky_id, _, _, _, old_message_id in delete_rows:
+                    await db.execute("""
+                    DELETE FROM sticky_messages
+                    WHERE id = ?
+                    """, (old_sticky_id,))
+
+                    if old_message_id:
+                        try:
+                            old_message = await message.channel.fetch_message(old_message_id)
+                            await old_message.delete()
+                        except discord.HTTPException:
+                            pass
+
+                await db.commit()
+
+            rows = rows[:1]
 
         if not rows:
             return

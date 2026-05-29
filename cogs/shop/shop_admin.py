@@ -212,11 +212,13 @@ class ShopLogChannelSelect(discord.ui.ChannelSelect):
 
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("""
-            INSERT OR REPLACE INTO shop_settings (
+            INSERT INTO shop_settings (
                 guild_id,
                 log_channel_id
             )
             VALUES (?, ?)
+            ON CONFLICT(guild_id) DO UPDATE SET
+                log_channel_id = excluded.log_channel_id
             """, (
                 interaction.guild.id,
                 channel.id,
@@ -252,7 +254,7 @@ class ShopBoardChannelSelect(discord.ui.ChannelSelect):
 
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("""
-            INSERT OR REPLACE INTO shop_settings (
+            INSERT INTO shop_settings (
                 guild_id,
                 shop_channel_id
             )
