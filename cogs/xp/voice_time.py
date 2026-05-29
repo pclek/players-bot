@@ -10,8 +10,8 @@ DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
 
 VOICE_REWARD_SECONDS = 600
-VOICE_REWARD_POINTS = 10
-VOICE_REWARD_XP = 15
+VOICE_REWARD_POINTS = 5
+VOICE_REWARD_XP = 10
 DAILY_VOICE_POINT_LIMIT = 500
 
 def required_xp(level: int) -> int:
