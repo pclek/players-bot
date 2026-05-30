@@ -56,6 +56,66 @@ class InactiveRole(commands.Cog):
 
         await update_user_activity(message.author.id)
 
+        reauth_channel_id = await get_setting("reauth_channel_id")
+
+        if not reauth_channel_id:
+            return
+
+        if message.channel.id != int(reauth_channel_id):
+            return
+
+        base_role_id = await get_setting("inactive_base_role_id")
+        inactive_role_id = await get_setting("inactive_role_id")
+
+        if not base_role_id or not inactive_role_id:
+            return
+
+        base_role = message.guild.get_role(int(base_role_id))
+        inactive_role = message.guild.get_role(int(inactive_role_id))
+
+        if not base_role or not inactive_role:
+            return
+
+        member = message.author
+
+        if inactive_role not in member.roles:
+            return
+
+        try:
+            await member.remove_roles(
+                inactive_role,
+                reason="재인증 채널 활동으로 미활동 역할 제거",
+            )
+
+            if base_role not in member.roles:
+                await member.add_roles(
+                    base_role,
+                    reason="재인증 채널 활동으로 기준 역할 복구",
+                )
+
+            await update_user_activity(member.id)
+
+            embed = discord.Embed(
+                title="✅ 재인증 완료",
+                description=(
+                    f"{member.mention} 님의 재인증이 완료되었습니다.\n"
+                    f"{inactive_role.mention} 역할을 제거하고 {base_role.mention} 역할을 지급했습니다."
+                ),
+                color=discord.Color.green(),
+            )
+
+            await message.channel.send(embed=embed)
+
+        except discord.Forbidden:
+            await message.channel.send(
+                f"⚠️ {member.mention} 재인증 처리 실패: 봇 역할 권한을 확인해주세요."
+            )
+
+        except discord.HTTPException:
+            await message.channel.send(
+                f"⚠️ {member.mention} 재인증 처리 중 오류가 발생했습니다."
+            )
+
     @commands.Cog.listener()
     async def on_voice_state_update(
         self,

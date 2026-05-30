@@ -27,6 +27,42 @@ async def make_shop_embed(guild: discord.Guild):
         """) as cursor:
             rows = await cursor.fetchall()
 
+    if not rows:
+        embed = discord.Embed(
+            title="🛒 포인트 상점",
+            description="현재 판매중인 일반 상품이 없습니다.",
+            color=discord.Color.blurple(),
+        )
+        embed.set_footer(text="상품 구매는 /상점 명령어를 사용해주세요.")
+        return embed, rows
+
+    lines = []
+
+    for item_id, name, description, price, stock in rows:
+        preview = description.replace("\n", " ")
+
+        if len(preview) > 60:
+            preview = preview[:60] + "..."
+
+        lines.append(
+            f"📦 **{name}**\n"
+            f"└ 💰 `{price}P`　📦 재고 `{stock}개`\n"
+            f"└ 📝 {preview}"
+        )
+
+    embed = discord.Embed(
+        title="🛒 포인트 상점",
+        description="\n\n".join(lines),
+        color=discord.Color.blurple(),
+    )
+
+    embed.set_footer(text="상품 구매는 /상점 명령어를 사용해주세요.")
+
+    return embed, rows
+
+
+async def make_adventure_shop_embed(guild: discord.Guild):
+    async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("""
         SELECT item_name, price, stock, user_limit
         FROM adventure_shop_items
@@ -34,58 +70,37 @@ async def make_shop_embed(guild: discord.Guild):
         AND stock > 0
         ORDER BY id
         """) as cursor:
-            adventure_rows = await cursor.fetchall()
+            rows = await cursor.fetchall()
 
-    sections = []
-
-    if rows:
-        lines = []
-
-        for item_id, name, description, price, stock in rows:
-            preview = description.replace("\n", " ")
-
-            if len(preview) > 60:
-                preview = preview[:60] + "..."
-
-            lines.append(
-                f"📦 **{name}**\n"
-                f"└ 💰 `{price}P`　📦 재고 `{stock}개`\n"
-                f"└ 📝 {preview}"
-            )
-
-        sections.append("## 🛒 일반 상품\n" + "\n\n".join(lines))
-
-    if adventure_rows:
-        adventure_lines = []
-
-        for item_name, price, stock, user_limit in adventure_rows:
-            if user_limit and user_limit > 0:
-                limit_text = f"1인 일일 `{user_limit}개`"
-            else:
-                limit_text = "구매 제한 없음"
-
-            adventure_lines.append(
-                f"🧭 **{item_name}**\n"
-                f"└ 💰 `{price}P`　📦 재고 `{stock}개`　🧾 {limit_text}"
-            )
-
-        sections.append("## 🧭 모험 상품\n" + "\n\n".join(adventure_lines))
-
-    if not sections:
+    if not rows:
         embed = discord.Embed(
-            title="🛒 포인트 상점",
-            description="현재 판매중인 상품이 없습니다.",
-            color=discord.Color.blurple(),
+            title="🧭 모험상품 상점",
+            description="현재 판매중인 모험상품이 없습니다.",
+            color=discord.Color.green(),
         )
+        embed.set_footer(text="모험상품 구매는 /상점 명령어를 사용해주세요.")
         return embed, rows
 
+    lines = []
+
+    for item_name, price, stock, user_limit in rows:
+        if user_limit and user_limit > 0:
+            limit_text = f"1인 일일 `{user_limit}개`"
+        else:
+            limit_text = "구매 제한 없음"
+
+        lines.append(
+            f"🧭 **{item_name}**\n"
+            f"└ 💰 `{price}P`　📦 재고 `{stock}개`　🧾 {limit_text}"
+        )
+
     embed = discord.Embed(
-        title="🛒 포인트 / 모험 상점",
-        description="\n\n━━━━━━━━━━━━━━━━━━\n\n".join(sections),
-        color=discord.Color.blurple(),
+        title="🧭 모험상품 상점",
+        description="\n\n".join(lines),
+        color=discord.Color.green(),
     )
 
-    embed.set_footer(text="상품 구매는 /상점 명령어를 사용해주세요.")
+    embed.set_footer(text="모험상품 구매는 /상점 명령어를 사용해주세요.")
 
     return embed, rows
 
@@ -242,11 +257,16 @@ class BuyButton(discord.ui.Button):
         )
 
         try:
-            await interaction.message.delete()
+            await interaction.message.edit(
+                content=None,
+                embed=embed,
+                view=None,
+            )
         except Exception:
-            pass
-
-        await interaction.followup.send(embed=embed)
+            await interaction.followup.send(
+                embed=embed,
+                ephemeral=True,
+            )
 
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("""
@@ -353,10 +373,9 @@ class ShopSelect(discord.ui.Select):
         view = discord.ui.View(timeout=60)
         view.add_item(BuyButton(selected))
 
-        await interaction.response.send_message(
+        await interaction.response.edit_message(
             embed=embed,
             view=view,
-            ephemeral=True,
         )
 
 
@@ -539,11 +558,16 @@ class AdventureShopSelect(discord.ui.Select):
         )
 
         try:
-            await interaction.message.delete()
+            await interaction.message.edit(
+                content=None,
+                embed=embed,
+                view=None,
+            )
         except Exception:
-            pass
-
-        await interaction.followup.send(embed=embed)
+            await interaction.followup.send(
+                embed=embed,
+                ephemeral=True,
+            )
 
 
 class AdventureShopView(discord.ui.View):
@@ -1105,9 +1129,15 @@ class Shop(commands.Cog):
             except discord.HTTPException:
                 pass
 
-        embed, rows = await make_shop_embed(message.guild)
+        point_embed, rows = await make_shop_embed(message.guild)
+        adventure_embed, adventure_rows = await make_adventure_shop_embed(message.guild)
 
-        new_message = await message.channel.send(embed=embed)
+        new_message = await message.channel.send(
+            embeds=[
+                point_embed,
+                adventure_embed,
+            ]
+        )
 
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("""

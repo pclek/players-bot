@@ -178,8 +178,9 @@ async def make_profile_embed(member: discord.Member):
     embed.add_field(name="\u200b", value="\u200b", inline=True)
 
     embed.add_field(
-        name=f"🛡 {equipped_armor}      🗡 {equipped_weapon}",
-        inline=False
+        name="🧰 장비",
+        value=f"🛡 `{equipped_armor}`\n🗡 `{equipped_weapon}`",
+        inline=False,
     )
 
     embed.set_thumbnail(url=member.display_avatar.url)

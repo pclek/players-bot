@@ -96,6 +96,30 @@ class RejoinNoticeChannelSelect(discord.ui.ChannelSelect):
         )
 
 
+class ReauthChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self):
+        super().__init__(
+            placeholder="재인증 채널을 선택하세요.",
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        channel = self.values[0]
+
+        await set_setting("reauth_channel_id", str(channel.id))
+
+        view = discord.ui.View(timeout=60)
+        view.add_item(PunishBackButton())
+
+        await interaction.response.edit_message(
+            content=f"✅ 재인증 채널을 {channel.mention} 으로 설정했습니다.",
+            embed=None,
+            view=view,
+        )
+
+
 class RejoinNoticeMessageModal(discord.ui.Modal):
     def __init__(self):
         super().__init__(title="재입장 안내 문구 설정")
@@ -245,6 +269,11 @@ class PunishMenuSelect(discord.ui.Select):
                 value="rejoin_notice_message",
             ),
             discord.SelectOption(
+                label="재인증 채널 설정",
+                description="미활동자가 채팅하면 인턴 역할로 복구될 채널을 설정합니다.",
+                value="reauth_channel",
+            ),
+            discord.SelectOption(
                 label="현재 설정 조회",
                 description="현재 제재 설정을 확인합니다.",
                 value="view",
@@ -315,6 +344,18 @@ class PunishMenuSelect(discord.ui.Select):
             )
             return
 
+        if selected == "reauth_channel":
+            view = discord.ui.View(timeout=60)
+            view.add_item(ReauthChannelSelect())
+            view.add_item(PunishBackButton())
+
+            await interaction.response.edit_message(
+                content="🔁 재인증 채널로 사용할 채널을 선택하세요.",
+                embed=None,
+                view=view,
+            )
+            return
+
         if selected == "rejoin_notice_message":
             try:
                 await interaction.message.delete()
@@ -334,12 +375,14 @@ class PunishMenuSelect(discord.ui.Select):
         inactive_role_id = await get_setting("inactive_role_id")
         rejoin_notice_channel_id = await get_setting("rejoin_notice_channel_id")
         rejoin_notice_message = await get_setting("rejoin_notice_message")
+        reauth_channel_id = await get_setting("reauth_channel_id")
 
         quarantine_text = "설정 안 됨"
         exempt_text = "설정 안 됨"
         inactive_text = "설정 안 됨"
         rejoin_channel_text = "설정 안 됨"
         rejoin_message_text = rejoin_notice_message if rejoin_notice_message else "설정 안 됨"
+        reauth_channel_text = "설정 안 됨"
 
         if quarantine_role_id:
             role = interaction.guild.get_role(int(quarantine_role_id))
@@ -381,6 +424,14 @@ class PunishMenuSelect(discord.ui.Select):
                 if channel
                 else f"삭제된 채널 ID: `{rejoin_notice_channel_id}`"
             )
+
+        if reauth_channel_id:
+            channel = interaction.guild.get_channel(int(reauth_channel_id))
+            reauth_channel_text = (
+                channel.mention
+                if channel
+                else f"삭제된 채널 ID: `{reauth_channel_id}`"
+            )
         embed = discord.Embed(title="🛡 제재 설정", color=discord.Color.red())
 
         embed.add_field(name="격리 역할", value=quarantine_text, inline=False)
@@ -388,6 +439,7 @@ class PunishMenuSelect(discord.ui.Select):
         embed.add_field(name="장기 미활동 설정", value=inactive_text, inline=False)
         embed.add_field(name="재입장 안내 채널", value=rejoin_channel_text, inline=False)
         embed.add_field(name="재입장 안내 문구", value=rejoin_message_text, inline=False)
+        embed.add_field(name="재인증 채널", value=reauth_channel_text, inline=False)
 
         view = discord.ui.View(timeout=60)
         view.add_item(PunishBackButton())
