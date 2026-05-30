@@ -1,4 +1,5 @@
 import random
+import asyncio
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -425,6 +426,7 @@ class CasinoMainSelect(discord.ui.Select):
                 description=(
                     "배팅금을 선택하세요.\n\n"
                     "내 카드 2장과 공용카드를 차례대로 공개합니다.\n"
+                    "`체크`로 다음 카드를 보고, 위험하면 `폴드`로 배팅금 50%를 회수할 수 있습니다.\n"
                     "딜러는 약간 유리하게 세팅되어 장기적으로 포인트가 회수됩니다.\n\n"
                     f"최소 배팅 : `{MIN_BET}P`\n"
                     f"최대 배팅 : `{MAX_BET}P`\n"
@@ -614,9 +616,25 @@ class PokerGame:
 
         return f"{cards_text(shown)} {hidden_cards(hidden)}".strip()
 
+    def current_player_hand_text(self):
+        cards = self.player_cards + self.community_cards
+
+        if len(cards) < 5:
+            return "아직 족보 확인 전"
+
+        score = best_hand(cards)
+        return hand_name(score)
+
     def make_embed(self, result_text: str | None = None):
+        stage_names = {
+            0: "PRE-FLOP",
+            1: "FLOP",
+            2: "TURN",
+            3: "RIVER",
+        }
+
         embed = discord.Embed(
-            title="🃏 카지노 포커",
+            title="🃏 POKER ROOM",
             color=discord.Color.blurple(),
         )
 
@@ -626,20 +644,44 @@ class PokerGame:
             dealer_text = cards_text(self.dealer_cards)
 
         embed.description = (
-            f"배팅금 : `{self.bet}P`\n\n"
-            f"👤 **내 카드**\n{cards_text(self.player_cards)}\n\n"
-            f"🤖 **딜러 카드**\n{dealer_text}\n\n"
-            f"🃏 **공용 카드**\n{self.visible_community()}"
+            "```text\n"
+            "┌──────────────────────┐\n"
+            "│       CASINO POKER    │\n"
+            "└──────────────────────┘\n"
+            "```\n"
+            f"라운드 : `{stage_names.get(self.stage, 'SHOWDOWN')}`\n"
+            f"배팅금 : `{self.bet}P`\n"
+            f"현재 족보 : `{self.current_player_hand_text()}`\n\n"
+            f"👤 **플레이어**\n{cards_text(self.player_cards)}\n\n"
+            f"🤖 **딜러**\n{dealer_text}\n\n"
+            f"🃏 **테이블**\n{self.visible_community()}"
         )
 
         if result_text:
             embed.add_field(
-                name="결과",
+                name="🎴 진행",
                 value=result_text,
                 inline=False,
             )
 
         return embed
+
+    async def fold(self):
+        self.finished = True
+
+        refund = self.bet // 2
+
+        if refund > 0:
+            await add_points(self.user_id, refund)
+
+        loss = self.bet - refund
+
+        return (
+            f"🏳️ **폴드**\n\n"
+            f"승부를 포기하고 배팅금 일부를 회수했습니다.\n"
+            f"환급 : `{refund}P`\n"
+            f"손실 : `-{loss}P`"
+        )
 
     def reveal_flop(self):
         if self.stage != 0:
@@ -701,6 +743,7 @@ class PokerGame:
             await add_points(self.user_id, payout)
 
             return (
+                f"🎴 **SHOWDOWN**\n\n"
                 f"🏆 **승리!**\n"
                 f"내 족보 : `{hand_name(player_score)}`\n"
                 f"딜러 족보 : `{hand_name(dealer_score)}`\n\n"
@@ -712,6 +755,7 @@ class PokerGame:
             await add_points(self.user_id, self.bet)
 
             return (
+                f"🎴 **SHOWDOWN**\n\n"
                 f"🤝 **무승부**\n"
                 f"내 족보 : `{hand_name(player_score)}`\n"
                 f"딜러 족보 : `{hand_name(dealer_score)}`\n\n"
@@ -719,6 +763,7 @@ class PokerGame:
             )
 
         return (
+            f"🎴 **SHOWDOWN**\n\n"
             f"💸 **패배**\n"
             f"내 족보 : `{hand_name(player_score)}`\n"
             f"딜러 족보 : `{hand_name(dealer_score)}`\n\n"
@@ -740,13 +785,16 @@ class PokerGameView(discord.ui.View):
             return
 
         if self.game.stage == 0:
-            self.add_item(PokerActionButton("플랍 공개", "flop"))
+            self.add_item(PokerActionButton("✅ 체크 - 플랍 공개", "flop"))
+            self.add_item(PokerActionButton("🏳️ 폴드", "fold", discord.ButtonStyle.red))
         elif self.game.stage == 1:
-            self.add_item(PokerActionButton("턴 공개", "turn"))
+            self.add_item(PokerActionButton("✅ 체크 - 턴 공개", "turn"))
+            self.add_item(PokerActionButton("🏳️ 폴드", "fold", discord.ButtonStyle.red))
         elif self.game.stage == 2:
-            self.add_item(PokerActionButton("리버 공개", "river"))
+            self.add_item(PokerActionButton("✅ 체크 - 리버 공개", "river"))
+            self.add_item(PokerActionButton("🏳️ 폴드", "fold", discord.ButtonStyle.red))
         else:
-            self.add_item(PokerActionButton("결과 확인", "result"))
+            self.add_item(PokerActionButton("🃏 쇼다운", "result"))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.game.user_id:
@@ -760,10 +808,15 @@ class PokerGameView(discord.ui.View):
 
 
 class PokerActionButton(discord.ui.Button):
-    def __init__(self, label: str, action: str):
+    def __init__(
+        self,
+        label: str,
+        action: str,
+        style: discord.ButtonStyle = discord.ButtonStyle.green,
+    ):
         super().__init__(
             label=label,
-            style=discord.ButtonStyle.green,
+            style=style,
         )
         self.action = action
 
@@ -773,13 +826,15 @@ class PokerActionButton(discord.ui.Button):
 
         if self.action == "flop":
             game.reveal_flop()
-            result_text = "플랍 카드 3장이 공개되었습니다."
+            result_text = "🎴 **FLOP**\n공용 카드 3장이 공개되었습니다.\n다음 카드를 보려면 `체크`하세요."
         elif self.action == "turn":
             game.reveal_turn()
-            result_text = "턴 카드 1장이 공개되었습니다."
+            result_text = "🎴 **TURN**\n턴 카드가 공개되었습니다.\n리버까지 갈지 선택하세요."
         elif self.action == "river":
             game.reveal_river()
-            result_text = "리버 카드 1장이 공개되었습니다."
+            result_text = "🎴 **RIVER**\n마지막 공용 카드가 공개되었습니다.\n이제 쇼다운으로 승부를 확인하세요."
+        elif self.action == "fold":
+            result_text = await game.fold()
         else:
             result_text = await game.finish()
 
@@ -885,10 +940,57 @@ class SlotBetButton(discord.ui.Button):
         else:
             profit_text = f"{profit}P"
 
-        embed = discord.Embed(
-            title="🎰 슬롯머신 결과",
+        spin_embed = discord.Embed(
+            title="🎰 슬롯머신 작동중...",
             description=(
-                f"{'  '.join(symbols)}\n\n"
+                "```text\n"
+                "[ ❔ | ❔ | ❔ ]\n"
+                "```\n"
+                "릴이 돌아가는 중입니다..."
+            ),
+            color=discord.Color.gold(),
+        )
+
+        await interaction.response.edit_message(
+            embed=spin_embed,
+            view=None,
+        )
+
+        reveal_states = [
+            f"[ {symbols[0]} | ❔ | ❔ ]",
+            f"[ {symbols[0]} | {symbols[1]} | ❔ ]",
+            f"[ {symbols[0]} | {symbols[1]} | {symbols[2]} ]",
+        ]
+
+        for state in reveal_states:
+            await asyncio.sleep(0.8)
+
+            reveal_embed = discord.Embed(
+                title="🎰 슬롯머신 작동중...",
+                description=(
+                    "```text\n"
+                    f"{state}\n"
+                    "```\n"
+                    "릴이 하나씩 멈추고 있습니다..."
+                ),
+                color=discord.Color.gold(),
+            )
+
+            await interaction.edit_original_response(embed=reveal_embed, view=None)
+
+        await asyncio.sleep(0.5)
+
+        if payout > 0:
+            title = "🎰 슬롯머신 당첨!"
+        else:
+            title = "🎰 슬롯머신 결과"
+
+        embed = discord.Embed(
+            title=title,
+            description=(
+                "```text\n"
+                f"[ {symbols[0]} | {symbols[1]} | {symbols[2]} ]\n"
+                "```\n"
                 f"결과 : `{result}`\n"
                 f"배팅금 : `{self.bet}P`\n"
                 f"획득 : `{payout}P`\n"
@@ -897,7 +999,14 @@ class SlotBetButton(discord.ui.Button):
             color=discord.Color.gold(),
         )
 
-        await interaction.response.edit_message(
+        if result in ["다이아 잭팟", "777 잭팟"]:
+            embed.add_field(
+                name="🎉 JACKPOT",
+                value="카지노가 잠시 술렁였습니다.",
+                inline=False,
+            )
+
+        await interaction.edit_original_response(
             embed=embed,
             view=SlotBetView(),
         )
