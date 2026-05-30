@@ -89,28 +89,51 @@ class RecruitPostView(discord.ui.View):
             color=discord.Color.green(),
         )
 
-        view = discord.ui.View(timeout=300)
+        view = None
 
         if voice_channel:
-            view.add_item(
-                discord.ui.Button(
-                    label="음성채널 링크",
-                    style=discord.ButtonStyle.link,
-                    url=f"https://discord.com/channels/{interaction.guild.id}/{voice_channel.id}",
+            try:
+                invite = await voice_channel.create_invite(
+                    max_age=300,
+                    max_uses=1,
+                    unique=True,
+                    reason=f"{interaction.user} 모집 음성채널 참가 링크",
                 )
-            )
 
-            embed.add_field(
-                name="🎧 음성채널",
-                value=voice_channel.mention,
-                inline=False,
-            )
+                view = discord.ui.View(timeout=300)
+                view.add_item(
+                    discord.ui.Button(
+                        label="🎧 음성채널 참가",
+                        style=discord.ButtonStyle.link,
+                        url=invite.url,
+                    )
+                )
+
+                embed.add_field(
+                    name="🎧 음성채널",
+                    value=voice_channel.mention,
+                    inline=False,
+                )
+
+                embed.set_footer(text="초대 링크는 5분 뒤 만료되며 1회만 사용할 수 있습니다.")
+
+            except discord.Forbidden:
+                embed.description = (
+                    "모집 참여는 완료됐지만, 봇에게 초대 링크 생성 권한이 없어 버튼을 만들지 못했습니다.\n\n"
+                    f"음성채널: {voice_channel.mention}"
+                )
+
+            except discord.HTTPException:
+                embed.description = (
+                    "모집 참여는 완료됐지만, 초대 링크 생성 중 오류가 발생했습니다.\n\n"
+                    f"음성채널: {voice_channel.mention}"
+                )
         else:
-            embed.description = "음성채널을 찾을 수 없습니다."
+            embed.description = "모집 참여는 완료됐지만, 음성채널을 찾을 수 없습니다."
 
         await interaction.response.send_message(
             embed=embed,
-            view=view if voice_channel else None,
+            view=view,
             ephemeral=True,
         )
 
