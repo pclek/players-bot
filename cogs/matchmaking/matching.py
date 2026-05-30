@@ -226,7 +226,23 @@ class MatchingQueueView(discord.ui.View):
                 ephemeral=True,
             )
             return
+        members = await cleanup_queue_members(interaction.guild, self.game_name)
 
+        embed = make_queue_embed(
+            interaction.guild,
+            self.game_name,
+            members,
+            self.match_size,
+        )
+
+        try:
+            await interaction.message.edit(
+                content="🎮 매칭 대기열이 갱신되었습니다.",
+                embed=embed,
+                view=MatchingQueueView(self.game_name, self.match_size),
+            )
+        except discord.HTTPException:
+            pass
         await interaction.response.send_message(
             "✅ 매칭 큐 참가를 취소했습니다.",
             ephemeral=True,
@@ -371,7 +387,6 @@ class MatchingGameSelect(discord.ui.Select):
             await interaction.response.send_message(
                 f"🎉 `{game_name}` 매칭이 완료되었습니다.\n"
                 f"이동 채널: {match_channel.mention if match_channel else '생성 실패'}",
-                ephemeral=True,
             )
             return
 
@@ -382,11 +397,15 @@ class MatchingGameSelect(discord.ui.Select):
             match_size,
         )
 
+        try:
+            await interaction.message.delete()
+        except Exception:
+            pass
+
         await interaction.response.send_message(
             content=f"✅ `{game_name}` 매칭 큐에 참가했습니다.",
             embed=embed,
             view=MatchingQueueView(game_name, match_size),
-            ephemeral=True,
         )
 
 

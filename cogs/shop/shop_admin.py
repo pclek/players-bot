@@ -206,6 +206,50 @@ class AdventureShopPriceModal(discord.ui.Modal):
         )
 
 
+
+class AdventureShopCategorySelect(discord.ui.Select):
+    def __init__(self, rows):
+        options = []
+        for (category,) in rows[:25]:
+            options.append(
+                discord.SelectOption(
+                    label=category,
+                    value=category,
+                    description=f"{category} 아이템 보기",
+                )
+            )
+
+        super().__init__(
+            placeholder="판매할 카테고리를 선택하세요.",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        category = self.values[0]
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                """
+                SELECT name, category
+                FROM adventure_items
+                WHERE category = ?
+                ORDER BY name
+                """,
+                (category,),
+            ) as cursor:
+                rows = await cursor.fetchall()
+
+        view = discord.ui.View(timeout=60)
+        view.add_item(AdventureShopItemSelect(rows))
+
+        await interaction.response.edit_message(
+            content=f"🧭 {category} 카테고리 아이템 선택",
+            embed=None,
+            view=view,
+        )
+
 class AdventureShopItemSelect(discord.ui.Select):
     def __init__(self, rows):
         options = []
@@ -228,6 +272,12 @@ class AdventureShopItemSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         item_name = self.values[0]
+
+        try:
+            await interaction.message.delete()
+        except Exception:
+            pass
+
         await interaction.response.send_modal(
             AdventureShopPriceModal(item_name)
         )
@@ -767,10 +817,11 @@ class ShopAdminMenuSelect(discord.ui.Select):
         if selected == "adventure_add":
             async with aiosqlite.connect(DB_PATH) as db:
                 async with db.execute("""
-                SELECT name, category
+                SELECT DISTINCT category
                 FROM adventure_items
-                WHERE category IN ('소모품', '음식')
-                ORDER BY category, name
+                WHERE category IS NOT NULL
+                AND category != ''
+                ORDER BY category
                 """) as cursor:
                     rows = await cursor.fetchall()
 
@@ -782,10 +833,10 @@ class ShopAdminMenuSelect(discord.ui.Select):
                 return
 
             view = discord.ui.View(timeout=60)
-            view.add_item(AdventureShopItemSelect(rows))
+            view.add_item(AdventureShopCategorySelect(rows))
 
             await interaction.response.send_message(
-                "🧭 판매할 모험 아이템을 선택하세요.",
+                "🧭 판매할 모험 아이템 카테고리를 선택하세요.",
                 view=view,
                 ephemeral=True,
             )

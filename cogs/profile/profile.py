@@ -84,6 +84,27 @@ ARMOR_SHIELDS = {
     "비브라늄갑옷": 250,
 }
 
+FOOD_HEALS = {
+    "고등어구이": 3,
+    "연어구이": 5,
+    "참치구이": 10,
+
+    "빵": 8,
+    "허브감자": 13,
+
+    "고등어스테이크": 10,
+    "연어스테이크": 15,
+    "참치스테이크": 25,
+
+    "고등어피쉬앤칩스": 15,
+    "연어피쉬앤칩스": 22,
+    "참치피쉬앤칩스": 35,
+
+    "황금잉어찜": 45,
+    "전설의심해어만찬": 80,
+    "황금정식": 100,
+}
+
 async def get_level_rank(guild: discord.Guild, user_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("""
@@ -158,7 +179,6 @@ async def make_profile_embed(member: discord.Member):
 
     embed.add_field(
         name=f"🛡 {equipped_armor}      🗡 {equipped_weapon}",
-        value="\u200b",
         inline=False
     )
 

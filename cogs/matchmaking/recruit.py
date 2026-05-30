@@ -29,12 +29,21 @@ async def get_recruit_members(message_id: int):
 
 
 class RecruitPostView(discord.ui.View):
-    def __init__(self, is_full=False):
+    def __init__(self, is_full=False, voice_channel_id: int | None = None):
         super().__init__(timeout=None)
+
+        if voice_channel_id:
+            self.add_item(
+                discord.ui.Button(
+                    label="음성채널 입장",
+                    style=discord.ButtonStyle.link,
+                    url=f"https://discord.com/channels/@me/{voice_channel_id}",
+                )
+            )
 
         if is_full:
             for item in self.children:
-                if item.custom_id == "recruit_join":
+                if getattr(item, "custom_id", None) == "recruit_join":
                     item.disabled = True
 
     @discord.ui.button(
@@ -72,39 +81,15 @@ class RecruitPostView(discord.ui.View):
 
             await db.commit()
 
-        # 모집 음성채널로 이동
-        voice_channel = interaction.guild.get_channel(post[2])
 
-        if not voice_channel:
-            await interaction.response.send_message(
-                "❌ 모집 음성채널을 찾을 수 없습니다.", ephemeral=True
-            )
-            return
-
-        if not interaction.user.voice or not interaction.user.voice.channel:
-            await interaction.response.send_message(
-                "❌ 먼저 아무 음성채널에 접속한 뒤 참여 버튼을 눌러주세요.",
-                ephemeral=True,
-            )
-            return
-
-        try:
-            await interaction.user.move_to(voice_channel)
-        except discord.Forbidden:
-            await interaction.response.send_message(
-                "❌ 봇에게 멤버 이동 권한이 없습니다.", ephemeral=True
-            )
-            return
-        except discord.HTTPException:
-            await interaction.response.send_message(
-                "❌ 음성채널 이동 중 오류가 발생했습니다.", ephemeral=True
-            )
-            return
 
         await update_recruit_message(interaction.message)
 
+        voice_channel = interaction.guild.get_channel(post[2])
+
         await interaction.response.send_message(
-            f"✅ 모집에 참여하고 {voice_channel.mention} 채널로 이동했습니다.",
+            f"✅ 모집에 참여했습니다.\n"
+            f"음성채널: {voice_channel.mention if voice_channel else '알 수 없음'}",
             ephemeral=True,
         )
 
@@ -333,7 +318,10 @@ class RecruitGameSelect(discord.ui.Select):
         content = role.mention if role else ""
 
         message = await recruit_channel.send(
-            content=content, embed=embed, view=RecruitPostView(is_full=False)
+            content=content, embed=embed, view=RecruitPostView(
+            is_full=False,
+            voice_channel_id=voice_channel.id,
+        )
         )
 
         async with aiosqlite.connect(DB_PATH) as db:
@@ -370,9 +358,15 @@ class RecruitGameSelect(discord.ui.Select):
 
             await db.commit()
 
+        try:
+            await interaction.message.delete()
+        except Exception:
+            pass
+
         await interaction.response.send_message(
-            f"✅ {recruit_channel.mention} 채널에 모집글을 올렸습니다.", ephemeral=True
-        )
+            f"✅ {recruit_channel.mention} 채널에 모집글을 올렸습니다.",
+            ephemeral=True
+        )   
 
 
 class RecruitGameView(discord.ui.View):
@@ -440,9 +434,15 @@ async def update_recruit_message(message: discord.Message):
     is_full = False
 
     if user_limit > 0 and len(members) >= user_limit:
-
         is_full = True
-        await message.edit(embed=embed, view=RecruitPostView(is_full=is_full))
+
+    await message.edit(
+        embed=embed,
+        view=RecruitPostView(
+            is_full=is_full,
+            voice_channel_id=voice_channel_id,
+        )
+    )
 
 
 class Recruit(commands.Cog):
@@ -490,7 +490,11 @@ class Recruit(commands.Cog):
             color=discord.Color.green(),
         )
 
-        await interaction.followup.send(embed=embed, view=RecruitGameView(games))
+        await interaction.followup.send(
+            embed=embed,
+            view=RecruitGameView(games),
+            ephemeral=True
+        )
 
     async def close_recruit_if_voice_empty(self, voice_channel: discord.VoiceChannel):
         if len(voice_channel.members) > 0:
@@ -523,7 +527,11 @@ class Recruit(commands.Cog):
                             color=discord.Color.dark_grey(),
                         )
 
-                        await message.edit(embed=embed, view=None)
+                        await message.edit(
+                            content="",
+                            embed=embed,
+                            view=None
+                        )
 
                     except discord.HTTPException:
                         pass

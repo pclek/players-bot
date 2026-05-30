@@ -270,6 +270,21 @@ async def setup_database():
             end_at TEXT
         )
         """)
+        try:
+            await db.execute("""
+            ALTER TABLE adventure_jobs
+            ADD COLUMN channel_id INTEGER
+            """)
+        except Exception:
+            pass
+        try:
+            await db.execute("""
+            ALTER TABLE adventure_jobs
+            ADD COLUMN notified INTEGER DEFAULT 0
+            """)
+        except Exception:
+            pass
+        
         # 장비 상태
         await db.execute("""
         CREATE TABLE IF NOT EXISTS adventure_equipment (
@@ -283,6 +298,10 @@ async def setup_database():
         """)
         # 모험 기본 아이템 등록
         adventure_items = [
+            # 소모품
+            ("랜덤미끼", "소모품", "낚시에 사용하는 미끼입니다.", 0, 0, 0),
+            ("랜덤씨앗", "소모품", "농장에 심는 씨앗입니다.", 0, 0, 0),
+
             ("석탄", "광산", "대장간 제련에 사용되는 기본 연료입니다.", 0, 2, 0),
             ("구리광석", "광산", "구리 장비 제작에 사용되는 광석입니다.", 0, 4, 0),
             ("철광석", "광산", "철 장비 제작에 사용되는 광석입니다.", 0, 7, 0),
@@ -310,11 +329,20 @@ async def setup_database():
             ("다이아결정", "대장간", "다이아 장비 제작에 사용됩니다.", 0, 120, 0),
             ("비브라늄주괴", "대장간", "최상급 장비 제작에 사용됩니다.", 0, 300, 0),
 
-            ("빵", "음식", "전투 중 체력을 15 회복합니다.", 0, 8, 0),
-            ("허브감자", "음식", "전투 중 체력을 30 회복합니다.", 0, 18, 0),
-            ("생선스테이크", "음식", "전투 중 체력을 50 회복합니다.", 0, 35, 0),
-            ("피쉬앤칩스", "음식", "전투 중 체력을 80 회복합니다.", 0, 60, 0),
-            ("황금정식", "음식", "전투 중 체력을 전부 회복합니다.", 0, 150, 0),
+            ("고등어구이", "음식", "전투 중 체력을 3 회복합니다.", 0, 2, 0),
+            ("연어구이", "음식", "전투 중 체력을 5 회복합니다.", 0, 4, 0),
+            ("참치구이", "음식", "전투 중 체력을 10 회복합니다.", 0, 8, 0),
+            ("빵", "음식", "전투 중 체력을 8 회복합니다.", 0, 6, 0),
+            ("허브감자", "음식", "전투 중 체력을 13 회복합니다.", 0, 10, 0),
+            ("고등어스테이크", "음식", "전투 중 체력을 10 회복합니다.", 0, 9, 0),
+            ("연어스테이크", "음식", "전투 중 체력을 15 회복합니다.", 0, 14, 0),
+            ("참치스테이크", "음식", "전투 중 체력을 25 회복합니다.", 0, 25, 0),
+            ("고등어피쉬앤칩스", "음식", "전투 중 체력을 15 회복합니다.", 0, 13, 0),
+            ("연어피쉬앤칩스", "음식", "전투 중 체력을 22 회복합니다.", 0, 20, 0),
+            ("참치피쉬앤칩스", "음식", "전투 중 체력을 35 회복합니다.", 0, 35, 0),
+            ("황금잉어찜", "음식", "전투 중 체력을 45 회복합니다.", 0, 60, 0),
+            ("전설의심해어만찬", "음식", "전투 중 체력을 80 회복합니다.", 0, 120, 0),
+            ("황금정식", "음식", "전투 중 체력을 전부 회복합니다.", 0, 200, 0),
 
             ("녹슨검", "무기", "기본 무기입니다.", 0, 0, 0),
             ("구리검", "무기", "구리로 만든 무기입니다.", 0, 30, 0),
@@ -342,4 +370,36 @@ async def setup_database():
         )
         VALUES (?, ?, ?, ?, ?, ?)
         """, adventure_items)        
+
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS adventure_shop_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            item_name TEXT NOT NULL,
+
+            price INTEGER NOT NULL,
+            stock INTEGER DEFAULT -1,
+
+            user_limit INTEGER DEFAULT 0,
+            limit_type TEXT DEFAULT 'daily',
+
+            enabled INTEGER DEFAULT 1
+        )
+        """)
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS adventure_shop_purchases (
+            user_id INTEGER,
+            shop_item_id INTEGER,
+
+            purchase_date TEXT,
+            quantity INTEGER DEFAULT 0,
+
+            PRIMARY KEY(
+                user_id,
+                shop_item_id,
+                purchase_date
+            )
+        )
+        """)                
+                
         await db.commit()
