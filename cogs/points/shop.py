@@ -27,7 +27,51 @@ async def make_shop_embed(guild: discord.Guild):
         """) as cursor:
             rows = await cursor.fetchall()
 
-    if not rows:
+        async with db.execute("""
+        SELECT item_name, price, stock, user_limit
+        FROM adventure_shop_items
+        WHERE enabled = 1
+        AND stock > 0
+        ORDER BY id
+        """) as cursor:
+            adventure_rows = await cursor.fetchall()
+
+    sections = []
+
+    if rows:
+        lines = []
+
+        for item_id, name, description, price, stock in rows:
+            preview = description.replace("\n", " ")
+
+            if len(preview) > 60:
+                preview = preview[:60] + "..."
+
+            lines.append(
+                f"📦 **{name}**\n"
+                f"└ 💰 `{price}P`　📦 재고 `{stock}개`\n"
+                f"└ 📝 {preview}"
+            )
+
+        sections.append("## 🛒 일반 상품\n" + "\n\n".join(lines))
+
+    if adventure_rows:
+        adventure_lines = []
+
+        for item_name, price, stock, user_limit in adventure_rows:
+            if user_limit and user_limit > 0:
+                limit_text = f"1인 일일 `{user_limit}개`"
+            else:
+                limit_text = "구매 제한 없음"
+
+            adventure_lines.append(
+                f"🧭 **{item_name}**\n"
+                f"└ 💰 `{price}P`　📦 재고 `{stock}개`　🧾 {limit_text}"
+            )
+
+        sections.append("## 🧭 모험 상품\n" + "\n\n".join(adventure_lines))
+
+    if not sections:
         embed = discord.Embed(
             title="🛒 포인트 상점",
             description="현재 판매중인 상품이 없습니다.",
@@ -35,23 +79,9 @@ async def make_shop_embed(guild: discord.Guild):
         )
         return embed, rows
 
-    lines = []
-
-    for item_id, name, description, price, stock in rows:
-        preview = description.replace("\n", " ")
-
-        if len(preview) > 60:
-            preview = preview[:60] + "..."
-
-        lines.append(
-            f"📦 **{name}**\n"
-            f"└ 💰 `{price}P`　📦 재고 `{stock}개`\n"
-            f"└ 📝 {preview}"
-        )
-
     embed = discord.Embed(
-        title="🛒 포인트 상점",
-        description="\n\n".join(lines),
+        title="🛒 포인트 / 모험 상점",
+        description="\n\n━━━━━━━━━━━━━━━━━━\n\n".join(sections),
         color=discord.Color.blurple(),
     )
 
@@ -69,12 +99,12 @@ class BuyButton(discord.ui.Button):
         self.item_data = item_data
 
     async def callback(self, interaction: discord.Interaction):
-        item_id, name, description, price, stock = self.item_data
+        await interaction.response.defer()
 
+        item_id, name, description, price, stock = self.item_data
         user_id = interaction.user.id
 
         async with aiosqlite.connect(DB_PATH) as db:
-            # 유저 포인트 확인
             async with db.execute("""
             SELECT points
             FROM users
@@ -83,7 +113,7 @@ class BuyButton(discord.ui.Button):
                 row = await cursor.fetchone()
 
             if not row:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "❌ 유저 데이터를 찾을 수 없습니다.",
                     ephemeral=True,
                 )
@@ -92,7 +122,7 @@ class BuyButton(discord.ui.Button):
             points = row[0]
 
             if points < price:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"❌ 포인트가 부족합니다.\n"
                     f"현재 포인트: `{points}P`\n"
                     f"필요 포인트: `{price}P`",
@@ -100,7 +130,6 @@ class BuyButton(discord.ui.Button):
                 )
                 return
 
-            # 재고 재확인
             async with db.execute("""
             SELECT stock, is_active
             FROM shop_items
@@ -109,7 +138,7 @@ class BuyButton(discord.ui.Button):
                 item_row = await cursor.fetchone()
 
             if not item_row:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "❌ 존재하지 않는 상품입니다.",
                     ephemeral=True,
                 )
@@ -118,42 +147,40 @@ class BuyButton(discord.ui.Button):
             current_stock, is_active = item_row
 
             if not is_active:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "❌ 현재 판매중지된 상품입니다.",
                     ephemeral=True,
                 )
                 return
 
             if current_stock <= 0:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "❌ 재고가 부족합니다.",
                     ephemeral=True,
                 )
                 return
 
-            # 포인트 차감
             await db.execute("""
             UPDATE users
             SET points = points - ?
             WHERE user_id = ?
             """, (price, user_id))
 
-            # 재고 감소
             await db.execute("""
             UPDATE shop_items
             SET stock = stock - 1
             WHERE id = ?
             """, (item_id,))
 
-            # 재고 0 자동 판매중지
             await db.execute("""
             UPDATE shop_items
             SET is_active = 0
             WHERE id = ?
-            AND stock <= 1
+            AND stock <= 0
             """, (item_id,))
 
-            # 구매 로그
+            now_text = datetime.now().isoformat()
+
             await db.execute("""
             INSERT INTO shop_purchase_logs (
                 item_id,
@@ -168,9 +195,9 @@ class BuyButton(discord.ui.Button):
                 name,
                 user_id,
                 price,
-                datetime.now().isoformat(),
+                now_text,
             ))
-            # 인벤토리 저장
+
             await db.execute("""
             INSERT INTO inventory (
                 user_id,
@@ -185,14 +212,14 @@ class BuyButton(discord.ui.Button):
                 item_id,
                 name,
                 "pending",
-                datetime.now().isoformat(),
+                now_text,
             ))
 
             await db.commit()
 
         embed = discord.Embed(
             title="✅ 상품 구매 완료",
-            description="구매한 상품이 인벤토리에 추가되었습니다.",
+            description=f"{interaction.user.mention} 님이 상품을 구매했습니다.",
             color=discord.Color.green(),
         )
 
@@ -217,15 +244,10 @@ class BuyButton(discord.ui.Button):
         try:
             await interaction.message.delete()
         except Exception:
-            try:
-                await interaction.delete_original_response()
-            except Exception:
-                pass
+            pass
 
-        await interaction.response.send_message(
-            embed=embed,
-        )
-                # 상점 로그 채널 조회
+        await interaction.followup.send(embed=embed)
+
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("""
             SELECT log_channel_id
@@ -261,9 +283,7 @@ class BuyButton(discord.ui.Button):
                     inline=False,
                 )
 
-                await log_channel.send(
-                    embed=log_embed
-                )
+                await log_channel.send(embed=log_embed)
 
 
 class ShopSelect(discord.ui.Select):
@@ -374,6 +394,8 @@ class AdventureShopSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
         shop_id = int(self.values[0])
         user_id = interaction.user.id
         today_key = get_attendance_day_key()
@@ -386,7 +408,7 @@ class AdventureShopSelect(discord.ui.Select):
                 break
 
         if not selected:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ 상품을 찾을 수 없습니다.",
                 ephemeral=True,
             )
@@ -403,7 +425,7 @@ class AdventureShopSelect(discord.ui.Select):
                 user_row = await cursor.fetchone()
 
             if not user_row:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "❌ 유저 데이터를 찾을 수 없습니다.",
                     ephemeral=True,
                 )
@@ -412,7 +434,7 @@ class AdventureShopSelect(discord.ui.Select):
             points = user_row[0]
 
             if points < price:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"❌ 포인트가 부족합니다.\n현재 포인트: `{points}P`\n필요 포인트: `{price}P`",
                     ephemeral=True,
                 )
@@ -426,7 +448,7 @@ class AdventureShopSelect(discord.ui.Select):
                 shop_row = await cursor.fetchone()
 
             if not shop_row:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "❌ 존재하지 않는 모험상품입니다.",
                     ephemeral=True,
                 )
@@ -435,14 +457,14 @@ class AdventureShopSelect(discord.ui.Select):
             item_name, price, stock, user_limit, enabled = shop_row
 
             if not enabled:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "❌ 현재 판매중지된 모험상품입니다.",
                     ephemeral=True,
                 )
                 return
 
             if stock <= 0:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "❌ 재고가 부족합니다.",
                     ephemeral=True,
                 )
@@ -464,7 +486,7 @@ class AdventureShopSelect(discord.ui.Select):
             today_purchased = limit_row[0] if limit_row else 0
 
             if user_limit > 0 and today_purchased >= user_limit:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"❌ 오늘 구매 제한에 도달했습니다.\n일일 제한: `{user_limit}개`",
                     ephemeral=True,
                 )
@@ -508,6 +530,7 @@ class AdventureShopSelect(discord.ui.Select):
         embed = discord.Embed(
             title="✅ 모험상품 구매 완료",
             description=(
+                f"{interaction.user.mention} 님이 모험상품을 구매했습니다.\n\n"
                 f"구매 상품 : `{item_name} x1`\n"
                 f"사용 포인트 : `{price}P`\n"
                 f"남은 재고 : `{stock - 1}개`"
@@ -518,14 +541,9 @@ class AdventureShopSelect(discord.ui.Select):
         try:
             await interaction.message.delete()
         except Exception:
-            try:
-                await interaction.delete_original_response()
-            except Exception:
-                pass
+            pass
 
-        await interaction.response.send_message(
-            embed=embed,
-        )
+        await interaction.followup.send(embed=embed)
 
 
 class AdventureShopView(discord.ui.View):

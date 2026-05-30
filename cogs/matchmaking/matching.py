@@ -31,6 +31,86 @@ async def get_games():
             return await cursor.fetchall()
 
 
+async def get_waiting_room_channels(guild: discord.Guild):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT channel_id
+        FROM matching_waiting_rooms
+        """) as cursor:
+            rows = await cursor.fetchall()
+
+    channels = []
+
+    for (channel_id,) in rows:
+        channel = guild.get_channel(channel_id)
+
+        if isinstance(channel, discord.VoiceChannel):
+            channels.append(channel)
+
+    return channels
+
+
+async def create_waiting_room_invite_url(guild: discord.Guild):
+    channels = await get_waiting_room_channels(guild)
+
+    for channel in channels:
+        try:
+            invite = await channel.create_invite(
+                max_age=86400,
+                max_uses=0,
+                unique=False,
+                reason="매칭 대기실 바로가기 링크",
+            )
+            return invite.url
+        except (discord.Forbidden, discord.HTTPException):
+            continue
+
+    return None
+
+
+async def make_waiting_room_link_view(guild: discord.Guild):
+    invite_url = await create_waiting_room_invite_url(guild)
+
+    if not invite_url:
+        return None
+
+    view = discord.ui.View(timeout=300)
+    view.add_item(
+        discord.ui.Button(
+            label="🎮 매칭채널 입장",
+            style=discord.ButtonStyle.link,
+            url=invite_url,
+        )
+    )
+
+    return view
+
+
+async def send_waiting_room_required_response(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="❌ 매칭 대기실 입장 필요",
+        description="먼저 매칭채널에 입장한 뒤 매칭을 진행해주세요.",
+        color=discord.Color.red(),
+    )
+
+    channels = await get_waiting_room_channels(interaction.guild)
+
+    if channels:
+        embed.add_field(
+            name="🎮 매칭채널",
+            value="\n".join(channel.mention for channel in channels[:5]),
+            inline=False,
+        )
+
+    view = await make_waiting_room_link_view(interaction.guild)
+
+    await interaction.response.send_message(
+        embed=embed,
+        view=view,
+        ephemeral=True,
+    )
+
+
 async def is_waiting_room(channel_id: int) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("""
@@ -254,6 +334,14 @@ class MatchCompleteView(discord.ui.View):
         custom_id="matching_again",
     )
     async def matching_again(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.voice or not interaction.user.voice.channel:
+            await send_waiting_room_required_response(interaction)
+            return
+
+        if not await is_waiting_room(interaction.user.voice.channel.id):
+            await send_waiting_room_required_response(interaction)
+            return
+
         games = await get_games()
 
         if not games:
@@ -277,10 +365,24 @@ class MatchCompleteView(discord.ui.View):
 
 
 class MatchingQueueView(discord.ui.View):
-    def __init__(self, game_name: str, match_size: int):
+    def __init__(
+        self,
+        game_name: str,
+        match_size: int,
+        waiting_room_url: str | None = None,
+    ):
         super().__init__(timeout=None)
         self.game_name = game_name
         self.match_size = match_size
+
+        if waiting_room_url:
+            self.add_item(
+                discord.ui.Button(
+                    label="🎮 매칭채널 입장",
+                    style=discord.ButtonStyle.link,
+                    url=waiting_room_url,
+                )
+            )
 
     @discord.ui.button(
         label="큐 참가",
@@ -289,19 +391,13 @@ class MatchingQueueView(discord.ui.View):
     )
     async def join_queue(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.voice or not interaction.user.voice.channel:
-            await interaction.response.send_message(
-                "❌ 먼저 매칭 대기실 음성채널에 입장해주세요.",
-                ephemeral=True,
-            )
+            await send_waiting_room_required_response(interaction)
             return
 
         current_voice = interaction.user.voice.channel
 
         if not await is_waiting_room(current_voice.id):
-            await interaction.response.send_message(
-                "❌ 현재 음성채널은 매칭 대기실로 등록되어 있지 않습니다.",
-                ephemeral=True,
-            )
+            await send_waiting_room_required_response(interaction)
             return
 
         await remove_user_from_all_queues(interaction.user.id)
@@ -369,10 +465,16 @@ class MatchingQueueView(discord.ui.View):
                 self.match_size,
             )
 
+            waiting_room_url = await create_waiting_room_invite_url(interaction.guild)
+
             await interaction.message.edit(
                 content="🎮 매칭 대기열이 갱신되었습니다.",
                 embed=embed,
-                view=MatchingQueueView(self.game_name, self.match_size),
+                view=MatchingQueueView(
+                    self.game_name,
+                    self.match_size,
+                    waiting_room_url,
+                ),
             )
 
         await interaction.response.send_message(
@@ -404,19 +506,13 @@ class MatchingGameSelect(discord.ui.Select):
         game_name = self.values[0]
 
         if not interaction.user.voice or not interaction.user.voice.channel:
-            await interaction.response.send_message(
-                "❌ 먼저 매칭 대기실 음성채널에 입장해주세요.",
-                ephemeral=True,
-            )
+            await send_waiting_room_required_response(interaction)
             return
 
         current_voice = interaction.user.voice.channel
 
         if not await is_waiting_room(current_voice.id):
-            await interaction.response.send_message(
-                "❌ 현재 음성채널은 매칭 대기실로 등록되어 있지 않습니다.",
-                ephemeral=True,
-            )
+            await send_waiting_room_required_response(interaction)
             return
 
         game_setting = await get_game_setting(game_name)
@@ -483,10 +579,12 @@ class MatchingGameSelect(discord.ui.Select):
             match_size,
         )
 
+        waiting_room_url = await create_waiting_room_invite_url(interaction.guild)
+
         await interaction.response.send_message(
             content=f"✅ `{game_name}` 매칭 큐에 참가했습니다.",
             embed=embed,
-            view=MatchingQueueView(game_name, match_size),
+            view=MatchingQueueView(game_name, match_size, waiting_room_url),
         )
 
         try:
@@ -681,10 +779,12 @@ async def process_queue_message(
         match_size,
     )
 
+    waiting_room_url = await create_waiting_room_invite_url(guild)
+
     await message.edit(
         content="🎮 매칭 대기열이 갱신되었습니다.",
         embed=embed,
-        view=MatchingQueueView(game_name, match_size),
+        view=MatchingQueueView(game_name, match_size, waiting_room_url),
     )
 
     if interaction and not interaction.response.is_done():
@@ -802,15 +902,49 @@ class Matching(commands.Cog):
             return
 
         if not interaction.user.voice or not interaction.user.voice.channel:
+            embed = discord.Embed(
+                title="❌ 매칭 대기실 입장 필요",
+                description="먼저 매칭채널에 입장한 뒤 매칭을 진행해주세요.",
+                color=discord.Color.red(),
+            )
+
+            channels = await get_waiting_room_channels(interaction.guild)
+            if channels:
+                embed.add_field(
+                    name="🎮 매칭채널",
+                    value="\n".join(channel.mention for channel in channels[:5]),
+                    inline=False,
+                )
+
+            view = await make_waiting_room_link_view(interaction.guild)
+
             await interaction.followup.send(
-                "❌ 먼저 매칭 대기실 음성채널에 입장해주세요.",
+                embed=embed,
+                view=view,
                 ephemeral=True,
             )
             return
 
         if not await is_waiting_room(interaction.user.voice.channel.id):
+            embed = discord.Embed(
+                title="❌ 매칭 대기실 입장 필요",
+                description="현재 음성채널은 매칭 대기실로 등록되어 있지 않습니다.",
+                color=discord.Color.red(),
+            )
+
+            channels = await get_waiting_room_channels(interaction.guild)
+            if channels:
+                embed.add_field(
+                    name="🎮 매칭채널",
+                    value="\n".join(channel.mention for channel in channels[:5]),
+                    inline=False,
+                )
+
+            view = await make_waiting_room_link_view(interaction.guild)
+
             await interaction.followup.send(
-                "❌ 현재 음성채널은 매칭 대기실로 등록되어 있지 않습니다.",
+                embed=embed,
+                view=view,
                 ephemeral=True,
             )
             return
