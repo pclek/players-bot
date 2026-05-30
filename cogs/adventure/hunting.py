@@ -11,6 +11,7 @@ from cogs.adventure.adventure_utils import (
     set_user_hp,
     get_adventure_item_count,
     remove_adventure_item,
+    decrease_equipped_durability,
 )
 
 DB_PATH = "database/bot.db"
@@ -56,55 +57,250 @@ ARMOR_DAMAGE_RATES = {
 }
 
 FOOD_HEALS = {
-    "빵": 15,
-    "허브감자": 30,
-    "생선스테이크": 50,
-    "피쉬앤칩스": 80,
+    "고등어구이": 3,
+    "연어구이": 5,
+    "참치구이": 10,
+
+    "빵": 8,
+    "허브감자": 13,
+
+    "고등어스테이크": 10,
+    "연어스테이크": 15,
+    "참치스테이크": 25,
+
+    "고등어피쉬앤칩스": 15,
+    "연어피쉬앤칩스": 22,
+    "참치피쉬앤칩스": 35,
+
+    "황금잉어찜": 45,
+    "전설의심해어만찬": 80,
     "황금정식": 999,
 }
 
 MONSTERS = {
+    # 초급: 약한 장비로도 가능. 미끼/씨앗/초반 음식 비용 회수용
     "슬라임": {
-        "hp": (15, 45),
-        "atk": (3, 8),
-        "point": (8, 18),
-        "weight": 40,
+        "hp": (20, 40),
+        "atk": (3, 7),
+        "point": (20, 35),
+        "weight": 90,
         "emoji": "🟢",
     },
-    "늑대": {
-        "hp": (35, 70),
-        "atk": (6, 14),
-        "point": (18, 35),
-        "weight": 25,
+    "들쥐떼": {
+        "hp": (25, 45),
+        "atk": (4, 8),
+        "point": (25, 40),
+        "weight": 80,
+        "emoji": "🐀",
+    },
+    "성난 닭": {
+        "hp": (30, 50),
+        "atk": (5, 9),
+        "point": (28, 45),
+        "weight": 75,
+        "emoji": "🐔",
+    },
+    "멧돼지": {
+        "hp": (45, 75),
+        "atk": (8, 14),
+        "point": (40, 70),
+        "weight": 70,
+        "emoji": "🐗",
+    },
+    "숲 늑대": {
+        "hp": (50, 80),
+        "atk": (9, 15),
+        "point": (45, 75),
+        "weight": 65,
         "emoji": "🐺",
     },
+    "거대 거미": {
+        "hp": (55, 90),
+        "atk": (8, 16),
+        "point": (50, 85),
+        "weight": 60,
+        "emoji": "🕷️",
+    },
+    "독버섯 군락": {
+        "hp": (60, 95),
+        "atk": (9, 17),
+        "point": (55, 90),
+        "weight": 55,
+        "emoji": "🍄",
+    },
+    "오리너구리": {
+        "hp": (40, 300),
+        "atk": (4, 40),
+        "point": (65, 400),
+        "weight": 50,
+        "emoji": "🦫",
+    },
     "고블린": {
-        "hp": (45, 90),
-        "atk": (8, 18),
-        "point": (25, 50),
-        "weight": 18,
+        "hp": (70, 110),
+        "atk": (11, 20),
+        "point": (75, 120),
+        "weight": 50,
         "emoji": "👺",
     },
+    "도적 정찰병": {
+        "hp": (80, 120),
+        "atk": (12, 22),
+        "point": (85, 135),
+        "weight": 45,
+        "emoji": "🗡️",
+    },
+
+    # 중급: 철~은 장비부터 안정권. 수리/제련 비용을 감당하기 시작하는 구간
+    "스켈레톤": {
+        "hp": (90, 140),
+        "atk": (14, 24),
+        "point": (110, 170),
+        "weight": 42,
+        "emoji": "💀",
+    },
+    "좀비 병사": {
+        "hp": (105, 160),
+        "atk": (15, 27),
+        "point": (130, 200),
+        "weight": 38,
+        "emoji": "🧟",
+    },
+    "하이에나 무리": {
+        "hp": (115, 175),
+        "atk": (17, 30),
+        "point": (150, 230),
+        "weight": 35,
+        "emoji": "🐾",
+    },
     "오크": {
-        "hp": (90, 160),
-        "atk": (14, 28),
-        "point": (45, 90),
-        "weight": 10,
+        "hp": (130, 200),
+        "atk": (19, 33),
+        "point": (180, 270),
+        "weight": 32,
         "emoji": "🧌",
     },
+    "늪지 악어": {
+        "hp": (150, 230),
+        "atk": (21, 36),
+        "point": (220, 320),
+        "weight": 30,
+        "emoji": "🐊",
+    },
+    "광산 박쥐왕": {
+        "hp": (160, 240),
+        "atk": (22, 38),
+        "point": (240, 350),
+        "weight": 28,
+        "emoji": "🦇",
+    },
     "트롤": {
-        "hp": (150, 260),
-        "atk": (20, 38),
-        "point": (80, 150),
-        "weight": 5,
+        "hp": (190, 290),
+        "atk": (25, 43),
+        "point": (300, 430),
+        "weight": 25,
         "emoji": "👹",
     },
-    "드래곤": {
-        "hp": (350, 700),
-        "atk": (35, 70),
-        "point": (250, 600),
+    "사이클롭스": {
+        "hp": (230, 340),
+        "atk": (27, 48),
+        "point": (380, 520),
+        "weight": 22,
+        "emoji": "👁️",
+    },
+    "갑옷 골렘": {
+        "hp": (270, 390),
+        "atk": (30, 52),
+        "point": (460, 620),
+        "weight": 20,
+        "emoji": "🗿",
+    },
+    "저주받은 나무정령": {
+        "hp": (300, 430),
+        "atk": (32, 55),
+        "point": (540, 700),
+        "weight": 18,
+        "emoji": "🌲",
+    },
+
+    # 상급: 전체 약 5% 전후. 다이아~비브라늄 장비와 음식 소모를 전제로 한 구간
+    "암흑 기사": {
+        "hp": (400, 550),
+        "atk": (42, 68),
+        "point": (850, 1100),
+        "weight": 16,
+        "emoji": "🛡️",
+    },
+    "저주받은 기사단장": {
+        "hp": (460, 620),
+        "atk": (45, 72),
+        "point": (1000, 1300),
+        "weight": 13,
+        "emoji": "⚔️",
+    },
+    "미믹": {
+        "hp": (360, 520),
+        "atk": (38, 78),
+        "point": (1050, 1350),
+        "weight": 12,
+        "emoji": "🎁",
+    },
+    "와이번": {
+        "hp": (540, 760),
+        "atk": (52, 82),
+        "point": (1250, 1600),
+        "weight": 10,
+        "emoji": "🐉",
+    },
+    "만티코어": {
+        "hp": (600, 850),
+        "atk": (58, 90),
+        "point": (1500, 1900),
+        "weight": 8,
+        "emoji": "🦂",
+    },
+    "심연의 사제": {
+        "hp": (650, 900),
+        "atk": (62, 95),
+        "point": (1750, 2200),
+        "weight": 7,
+        "emoji": "🔮",
+    },
+
+    # 희귀: 전체 약 1% 이하. 큰 보상, 큰 소모
+    "황금 슬라임": {
+        "hp": (100, 180),
+        "atk": (18, 35),
+        "point": (1800, 2300),
+        "weight": 1,
+        "emoji": "✨",
+    },
+    "보물 고블린": {
+        "hp": (220, 340),
+        "atk": (28, 48),
+        "point": (2400, 3000),
+        "weight": 1,
+        "emoji": "💰",
+    },
+    "리치": {
+        "hp": (750, 1050),
+        "atk": (72, 112),
+        "point": (3600, 4500),
+        "weight": 3,
+        "emoji": "🧙",
+    },
+    "고대 드래곤": {
+        "hp": (1000, 1500),
+        "atk": (90, 140),
+        "point": (5500, 7000),
         "weight": 2,
         "emoji": "🐲",
+    },
+    "심연의 군주": {
+        "hp": (1500, 1700),
+        "atk": (100, 155),
+        "point": (7500, 9000),
+        "weight": 2,
+        "emoji": "👑",
     },
 }
 
@@ -315,74 +511,7 @@ class HuntView(discord.ui.View):
 
         await interaction.response.edit_message(embed=embed, view=self)
     async def check_equipment_after_battle(self) -> str:
-        messages = []
-
-        # 무기 파괴 판정
-        weapon_rate = WEAPON_BREAK_RATES.get(self.weapon_name, 0)
-
-        if weapon_rate > 0:
-            roll = random.randint(1, 100)
-
-            if roll <= weapon_rate:
-                await remove_adventure_item(self.user_id, self.weapon_name, 1)
-
-                async with aiosqlite.connect(DB_PATH) as db:
-                    await db.execute("""
-                    UPDATE adventure_profiles
-                    SET equipped_weapon = '녹슨검'
-                    WHERE user_id = ?
-                    """, (self.user_id,))
-
-                    await db.commit()
-
-                messages.append(
-                    f"💥 `{self.weapon_name}` 이(가) 전투 중 파괴되었습니다.\n"
-                    f"기본 무기 `녹슨검` 으로 변경됩니다."
-                )
-
-        # 방어구 손상 판정
-        armor_rate = ARMOR_DAMAGE_RATES.get(self.armor_name, 0)
-
-        if armor_rate > 0:
-            async with aiosqlite.connect(DB_PATH) as db:
-                async with db.execute("""
-                SELECT is_damaged
-                FROM adventure_equipment
-                WHERE user_id = ?
-                AND item_name = ?
-                """, (
-                    self.user_id,
-                    self.armor_name,
-                )) as cursor:
-                    row = await cursor.fetchone()
-
-                already_damaged = row and row[0] == 1
-
-                if not already_damaged:
-                    roll = random.randint(1, 100)
-
-                    if roll <= armor_rate:
-                        await db.execute("""
-                        UPDATE adventure_equipment
-                        SET is_damaged = 1
-                        WHERE user_id = ?
-                        AND item_name = ?
-                        """, (
-                            self.user_id,
-                            self.armor_name,
-                        ))
-
-                        await db.commit()
-
-                        messages.append(
-                            f"🛡 `{self.armor_name}` 이(가) 손상되었습니다.\n"
-                            f"수리 전까지 방어 효과가 감소합니다."
-                        )
-
-        if not messages:
-            return "✅ 장비는 무사합니다."
-
-        return "\n".join(messages)        
+        return ""
 
     async def give_points(self, amount: int):
         async with aiosqlite.connect(DB_PATH) as db:
@@ -409,6 +538,17 @@ class HuntView(discord.ui.View):
 
         self.monster_hp -= player_damage
 
+        durability_messages = []
+
+        weapon_durability_text = await decrease_equipped_durability(
+            self.user_id,
+            self.weapon_name,
+            1,
+        )
+
+        if weapon_durability_text:
+            durability_messages.append(weapon_durability_text)
+
         log = f"🗡 당신의 공격! `{player_damage}` 피해를 입혔습니다."
 
         if self.monster_hp <= 0:
@@ -424,6 +564,9 @@ class HuntView(discord.ui.View):
                 f"{self.monster['emoji']} `{self.monster['name']}` 을(를) 처치했습니다.\n"
                 f"사냥 부산물을 정리해 `{reward_points}P` 를 획득했습니다."
             )
+
+            if durability_messages:
+                result_text += "\n\n" + "\n".join(durability_messages)
 
             await self.finish_battle(
                 interaction,
@@ -442,12 +585,25 @@ class HuntView(discord.ui.View):
             self.shield -= blocked
             monster_damage -= blocked
 
+        if self.armor_name and self.armor_name != "없음":
+            armor_durability_text = await decrease_equipped_durability(
+                self.user_id,
+                self.armor_name,
+                1,
+            )
+
+            if armor_durability_text:
+                durability_messages.append(armor_durability_text)
+
         self.player_hp -= monster_damage
 
         log += (
             f"\n{self.monster['emoji']} 몬스터의 반격! "
             f"`{monster_damage}` 피해를 받았습니다."
         )
+
+        if durability_messages:
+            log += "\n\n" + "\n".join(durability_messages)
 
         if self.player_hp <= 0:
             self.player_hp = 1
@@ -458,6 +614,9 @@ class HuntView(discord.ui.View):
                 f"간신히 도망쳐 체력이 `1` 남았습니다.\n"
                 f"획득 보상은 없습니다."
             )
+
+            if durability_messages:
+                result_text += "\n\n" + "\n".join(durability_messages)
 
             await self.finish_battle(
                 interaction,
@@ -514,6 +673,7 @@ class HuntView(discord.ui.View):
 
         escape_chance = max(100 - (self.search_count * 30), 0)
         roll = random.randint(1, 100)
+        durability_messages = []
 
         if roll <= escape_chance:
             result_text = (
@@ -539,6 +699,16 @@ class HuntView(discord.ui.View):
             self.shield -= blocked
             monster_damage -= blocked
 
+        if self.armor_name and self.armor_name != "없음":
+            armor_durability_text = await decrease_equipped_durability(
+                self.user_id,
+                self.armor_name,
+                1,
+            )
+
+            if armor_durability_text:
+                durability_messages.append(armor_durability_text)
+
         self.player_hp -= monster_damage
 
         if self.player_hp <= 0:
@@ -550,6 +720,9 @@ class HuntView(discord.ui.View):
                 f"체력이 `1` 남았습니다."
             )
 
+            if durability_messages:
+                result_text += "\n\n" + "\n".join(durability_messages)
+
             await self.finish_battle(
                 interaction,
                 result_text,
@@ -557,12 +730,17 @@ class HuntView(discord.ui.View):
             )
             return
 
+        message = (
+            f"❌ 도망 실패!\n"
+            f"도망 확률 : `{escape_chance}%`\n"
+            f"피해 : `{monster_damage}`"
+        )
+
+        if durability_messages:
+            message += "\n\n" + "\n".join(durability_messages)
+
         await interaction.response.edit_message(
-            embed=self.make_embed(
-                f"❌ 도망 실패!\n"
-                f"도망 확률 : `{escape_chance}%`\n"
-                f"피해 : `{monster_damage}`"
-            ),
+            embed=self.make_embed(message),
             view=self,
         )
 

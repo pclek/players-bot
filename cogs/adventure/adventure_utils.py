@@ -1,10 +1,74 @@
 import aiosqlite
+from datetime import datetime, timedelta, timezone
 
 DB_PATH = "database/bot.db"
+KST = timezone(timedelta(hours=9))
+
+WEAPON_NAMES = [
+    "녹슨검",
+    "구리검",
+    "철검",
+    "은검",
+    "금검",
+    "다이아검",
+    "비브라늄검",
+]
+
+ARMOR_NAMES = [
+    "철갑옷",
+    "은갑옷",
+    "금갑옷",
+    "다이아갑옷",
+    "비브라늄갑옷",
+]
+
+EQUIPMENT_NAMES = WEAPON_NAMES + ARMOR_NAMES
+
+EQUIPMENT_MAX_DURABILITY = {
+    "녹슨검": 999999,
+
+    "구리검": 80,
+    "철검": 100,
+    "은검": 120,
+    "금검": 140,
+    "다이아검": 180,
+    "비브라늄검": 250,
+
+    "철갑옷": 120,
+    "은갑옷": 150,
+    "금갑옷": 180,
+    "다이아갑옷": 220,
+    "비브라늄갑옷": 300,
+}
+
+
+async def ensure_equipment_schema():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS adventure_equipment_instances (
+            equipment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            item_name TEXT NOT NULL,
+            durability INTEGER NOT NULL,
+            max_durability INTEGER NOT NULL,
+            break_count INTEGER NOT NULL DEFAULT 0,
+            is_equipped INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+
+        await db.commit()
 
 
 async def ensure_adventure_profile(user_id: int):
+    await ensure_equipment_schema()
+
     async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            await db.execute("ALTER TABLE adventure_profiles ADD COLUMN dead_until TEXT")
+        except aiosqlite.OperationalError:
+            pass
+
         await db.execute("""
         INSERT OR IGNORE INTO adventure_profiles (
             user_id,
@@ -26,14 +90,61 @@ async def ensure_adventure_profile(user_id: int):
         VALUES (?, '녹슨검', 1)
         """, (user_id,))
 
-        await db.execute("""
-        INSERT OR IGNORE INTO adventure_equipment (
-            user_id,
-            item_name,
-            is_damaged
-        )
-        VALUES (?, '녹슨검', 0)
-        """, (user_id,))
+        async with db.execute("""
+        SELECT equipment_id
+        FROM adventure_equipment_instances
+        WHERE user_id = ?
+        AND item_name = '녹슨검'
+        LIMIT 1
+        """, (user_id,)) as cursor:
+            rusty = await cursor.fetchone()
+
+        if not rusty:
+            await db.execute("""
+            INSERT INTO adventure_equipment_instances (
+                user_id,
+                item_name,
+                durability,
+                max_durability,
+                break_count,
+                is_equipped
+            )
+            VALUES (?, '녹슨검', 999999, 999999, 0, 1)
+            """, (user_id,))
+
+        await db.commit()
+
+
+async def add_equipment_instance(
+    user_id: int,
+    item_name: str,
+    quantity: int = 1,
+):
+    if quantity <= 0:
+        return
+
+    await ensure_adventure_profile(user_id)
+
+    max_durability = EQUIPMENT_MAX_DURABILITY.get(item_name, 100)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        for _ in range(quantity):
+            await db.execute("""
+            INSERT INTO adventure_equipment_instances (
+                user_id,
+                item_name,
+                durability,
+                max_durability,
+                break_count,
+                is_equipped
+            )
+            VALUES (?, ?, ?, ?, 0, 0)
+            """, (
+                user_id,
+                item_name,
+                max_durability,
+                max_durability,
+            ))
 
         await db.commit()
 
@@ -61,6 +172,9 @@ async def add_adventure_item(user_id: int, item_name: str, quantity: int = 1):
         ))
 
         await db.commit()
+
+    if item_name in EQUIPMENT_NAMES:
+        await add_equipment_instance(user_id, item_name, quantity)
 
 
 async def remove_adventure_item(user_id: int, item_name: str, quantity: int = 1) -> bool:
@@ -117,6 +231,71 @@ async def remove_adventure_item(user_id: int, item_name: str, quantity: int = 1)
     return True
 
 
+async def remove_equipment_instance(
+    user_id: int,
+    equipment_id: int,
+):
+    await ensure_adventure_profile(user_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT item_name, is_equipped
+        FROM adventure_equipment_instances
+        WHERE equipment_id = ?
+        AND user_id = ?
+        """, (
+            equipment_id,
+            user_id,
+        )) as cursor:
+            row = await cursor.fetchone()
+
+        if not row:
+            return None
+
+        item_name, is_equipped = row
+
+        await db.execute("""
+        DELETE FROM adventure_equipment_instances
+        WHERE equipment_id = ?
+        AND user_id = ?
+        """, (
+            equipment_id,
+            user_id,
+        ))
+
+        if item_name in WEAPON_NAMES:
+            if item_name != "녹슨검":
+                await remove_adventure_item(user_id, item_name, 1)
+
+            if is_equipped:
+                await db.execute("""
+                UPDATE adventure_profiles
+                SET equipped_weapon = '녹슨검'
+                WHERE user_id = ?
+                """, (user_id,))
+
+                await db.execute("""
+                UPDATE adventure_equipment_instances
+                SET is_equipped = 1
+                WHERE user_id = ?
+                AND item_name = '녹슨검'
+                """, (user_id,))
+
+        elif item_name in ARMOR_NAMES:
+            await remove_adventure_item(user_id, item_name, 1)
+
+            if is_equipped:
+                await db.execute("""
+                UPDATE adventure_profiles
+                SET equipped_armor = ''
+                WHERE user_id = ?
+                """, (user_id,))
+
+        await db.commit()
+
+    return item_name
+
+
 async def get_adventure_item_count(user_id: int, item_name: str) -> int:
     await ensure_adventure_profile(user_id)
 
@@ -166,7 +345,7 @@ async def get_adventure_profile(user_id: int):
 async def set_user_hp(user_id: int, hp: int):
     await ensure_adventure_profile(user_id)
 
-    hp = max(1, min(100, hp))
+    hp = max(0, min(100, hp))
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
@@ -179,3 +358,363 @@ async def set_user_hp(user_id: int, hp: int):
         ))
 
         await db.commit()
+
+
+async def get_best_equipment_instance(user_id: int, item_name: str):
+    await ensure_adventure_profile(user_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT equipment_id, item_name, durability, max_durability, break_count, is_equipped
+        FROM adventure_equipment_instances
+        WHERE user_id = ?
+        AND item_name = ?
+        ORDER BY
+            is_equipped DESC,
+            durability DESC,
+            break_count ASC,
+            equipment_id ASC
+        LIMIT 1
+        """, (
+            user_id,
+            item_name,
+        )) as cursor:
+            return await cursor.fetchone()
+
+
+async def equip_equipment_instance(user_id: int, item_name: str):
+    await ensure_adventure_profile(user_id)
+
+    instance = await get_best_equipment_instance(user_id, item_name)
+
+    if not instance:
+        return None
+
+    equipment_id = instance[0]
+
+    if item_name in WEAPON_NAMES:
+        column = "equipped_weapon"
+        names = WEAPON_NAMES
+    elif item_name in ARMOR_NAMES:
+        column = "equipped_armor"
+        names = ARMOR_NAMES
+    else:
+        return None
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(f"""
+        UPDATE adventure_profiles
+        SET {column} = ?
+        WHERE user_id = ?
+        """, (
+            item_name,
+            user_id,
+        ))
+
+        placeholders = ",".join("?" for _ in names)
+
+        await db.execute(f"""
+        UPDATE adventure_equipment_instances
+        SET is_equipped = 0
+        WHERE user_id = ?
+        AND item_name IN ({placeholders})
+        """, (
+            user_id,
+            *names,
+        ))
+
+        await db.execute("""
+        UPDATE adventure_equipment_instances
+        SET is_equipped = 1
+        WHERE user_id = ?
+        AND equipment_id = ?
+        """, (
+            user_id,
+            equipment_id,
+        ))
+
+        await db.commit()
+
+    return equipment_id
+
+
+async def get_equipped_equipment(user_id: int, item_name: str):
+    await ensure_adventure_profile(user_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT equipment_id, item_name, durability, max_durability, break_count, is_equipped
+        FROM adventure_equipment_instances
+        WHERE user_id = ?
+        AND item_name = ?
+        AND is_equipped = 1
+        ORDER BY equipment_id ASC
+        LIMIT 1
+        """, (
+            user_id,
+            item_name,
+        )) as cursor:
+            row = await cursor.fetchone()
+
+    if row:
+        return row
+
+    return await get_best_equipment_instance(user_id, item_name)
+
+
+async def decrease_equipped_durability(
+    user_id: int,
+    item_name: str,
+    amount: int = 1,
+):
+    if amount <= 0:
+        return ""
+
+    if item_name == "녹슨검" or item_name not in EQUIPMENT_NAMES:
+        return ""
+
+    row = await get_equipped_equipment(user_id, item_name)
+
+    if not row:
+        return ""
+
+    equipment_id, item_name, durability, max_durability, break_count, is_equipped = row
+
+    new_durability = max(0, durability - amount)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        if new_durability > 0:
+            await db.execute("""
+            UPDATE adventure_equipment_instances
+            SET durability = ?
+            WHERE equipment_id = ?
+            AND user_id = ?
+            """, (
+                new_durability,
+                equipment_id,
+                user_id,
+            ))
+
+            await db.commit()
+
+            return ""
+
+        if break_count >= 1:
+            await db.execute("""
+            DELETE FROM adventure_equipment_instances
+            WHERE equipment_id = ?
+            AND user_id = ?
+            """, (
+                equipment_id,
+                user_id,
+            ))
+
+            await db.commit()
+
+            removed_name = item_name
+
+            await remove_adventure_item(user_id, removed_name, 1)
+
+            async with aiosqlite.connect(DB_PATH) as db2:
+                if removed_name in WEAPON_NAMES:
+                    await db2.execute("""
+                    UPDATE adventure_profiles
+                    SET equipped_weapon = '녹슨검'
+                    WHERE user_id = ?
+                    """, (user_id,))
+
+                    await db2.execute("""
+                    UPDATE adventure_equipment_instances
+                    SET is_equipped = 1
+                    WHERE user_id = ?
+                    AND item_name = '녹슨검'
+                    """, (user_id,))
+
+                elif removed_name in ARMOR_NAMES:
+                    await db2.execute("""
+                    UPDATE adventure_profiles
+                    SET equipped_armor = ''
+                    WHERE user_id = ?
+                    """, (user_id,))
+
+                await db2.commit()
+
+            return (
+                f"💥 `{removed_name}` 의 내구도가 다시 0이 되어 완전히 파괴되었습니다."
+            )
+
+        await db.execute("""
+        UPDATE adventure_equipment_instances
+        SET durability = 0,
+            break_count = 1
+        WHERE equipment_id = ?
+        AND user_id = ?
+        """, (
+            equipment_id,
+            user_id,
+        ))
+
+        await db.commit()
+
+    return (
+        f"⚠️ `{item_name}` 의 내구도가 0이 되었습니다.\n"
+        f"수리하지 않고 다시 내구도가 0이 되면 파괴됩니다."
+    )
+
+
+async def get_repairable_equipment(user_id: int):
+    await ensure_adventure_profile(user_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT equipment_id, item_name, durability, max_durability, break_count
+        FROM adventure_equipment_instances
+        WHERE user_id = ?
+        AND item_name != '녹슨검'
+        AND durability < max_durability
+        ORDER BY item_name, durability ASC, break_count DESC, equipment_id ASC
+        """, (user_id,)) as cursor:
+            return await cursor.fetchall()
+
+
+async def repair_equipment_instance(user_id: int, equipment_id: int):
+    await ensure_adventure_profile(user_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT item_name, durability, max_durability, break_count
+        FROM adventure_equipment_instances
+        WHERE user_id = ?
+        AND equipment_id = ?
+        """, (
+            user_id,
+            equipment_id,
+        )) as cursor:
+            row = await cursor.fetchone()
+
+        if not row:
+            return None
+
+        item_name, durability, max_durability, break_count = row
+
+        await db.execute("""
+        UPDATE adventure_equipment_instances
+        SET durability = ?
+        WHERE user_id = ?
+        AND equipment_id = ?
+        """, (
+            max_durability,
+            user_id,
+            equipment_id,
+        ))
+
+        await db.commit()
+
+    return item_name, durability, max_durability, break_count
+
+
+
+def get_next_6am_kst() -> datetime:
+    now = datetime.now(KST)
+    next_6 = now.replace(hour=6, minute=0, second=0, microsecond=0)
+
+    if now >= next_6:
+        next_6 = next_6 + timedelta(days=1)
+
+    return next_6
+
+
+async def get_user_dead_until(user_id: int):
+    await ensure_adventure_profile(user_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT dead_until
+        FROM adventure_profiles
+        WHERE user_id = ?
+        """, (user_id,)) as cursor:
+            row = await cursor.fetchone()
+
+    return row[0] if row else None
+
+
+async def clear_user_death_if_expired(user_id: int):
+    await ensure_adventure_profile(user_id)
+
+    dead_until = await get_user_dead_until(user_id)
+
+    if not dead_until:
+        return False
+
+    try:
+        dead_time = datetime.fromisoformat(dead_until)
+    except ValueError:
+        dead_time = datetime.now(KST)
+
+    now = datetime.now(KST)
+
+    if now < dead_time:
+        return False
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        UPDATE adventure_profiles
+        SET dead_until = NULL,
+            current_hp = CASE
+                WHEN current_hp <= 0 THEN 30
+                ELSE current_hp
+            END
+        WHERE user_id = ?
+        """, (user_id,))
+
+        await db.commit()
+
+    return True
+
+
+async def is_user_dead(user_id: int):
+    await clear_user_death_if_expired(user_id)
+
+    dead_until = await get_user_dead_until(user_id)
+
+    if not dead_until:
+        return False, None
+
+    try:
+        dead_time = datetime.fromisoformat(dead_until)
+    except ValueError:
+        return False, None
+
+    if datetime.now(KST) >= dead_time:
+        await clear_user_death_if_expired(user_id)
+        return False, None
+
+    return True, dead_time
+
+
+async def set_user_dead_until_next_6(user_id: int):
+    await ensure_adventure_profile(user_id)
+
+    dead_until = get_next_6am_kst()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        UPDATE adventure_profiles
+        SET current_hp = 0,
+            dead_until = ?
+        WHERE user_id = ?
+        """, (
+            dead_until.isoformat(),
+            user_id,
+        ))
+
+        await db.commit()
+
+    return dead_until
+
+
+def format_dead_until(dead_until: datetime | None) -> str:
+    if not dead_until:
+        return "알 수 없음"
+
+    return dead_until.strftime("%Y-%m-%d %H:%M KST")

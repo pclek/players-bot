@@ -3,10 +3,12 @@ from discord import app_commands
 from discord.ext import commands
 import aiosqlite
 from datetime import datetime, timedelta, timezone
-from cogs.adventure.adventure_utils import get_adventure_profile
+from pathlib import Path
+from cogs.adventure.adventure_utils import get_adventure_profile, is_user_dead, format_dead_until
 
 DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
+TOMBSTONE_IMAGE_PATH = Path("assets/images/tombstone.png")
 
 
 def get_attendance_day_key() -> str:
@@ -128,6 +130,7 @@ async def make_profile_embed(member: discord.Member):
     xp, level, points, attendance, voice_time, warnings = data
 
     adventure_profile = await get_adventure_profile(member.id)
+    is_dead, dead_until = await is_user_dead(member.id)
 
     current_hp = 100
     equipped_weapon = "녹슨검"
@@ -144,9 +147,16 @@ async def make_profile_embed(member: discord.Member):
     need_xp = required_xp(level)
     rank, total = await get_level_rank(member.guild, member.id)
 
+    if is_dead:
+        title_icon = "💀"
+        embed_color = discord.Color.dark_grey()
+    else:
+        title_icon = "👑"
+        embed_color = discord.Color.blue()
+
     embed = discord.Embed(
-        title=f"👑 {member.display_name}님의 정보",
-        color=discord.Color.blue()
+        title=f"{title_icon} {member.display_name}님의 정보",
+        color=embed_color,
     )
 
     embed.description = (
@@ -163,16 +173,53 @@ async def make_profile_embed(member: discord.Member):
     embed.add_field(name="🎧 음성채팅 시간", value=f"`{format_voice_time(voice_time)}`", inline=True)
     embed.add_field(name="\u200b", value="\u200b", inline=True)
 
+    if is_dead:
+        embed.add_field(
+            name="❤️ 체력",
+            value=(
+                "`💀 사망 상태`\n"
+                f"부활 예정 : `{format_dead_until(dead_until)}`"
+            ),
+            inline=True,
+        )
+
+        embed.add_field(
+            name="⚔ 공격력",
+            value="`관짝 정비중`",
+            inline=True,
+        )
+
+        embed.add_field(name="\u200b", value="\u200b", inline=True)
+
+        embed.add_field(
+            name="🧰 장비",
+            value="🪦 `부활 전까지 사용 불가`",
+            inline=False,
+        )
+
+        embed.set_footer(text="영혼은 접속했지만 몸이 로그아웃 상태입니다.")
+
+        if TOMBSTONE_IMAGE_PATH.exists():
+            file = discord.File(
+                TOMBSTONE_IMAGE_PATH,
+                filename="tombstone.png",
+            )
+            embed.set_thumbnail(url="attachment://tombstone.png")
+            return embed, file
+
+        embed.set_thumbnail(url=member.display_avatar.url)
+        return embed, None
+
     embed.add_field(
         name="❤️ 체력",
         value=f"`{current_hp}(+{shield})`",
-        inline=True
+        inline=True,
     )
 
     embed.add_field(
         name="⚔ 공격력",
         value=f"`{attack_min} ~ {attack_max}`",
-        inline=True
+        inline=True,
     )
 
     embed.add_field(name="\u200b", value="\u200b", inline=True)
@@ -185,7 +232,7 @@ async def make_profile_embed(member: discord.Member):
 
     embed.set_thumbnail(url=member.display_avatar.url)
 
-    return embed
+    return embed, None
 
 
 class Profile(commands.Cog):
@@ -196,9 +243,9 @@ class Profile(commands.Cog):
     async def my_profile(self, interaction: discord.Interaction):
         await interaction.response.defer()
 
-        embed = await make_profile_embed(interaction.user)
+        embed, file = await make_profile_embed(interaction.user)
 
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(embed=embed, file=file)
 
     @app_commands.command(name="출석", description="하루 1회 출석체크를 합니다.")
     async def attendance(self, interaction: discord.Interaction):
@@ -254,7 +301,7 @@ class Profile(commands.Cog):
 
             await db.commit()
 
-        embed = await make_profile_embed(interaction.user)
+        embed, file = await make_profile_embed(interaction.user)
 
         await interaction.followup.send(
             content=(
@@ -263,7 +310,8 @@ class Profile(commands.Cog):
                 f"출석 완료로 익일 `06:00 KST` 전까지 "
                 f"채팅 및 음성통화 활동의 포인트/경험치가 집계됩니다."
             ),
-            embed=embed
+            embed=embed,
+            file=file,
         )
 
 

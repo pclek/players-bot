@@ -9,6 +9,9 @@ from cogs.adventure.adventure_utils import (
     add_adventure_item,
     remove_adventure_item,
     get_adventure_profile,
+    is_user_dead,
+    format_dead_until,
+    equip_equipment_instance,
 )
 
 DB_PATH = "database/bot.db"
@@ -419,6 +422,17 @@ class AdventureShopSelect(discord.ui.Select):
         user_id = interaction.user.id
         today_key = get_attendance_day_key()
 
+        is_dead, dead_until = await is_user_dead(user_id)
+
+        if is_dead:
+            await interaction.followup.send(
+                "🪦 부활 대기중에는 모험상품을 구매할 수 없습니다.\n"
+                "상점 주인이 비석에는 배달을 못 한다고 합니다.\n"
+                f"부활 예정 : `{format_dead_until(dead_until)}`",
+                ephemeral=True,
+            )
+            return
+
         selected = None
 
         for row in self.rows:
@@ -736,31 +750,18 @@ class AdventureItemEquipButton(discord.ui.Button):
                 )
                 return
 
-            await db.execute(f"""
-            UPDATE adventure_profiles
-            SET {column} = ?
-            WHERE user_id = ?
-            """, (
-                item_name,
-                interaction.user.id,
-            ))
+        equipment_id = await equip_equipment_instance(interaction.user.id, item_name)
 
-            await db.execute("""
-            INSERT OR IGNORE INTO adventure_equipment (
-                user_id,
-                item_name,
-                is_damaged
+        if not equipment_id:
+            await interaction.response.send_message(
+                "❌ 장착할 장비를 찾을 수 없습니다.",
+                ephemeral=True,
             )
-            VALUES (?, ?, 0)
-            """, (
-                interaction.user.id,
-                item_name,
-            ))
-
-            await db.commit()
+            return
 
         await interaction.response.send_message(
-            f"✅ {equip_type} `{item_name}` 을(를) 장착했습니다.",
+            f"✅ {equip_type} `{item_name}` 을(를) 장착했습니다.\n"
+            f"장비 ID : `#{equipment_id}`",
             ephemeral=True,
         )
 

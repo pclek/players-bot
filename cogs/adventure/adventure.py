@@ -16,12 +16,74 @@ from cogs.adventure.adventure_utils import (
     get_adventure_item_count,
     remove_adventure_item,
     get_adventure_inventory,
+    is_user_dead,
+    format_dead_until,
+    get_equipped_equipment,
 )
 
 from cogs.adventure.hunting import HuntView, ARMOR_SHIELDS
 from cogs.adventure.hunting import WEAPON_STATS
 
 DB_PATH = "database/bot.db"
+
+async def ensure_adventure_job_schema():
+    async with aiosqlite.connect(DB_PATH) as db:
+        for sql in [
+            "ALTER TABLE adventure_jobs ADD COLUMN notified INTEGER DEFAULT 0",
+            "ALTER TABLE adventure_jobs ADD COLUMN notify_message_id INTEGER",
+            "ALTER TABLE adventure_jobs ADD COLUMN auto_result_at TEXT",
+        ]:
+            try:
+                await db.execute(sql)
+            except aiosqlite.OperationalError:
+                pass
+
+        await db.commit()
+
+
+async def settle_adventure_result(user_id: int, job_type: str, member=None):
+    await ensure_adventure_profile(user_id)
+
+    profile = await get_adventure_profile(user_id)
+    current_hp = profile[0] if profile else 100
+
+    result_type, result_message, item_name, amount, weight = roll_adventure_result(
+        job_type,
+        current_hp,
+    )
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        DELETE FROM adventure_jobs
+        WHERE user_id = ?
+        """, (user_id,))
+
+        await db.commit()
+
+    reward_text = ""
+
+    if result_type == "item":
+        await add_adventure_item(user_id, item_name, amount)
+        reward_text = f"\n\n획득 : `{item_name} x{amount}`"
+
+    elif result_type == "hp":
+        new_hp = max(1, current_hp - amount)
+        await set_user_hp(user_id, new_hp)
+        reward_text = f"\n\n현재 체력 : `{new_hp}/100`"
+
+    user_text = member.mention if member else f"<@{user_id}>"
+
+    embed = discord.Embed(
+        title=f"🧭 {get_job_name(job_type)} 결과",
+        description=(
+            f"{user_text} 님의 {get_job_name(job_type)} 결과입니다.\n\n"
+            f"{result_message}"
+            f"{reward_text}"
+        ),
+        color=discord.Color.gold(),
+    )
+
+    return embed
 
 class AdventureResultButton(discord.ui.Button):
     def __init__(self, user_id: int):
@@ -66,36 +128,10 @@ class AdventureResultButton(discord.ui.Button):
                 )
                 return
 
-            profile = await get_adventure_profile(interaction.user.id)
-            current_hp = profile[0]
-
-            result_type, result_message, item_name, amount, weight = roll_adventure_result(
-                job_type,
-                current_hp,
-            )
-
-            await db.execute("""
-            DELETE FROM adventure_jobs
-            WHERE user_id = ?
-            """, (interaction.user.id,))
-
-            await db.commit()
-
-        reward_text = ""
-
-        if result_type == "item":
-            await add_adventure_item(interaction.user.id, item_name, amount)
-            reward_text = f"\n\n획득 : `{item_name} x{amount}`"
-
-        elif result_type == "hp":
-            new_hp = max(1, current_hp - amount)
-            await set_user_hp(interaction.user.id, new_hp)
-            reward_text = f"\n\n현재 체력 : `{new_hp}/100`"
-
-        embed = discord.Embed(
-            title=f"🧭 {get_job_name(job_type)} 결과",
-            description=result_message + reward_text,
-            color=discord.Color.gold(),
+        embed = await settle_adventure_result(
+            interaction.user.id,
+            job_type,
+            interaction.user,
         )
 
         for item in self.view.children:
@@ -108,7 +144,7 @@ class AdventureSelect(discord.ui.Select):
         options = [
             discord.SelectOption(
                 label="낚시",
-                description="0~5분 후 입질이 올 수 있습니다.",
+                description="5~15분 후 입질이 올 수 있습니다.",
                 emoji="🎣",
                 value="fishing",
             ),
@@ -120,7 +156,7 @@ class AdventureSelect(discord.ui.Select):
             ),
             discord.SelectOption(
                 label="농장",
-                description="10~20분 동안 작물을 기릅니다.",
+                description="5~15분 동안 작물을 기릅니다.",
                 emoji="🌾",
                 value="farming",
             ),
@@ -181,20 +217,14 @@ class AdventureSelect(discord.ui.Select):
 
             shield = ARMOR_SHIELDS.get(armor_name, 0)
 
-            async with aiosqlite.connect(DB_PATH) as db:
-                async with db.execute("""
-                SELECT is_damaged
-                FROM adventure_equipment
-                WHERE user_id = ?
-                AND item_name = ?
-                """, (
-                    user_id,
-                    armor_name,
-                )) as cursor:
-                    armor_row = await cursor.fetchone()
+            if armor_name:
+                armor_instance = await get_equipped_equipment(user_id, armor_name)
 
-            if armor_row and armor_row[0] == 1:
-                shield = shield // 2
+                if armor_instance:
+                    _, _, durability, max_durability, break_count, _ = armor_instance
+
+                    if durability <= 0:
+                        shield = shield // 2
 
             view = HuntView(
                 user_id=user_id,
@@ -350,7 +380,7 @@ class AdventureSelect(discord.ui.Select):
                 await remove_adventure_item(user_id, "랜덤씨앗", 1)            
 
             if job_type == "fishing":
-                minutes = random.randint(0, 5)
+                minutes = random.randint(5, 15)
                 title = "🎣 낚시 시작"
                 desc = (
                     f"{interaction.user.mention} 님이 낚시를 시작했습니다.\n"
@@ -366,7 +396,7 @@ class AdventureSelect(discord.ui.Select):
                 )
 
             else:
-                minutes = random.randint(10, 20)
+                minutes = random.randint(5, 15)
                 title = "🌾 농장 작업 시작"
                 desc = (
                     f"{interaction.user.mention} 님이 농장에 씨앗을 심었습니다.\n"
@@ -500,7 +530,10 @@ class Adventure(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def adventure_notify_loop(self):
-        now = datetime.now().isoformat()
+        await ensure_adventure_job_schema()
+
+        now_dt = datetime.now()
+        now = now_dt.isoformat()
 
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("""
@@ -511,12 +544,27 @@ class Adventure(commands.Cog):
             """, (now,)) as cursor:
                 rows = await cursor.fetchall()
 
+            auto_time = (now_dt + timedelta(minutes=5)).isoformat()
+
             for user_id, job_type, channel_id in rows:
                 await db.execute("""
                 UPDATE adventure_jobs
-                SET notified = 1
+                SET notified = 1,
+                    auto_result_at = ?
                 WHERE user_id = ?
-                """, (user_id,))
+                """, (
+                    auto_time,
+                    user_id,
+                ))
+
+            async with db.execute("""
+            SELECT user_id, job_type, channel_id, notify_message_id
+            FROM adventure_jobs
+            WHERE IFNULL(notified, 0) = 1
+            AND auto_result_at IS NOT NULL
+            AND auto_result_at <= ?
+            """, (now,)) as cursor:
+                auto_rows = await cursor.fetchall()
 
             await db.commit()
 
@@ -529,7 +577,8 @@ class Adventure(commands.Cog):
             embed = discord.Embed(
                 title=f"🧭 {get_job_name(job_type)} 완료",
                 description=(
-                    f"<@{user_id}> 님의 `{get_job_name(job_type)}` 결과를 확인할 수 있습니다."
+                    f"<@{user_id}> 님의 `{get_job_name(job_type)}` 결과를 확인할 수 있습니다.\n"
+                    "5분 안에 확인하지 않으면 자동으로 정산됩니다."
                 ),
                 color=discord.Color.gold(),
             )
@@ -537,7 +586,44 @@ class Adventure(commands.Cog):
             view = discord.ui.View(timeout=300)
             view.add_item(AdventureResultButton(user_id))
 
-            await channel.send(embed=embed, view=view)
+            message = await channel.send(embed=embed, view=view)
+
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("""
+                UPDATE adventure_jobs
+                SET notify_message_id = ?
+                WHERE user_id = ?
+                """, (
+                    message.id,
+                    user_id,
+                ))
+
+                await db.commit()
+
+        for user_id, job_type, channel_id, notify_message_id in auto_rows:
+            channel = self.bot.get_channel(channel_id)
+
+            if not channel:
+                continue
+
+            member = None
+
+            if getattr(channel, "guild", None):
+                member = channel.guild.get_member(user_id)
+
+            embed = await settle_adventure_result(user_id, job_type, member)
+
+            embed.set_footer(text="결과 확인 시간이 지나 자동으로 정산되었습니다.")
+
+            if notify_message_id:
+                try:
+                    old_message = await channel.fetch_message(notify_message_id)
+                    await old_message.edit(embed=embed, view=None)
+                    continue
+                except discord.HTTPException:
+                    pass
+
+            await channel.send(embed=embed)
 
     @adventure_notify_loop.before_loop
     async def before_adventure_notify_loop(self):
@@ -546,6 +632,17 @@ class Adventure(commands.Cog):
     @app_commands.command(name="모험", description="낚시, 광산, 농장, 사냥을 시작합니다.")
     async def adventure(self, interaction: discord.Interaction):
         await ensure_adventure_profile(interaction.user.id)
+
+        is_dead, dead_until = await is_user_dead(interaction.user.id)
+
+        if is_dead:
+            await interaction.response.send_message(
+                "🪦 아직 부활 대기중입니다.\n"
+                "영혼은 접속했지만 몸이 로그아웃 상태입니다.\n"
+                f"부활 예정 : `{format_dead_until(dead_until)}`",
+                ephemeral=True,
+            )
+            return
 
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("""
@@ -561,40 +658,16 @@ class Adventure(commands.Cog):
                 now = datetime.now()
 
                 if now >= end_time:
-                    profile = await get_adventure_profile(interaction.user.id)
-                    current_hp = profile[0]
-
-                    result_type, result_message, item_name, amount, weight = roll_adventure_result(
+                    embed = await settle_adventure_result(
+                        interaction.user.id,
                         job_type,
-                        current_hp,
+                        interaction.user,
                     )
 
-                    await db.execute("""
-                    DELETE FROM adventure_jobs
-                    WHERE user_id = ?
-                    """, (interaction.user.id,))
-
-                    await db.commit()
-
-                    reward_text = ""
-
-                    if result_type == "item":
-                        await add_adventure_item(interaction.user.id, item_name, amount)
-                        reward_text = f"\n\n획득 : `{item_name} x{amount}`"
-
-                    elif result_type == "hp":
-                        new_hp = max(1, current_hp - amount)
-                        await set_user_hp(interaction.user.id, new_hp)
-                        reward_text = f"\n\n현재 체력 : `{new_hp}/100`"
-
-                    embed = discord.Embed(
-                        title=f"🧭 이전 {get_job_name(job_type)} 결과",
-                        description=(
-                            "종료 시간이 지난 모험이 남아 있어 자동으로 정산했습니다.\n\n"
-                            + result_message
-                            + reward_text
-                        ),
-                        color=discord.Color.gold(),
+                    embed.title = f"🧭 이전 {get_job_name(job_type)} 결과"
+                    embed.description = (
+                        "종료 시간이 지난 모험이 남아 있어 자동으로 정산했습니다.\n\n"
+                        + embed.description
                     )
 
                     await interaction.response.send_message(
@@ -623,7 +696,7 @@ class Adventure(commands.Cog):
 
         embed.add_field(
             name="🎣 낚시",
-            value="0~5분 후 입질이 올 수 있습니다.",
+            value="5~15분 후 입질이 올 수 있습니다.",
             inline=False,
         )
 
@@ -635,7 +708,7 @@ class Adventure(commands.Cog):
 
         embed.add_field(
             name="🌾 농장",
-            value="10~20분 후 수확 결과가 나옵니다.",
+            value="5~15분 후 수확 결과가 나옵니다.",
             inline=False,
         )
 
