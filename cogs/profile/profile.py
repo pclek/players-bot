@@ -102,7 +102,7 @@ FOOD_HEALS = {
 
     "황금잉어찜": 45,
     "전설의심해어만찬": 80,
-    "황금정식": 100,
+    "황금정식": 999,
 }
 
 async def get_level_rank(guild: discord.Guild, user_id: int):

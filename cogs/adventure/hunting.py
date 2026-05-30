@@ -590,54 +590,7 @@ class Hunting(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="사냥", description="몬스터를 찾아 전투를 시작합니다.")
-    async def hunting(self, interaction: discord.Interaction):
-        await ensure_adventure_profile(interaction.user.id)
-
-        profile = await get_adventure_profile(interaction.user.id)
-
-        current_hp = profile[0]
-        weapon_name = profile[1] or "녹슨검"
-        armor_name = profile[2] or ""
-
-        if current_hp <= 1:
-            await interaction.response.send_message(
-                "❌ 체력이 너무 낮아 사냥을 시작할 수 없습니다.\n"
-                "음식을 사용하거나 회복 기능 추가 후 다시 시도해주세요.",
-                ephemeral=True,
-            )
-            return
-
-        shield = ARMOR_SHIELDS.get(armor_name, 0)
-
-        if armor_name:
-            async with aiosqlite.connect(DB_PATH) as db:
-                async with db.execute("""
-                SELECT is_damaged
-                FROM adventure_equipment
-                WHERE user_id = ?
-                AND item_name = ?
-                """, (
-                    interaction.user.id,
-                    armor_name,
-                )) as cursor:
-                    armor_row = await cursor.fetchone()
-
-            if armor_row and armor_row[0] == 1:
-                shield = shield // 2
-
-        view = HuntView(
-            user_id=interaction.user.id,
-            player_hp=current_hp,
-            shield=shield,
-            weapon_name=weapon_name,
-            armor_name=armor_name,
-        )
-
-        await interaction.response.send_message(
-            embed=view.make_embed("전투를 시작합니다."),
-            view=view,
-        )
+    
 
 
 async def setup(bot: commands.Bot):

@@ -120,36 +120,7 @@ class Equipment(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="장착", description="모험 장비를 장착합니다.")
-    async def equip(self, interaction: discord.Interaction):
-        await ensure_adventure_profile(interaction.user.id)
-
-        rows = await get_adventure_inventory(interaction.user.id)
-
-        equip_rows = [
-            row for row in rows
-            if row[0] in WEAPON_NAMES or row[0] in ARMOR_NAMES
-        ]
-
-        if not equip_rows:
-            await interaction.response.send_message(
-                "❌ 장착할 수 있는 장비가 없습니다.",
-                ephemeral=True,
-            )
-            return
-
-        embed = discord.Embed(
-            title="🧰 장비 장착",
-            description="장착할 무기 또는 방어구를 선택하세요.",
-            color=discord.Color.blurple(),
-        )
-
-        await interaction.response.send_message(
-            embed=embed,
-            view=EquipView(equip_rows),
-            ephemeral=True,
-        )
-
+    
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Equipment(bot))

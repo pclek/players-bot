@@ -1,5 +1,4 @@
 import discord
-from discord import app_commands
 from discord.ext import commands
 
 from cogs.adventure.adventure_utils import (
@@ -9,184 +8,106 @@ from cogs.adventure.adventure_utils import (
     get_adventure_item_count,
 )
 
-FISH_ITEMS = ["고등어", "연어", "참치"]
+RECIPES = {
+    "mackerel_grilled": ("고등어구이", {"고등어": 1}, "체력 3 회복"),
+    "salmon_grilled": ("연어구이", {"연어": 1}, "체력 5 회복"),
+    "tuna_grilled": ("참치구이", {"참치": 1}, "체력 10 회복"),
 
+    "bread": ("빵", {"밀": 3}, "체력 8 회복"),
+    "herb_potato": ("허브감자", {"감자": 2, "허브": 1}, "체력 13 회복"),
 
-async def consume_any_fish(user_id: int) -> str | None:
-    for fish in FISH_ITEMS:
-        count = await get_adventure_item_count(user_id, fish)
+    "mackerel_steak": ("고등어스테이크", {"고등어": 1, "허브": 1}, "체력 10 회복"),
+    "salmon_steak": ("연어스테이크", {"연어": 1, "허브": 1}, "체력 15 회복"),
+    "tuna_steak": ("참치스테이크", {"참치": 1, "허브": 1}, "체력 25 회복"),
 
-        if count > 0:
-            success = await remove_adventure_item(user_id, fish, 1)
+    "mackerel_chips": ("고등어피쉬앤칩스", {"고등어": 1, "감자": 1, "밀": 1}, "체력 15 회복"),
+    "salmon_chips": ("연어피쉬앤칩스", {"연어": 1, "감자": 1, "밀": 1}, "체력 22 회복"),
+    "tuna_chips": ("참치피쉬앤칩스", {"참치": 1, "감자": 1, "밀": 1}, "체력 35 회복"),
 
-            if success:
-                return fish
-
-    return None
+    "golden_carp": ("황금잉어찜", {"황금잉어": 1, "허브": 1}, "체력 45 회복"),
+    "deep_fish_feast": ("전설의심해어만찬", {"전설의심해어": 1, "허브": 1, "감자": 1, "밀": 1}, "체력 80 회복"),
+    "golden_meal": ("황금정식", {"황금감자": 1, "황금잉어": 1, "전설의심해어": 1}, "전체 회복"),
+}
 
 
 class CraftSelect(discord.ui.Select):
     def __init__(self):
-        options = [
-            discord.SelectOption(
-                label="빵",
-                description="밀 x3 → 빵 x1 / 체력 15 회복",
-                emoji="🍞",
-                value="bread",
-            ),
-            discord.SelectOption(
-                label="허브감자",
-                description="감자 x2 + 허브 x1 → 허브감자 x1 / 체력 30 회복",
-                emoji="🥔",
-                value="herb_potato",
-            ),
-            discord.SelectOption(
-                label="생선스테이크",
-                description="생선 x1 + 허브 x1 → 생선스테이크 x1 / 체력 50 회복",
-                emoji="🐟",
-                value="fish_steak",
-            ),
-            discord.SelectOption(
-                label="피쉬앤칩스",
-                description="생선 x1 + 감자 x1 + 밀 x1 → 피쉬앤칩스 x1 / 체력 80 회복",
-                emoji="🍟",
-                value="fish_and_chips",
-            ),
-            discord.SelectOption(
-                label="황금정식",
-                description="황금감자 x1 + 황금잉어 x1 → 황금정식 x1 / 전체 회복",
-                emoji="✨",
-                value="golden_meal",
-            ),
-        ]
+        options = []
+
+        for key, (result_name, materials, heal_text) in RECIPES.items():
+            material_text = ", ".join(
+                [f"{name} x{count}" for name, count in materials.items()]
+            )
+
+            options.append(
+                discord.SelectOption(
+                    label=result_name[:100],
+                    description=f"{material_text} / {heal_text}"[:100],
+                    value=key,
+                )
+            )
 
         super().__init__(
             placeholder="제작할 요리를 선택하세요.",
             min_values=1,
             max_values=1,
-            options=options,
+            options=options[:25],
         )
 
     async def callback(self, interaction: discord.Interaction):
         user_id = interaction.user.id
-        recipe = self.values[0]
+        recipe_key = self.values[0]
 
         await ensure_adventure_profile(user_id)
 
-        if recipe == "bread":
-            wheat = await get_adventure_item_count(user_id, "밀")
+        if recipe_key not in RECIPES:
+            await interaction.response.send_message(
+                "❌ 알 수 없는 제작법입니다.",
+                ephemeral=True,
+            )
+            return
 
-            if wheat < 3:
-                await interaction.response.send_message(
-                    "❌ 재료가 부족합니다.\n필요 재료 : `밀 x3`",
-                    ephemeral=True,
-                )
-                return
+        result_name, materials, heal_text = RECIPES[recipe_key]
 
-            await remove_adventure_item(user_id, "밀", 3)
-            await add_adventure_item(user_id, "빵", 1)
+        missing = []
 
-            result_name = "빵"
-            used_text = "밀 x3"
+        for item_name, needed in materials.items():
+            count = await get_adventure_item_count(user_id, item_name)
 
-        elif recipe == "herb_potato":
-            potato = await get_adventure_item_count(user_id, "감자")
-            herb = await get_adventure_item_count(user_id, "허브")
+            if count < needed:
+                missing.append(f"{item_name} `{count}/{needed}`")
 
-            if potato < 2 or herb < 1:
-                await interaction.response.send_message(
-                    "❌ 재료가 부족합니다.\n필요 재료 : `감자 x2`, `허브 x1`",
-                    ephemeral=True,
-                )
-                return
+        if missing:
+            await interaction.response.send_message(
+                "❌ 재료가 부족합니다.\n"
+                f"부족한 재료 : {', '.join(missing)}",
+                ephemeral=True,
+            )
+            return
 
-            await remove_adventure_item(user_id, "감자", 2)
-            await remove_adventure_item(user_id, "허브", 1)
-            await add_adventure_item(user_id, "허브감자", 1)
+        for item_name, needed in materials.items():
+            await remove_adventure_item(user_id, item_name, needed)
 
-            result_name = "허브감자"
-            used_text = "감자 x2, 허브 x1"
+        await add_adventure_item(user_id, result_name, 1)
 
-        elif recipe == "fish_steak":
-            herb = await get_adventure_item_count(user_id, "허브")
-
-            if herb < 1:
-                await interaction.response.send_message(
-                    "❌ 재료가 부족합니다.\n필요 재료 : `생선 x1`, `허브 x1`",
-                    ephemeral=True,
-                )
-                return
-
-            used_fish = await consume_any_fish(user_id)
-
-            if not used_fish:
-                await interaction.response.send_message(
-                    "❌ 재료가 부족합니다.\n필요 재료 : `고등어/연어/참치 중 1개`, `허브 x1`",
-                    ephemeral=True,
-                )
-                return
-
-            await remove_adventure_item(user_id, "허브", 1)
-            await add_adventure_item(user_id, "생선스테이크", 1)
-
-            result_name = "생선스테이크"
-            used_text = f"{used_fish} x1, 허브 x1"
-
-        elif recipe == "fish_and_chips":
-            potato = await get_adventure_item_count(user_id, "감자")
-            wheat = await get_adventure_item_count(user_id, "밀")
-
-            if potato < 1 or wheat < 1:
-                await interaction.response.send_message(
-                    "❌ 재료가 부족합니다.\n필요 재료 : `생선 x1`, `감자 x1`, `밀 x1`",
-                    ephemeral=True,
-                )
-                return
-
-            used_fish = await consume_any_fish(user_id)
-
-            if not used_fish:
-                await interaction.response.send_message(
-                    "❌ 재료가 부족합니다.\n필요 재료 : `고등어/연어/참치 중 1개`, `감자 x1`, `밀 x1`",
-                    ephemeral=True,
-                )
-                return
-
-            await remove_adventure_item(user_id, "감자", 1)
-            await remove_adventure_item(user_id, "밀", 1)
-            await add_adventure_item(user_id, "피쉬앤칩스", 1)
-
-            result_name = "피쉬앤칩스"
-            used_text = f"{used_fish} x1, 감자 x1, 밀 x1"
-
-        else:
-            golden_potato = await get_adventure_item_count(user_id, "황금감자")
-            golden_fish = await get_adventure_item_count(user_id, "황금잉어")
-
-            if golden_potato < 1 or golden_fish < 1:
-                await interaction.response.send_message(
-                    "❌ 재료가 부족합니다.\n필요 재료 : `황금감자 x1`, `황금잉어 x1`",
-                    ephemeral=True,
-                )
-                return
-
-            await remove_adventure_item(user_id, "황금감자", 1)
-            await remove_adventure_item(user_id, "황금잉어", 1)
-            await add_adventure_item(user_id, "황금정식", 1)
-
-            result_name = "황금정식"
-            used_text = "황금감자 x1, 황금잉어 x1"
+        used_text = ", ".join(
+            [f"{item_name} x{needed}" for item_name, needed in materials.items()]
+        )
 
         embed = discord.Embed(
             title="🍳 요리 제작 완료",
             description=(
                 f"제작 결과 : `{result_name} x1`\n"
-                f"사용 재료 : `{used_text}`"
+                f"사용 재료 : `{used_text}`\n"
+                f"효과 : `{heal_text}`"
             ),
             color=discord.Color.green(),
         )
 
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True,
+        )
 
 
 class CraftView(discord.ui.View):
@@ -198,7 +119,6 @@ class CraftView(discord.ui.View):
 class Crafting(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-
 
 
 async def setup(bot: commands.Bot):
