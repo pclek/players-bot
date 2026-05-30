@@ -547,6 +547,74 @@ class Adventure(commands.Cog):
     async def adventure(self, interaction: discord.Interaction):
         await ensure_adventure_profile(interaction.user.id)
 
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+            SELECT job_type, end_at
+            FROM adventure_jobs
+            WHERE user_id = ?
+            """, (interaction.user.id,)) as cursor:
+                old_job = await cursor.fetchone()
+
+            if old_job:
+                job_type, end_at = old_job
+                end_time = datetime.fromisoformat(end_at)
+                now = datetime.now()
+
+                if now >= end_time:
+                    profile = await get_adventure_profile(interaction.user.id)
+                    current_hp = profile[0]
+
+                    result_type, result_message, item_name, amount, weight = roll_adventure_result(
+                        job_type,
+                        current_hp,
+                    )
+
+                    await db.execute("""
+                    DELETE FROM adventure_jobs
+                    WHERE user_id = ?
+                    """, (interaction.user.id,))
+
+                    await db.commit()
+
+                    reward_text = ""
+
+                    if result_type == "item":
+                        await add_adventure_item(interaction.user.id, item_name, amount)
+                        reward_text = f"\n\n획득 : `{item_name} x{amount}`"
+
+                    elif result_type == "hp":
+                        new_hp = max(1, current_hp - amount)
+                        await set_user_hp(interaction.user.id, new_hp)
+                        reward_text = f"\n\n현재 체력 : `{new_hp}/100`"
+
+                    embed = discord.Embed(
+                        title=f"🧭 이전 {get_job_name(job_type)} 결과",
+                        description=(
+                            "종료 시간이 지난 모험이 남아 있어 자동으로 정산했습니다.\n\n"
+                            + result_message
+                            + reward_text
+                        ),
+                        color=discord.Color.gold(),
+                    )
+
+                    await interaction.response.send_message(
+                        embed=embed,
+                        ephemeral=True,
+                    )
+                    return
+
+                remaining = end_time - now
+                remaining_minutes = int(remaining.total_seconds() // 60)
+                remaining_seconds = int(remaining.total_seconds() % 60)
+
+                await interaction.response.send_message(
+                    f"⏳ 이미 진행 중인 모험이 있습니다.\n"
+                    f"진행 중 : `{get_job_name(job_type)}`\n"
+                    f"남은 시간 : `{remaining_minutes}분 {remaining_seconds}초`",
+                    ephemeral=True,
+                )
+                return
+
         embed = discord.Embed(
             title="🧭 모험 선택",
             description="진행할 모험을 선택하세요.",

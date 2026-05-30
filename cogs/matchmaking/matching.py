@@ -6,6 +6,21 @@ import aiosqlite
 DB_PATH = "database/bot.db"
 
 
+async def ensure_matching_tables():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS matching_posts (
+            message_id INTEGER PRIMARY KEY,
+            channel_id INTEGER,
+            game_name TEXT,
+            match_size INTEGER,
+            match_channel_id INTEGER,
+            status TEXT DEFAULT 'queue'
+        )
+        """)
+        await db.commit()
+
+
 async def get_games():
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("""
@@ -18,14 +33,11 @@ async def get_games():
 
 async def is_waiting_room(channel_id: int) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            """
+        async with db.execute("""
         SELECT 1
         FROM matching_waiting_rooms
         WHERE channel_id = ?
-        """,
-            (channel_id,),
-        ) as cursor:
+        """, (channel_id,)) as cursor:
             row = await cursor.fetchone()
 
     return row is not None
@@ -33,20 +45,17 @@ async def is_waiting_room(channel_id: int) -> bool:
 
 async def get_queue_members(game_name: str):
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            """
+        async with db.execute("""
         SELECT user_id
         FROM matching_queue
         WHERE game_name = ?
         ORDER BY rowid
-        """,
-            (game_name,),
-        ) as cursor:
+        """, (game_name,)) as cursor:
             return await cursor.fetchall()
-        
+
+
 async def cleanup_queue_members(guild: discord.Guild, game_name: str):
     members = await get_queue_members(game_name)
-
     removed_user_ids = []
 
     for (user_id,) in members:
@@ -75,19 +84,16 @@ async def cleanup_queue_members(guild: discord.Guild, game_name: str):
 
             await db.commit()
 
-    return await get_queue_members(game_name)        
+    return await get_queue_members(game_name)
 
 
 async def get_game_setting(game_name: str):
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            """
+        async with db.execute("""
         SELECT tempvoice_creator_id, match_size
         FROM game_settings
         WHERE game_name = ?
-        """,
-            (game_name,),
-        ) as cursor:
+        """, (game_name,)) as cursor:
             return await cursor.fetchone()
 
 
@@ -103,86 +109,64 @@ async def remove_user_from_all_queues(user_id: int):
         return cursor.rowcount > 0
 
 
-async def create_match_channel_and_move(
-    guild: discord.Guild,
-    game_name: str,
-    tempvoice_creator_id: int,
-    matched_members,
-):
-    creator_channel = guild.get_channel(tempvoice_creator_id)
+async def find_queue_post(game_name: str):
+    await ensure_matching_tables()
 
-    if not creator_channel:
-        return None
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT message_id, channel_id, match_size
+        FROM matching_posts
+        WHERE game_name = ?
+        AND status = 'queue'
+        ORDER BY message_id DESC
+        LIMIT 1
+        """, (game_name,)) as cursor:
+            return await cursor.fetchone()
 
-    overwrites = dict(creator_channel.overwrites)
 
-    existing_numbers = []
+async def save_queue_post(message_id: int, channel_id: int, game_name: str, match_size: int):
+    await ensure_matching_tables()
 
-    for channel in creator_channel.category.voice_channels:
-        if channel.name.startswith(f"{game_name}매칭 #"):
-            try:
-                number = int(channel.name.split("#")[1])
-                existing_numbers.append(number)
-            except (IndexError, ValueError):
-                pass
-
-    next_number = 1
-
-    while next_number in existing_numbers:
-        next_number += 1
-
-    match_channel = await guild.create_voice_channel(
-        name=f"{game_name}매칭 #{next_number}",
-        category=creator_channel.category,
-        overwrites=overwrites,
-    )
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
-        INSERT OR REPLACE INTO tempvoice_channels (
+        INSERT OR REPLACE INTO matching_posts (
+            message_id,
             channel_id,
-            owner_id
+            game_name,
+            match_size,
+            status
         )
-        VALUES (?, ?)
+        VALUES (?, ?, ?, ?, 'queue')
         """, (
-            match_channel.id,
-            0,
+            message_id,
+            channel_id,
+            game_name,
+            match_size,
         ))
-
         await db.commit()
 
-    member_lines = []
 
-    for index, (user_id,) in enumerate(matched_members, start=1):
-        member = guild.get_member(user_id)
+async def mark_post_matched(message_id: int, match_channel_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        UPDATE matching_posts
+        SET status = 'matched',
+            match_channel_id = ?
+        WHERE message_id = ?
+        """, (
+            match_channel_id,
+            message_id,
+        ))
+        await db.commit()
 
-        if member:
-            member_lines.append(f"`{index}.` {member.mention}")
 
-            if member.voice and member.voice.channel:
-                try:
-                    await member.move_to(match_channel)
-                except discord.HTTPException:
-                    pass
-        else:
-            member_lines.append(f"`{index}.` 알 수 없는 유저 `{user_id}`")
-
-    embed = discord.Embed(
-        title=f"🎉 {game_name} 매칭 완료",
-        description=(
-            f"매칭 인원이 모두 모여 음성채널이 생성되었습니다.\n\n"
-            f"🎧 채널: {match_channel.mention}\n\n"
-            f"**참여자 목록**\n"
-            + "\n".join(member_lines)
-        ),
-        color=discord.Color.green(),
-    )
-
-    try:
-        await match_channel.send(embed=embed)
-    except discord.HTTPException:
-        pass
-
-    return match_channel
+async def delete_queue_post_record(message_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        DELETE FROM matching_posts
+        WHERE message_id = ?
+        """, (message_id,))
+        await db.commit()
 
 
 def make_queue_embed(guild: discord.Guild, game_name: str, members, match_size: int):
@@ -202,7 +186,8 @@ def make_queue_embed(guild: discord.Guild, game_name: str, members, match_size: 
     embed = discord.Embed(
         title=f"🎮 {game_name} 매칭 대기열",
         description=(
-            f"현재 인원: `{len(members)} / {match_size}`\n\n" + "\n".join(lines)
+            f"현재 인원: `{len(members)} / {match_size}`\n\n"
+            + "\n".join(lines)
         ),
         color=discord.Color.blurple(),
     )
@@ -210,13 +195,146 @@ def make_queue_embed(guild: discord.Guild, game_name: str, members, match_size: 
     return embed
 
 
+def make_match_complete_embed(
+    guild: discord.Guild,
+    game_name: str,
+    match_channel: discord.VoiceChannel | None,
+    matched_members,
+):
+    member_lines = []
+
+    for index, (user_id,) in enumerate(matched_members, start=1):
+        member = guild.get_member(user_id)
+
+        if member:
+            member_lines.append(f"`{index}.` {member.mention}")
+        else:
+            member_lines.append(f"`{index}.` 알 수 없는 유저 `{user_id}`")
+
+    embed = discord.Embed(
+        title=f"🎉 {game_name} 매칭 완료",
+        description=(
+            "매칭이 완료되었습니다.\n"
+            "참가자들이 매칭 음성채널로 이동되었습니다.\n\n"
+            f"🎧 채널: {match_channel.mention if match_channel else '`생성 실패`'}\n\n"
+            "**참여자 목록**\n"
+            + "\n".join(member_lines)
+        ),
+        color=discord.Color.green(),
+    )
+
+    return embed
+
+
+def make_match_ended_embed(game_name: str):
+    return discord.Embed(
+        title=f"🏁 {game_name} 게임 종료",
+        description="매칭된 음성채널이 삭제되어 게임이 종료되었습니다.",
+        color=discord.Color.dark_grey(),
+    )
+
+
+class MatchCompleteView(discord.ui.View):
+    def __init__(self, game_name: str, invite_url: str | None):
+        super().__init__(timeout=None)
+        self.game_name = game_name
+
+        if invite_url:
+            self.add_item(
+                discord.ui.Button(
+                    label="참가/관전 하기",
+                    style=discord.ButtonStyle.link,
+                    url=invite_url,
+                )
+            )
+
+    @discord.ui.button(
+        label="나도 매칭하기",
+        style=discord.ButtonStyle.blurple,
+        custom_id="matching_again",
+    )
+    async def matching_again(self, interaction: discord.Interaction, button: discord.ui.Button):
+        games = await get_games()
+
+        if not games:
+            await interaction.response.send_message(
+                "❌ 등록된 게임 설정이 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        embed = discord.Embed(
+            title="🎮 매칭",
+            description="매칭할 게임을 선택하세요.",
+            color=discord.Color.blurple(),
+        )
+
+        await interaction.response.send_message(
+            embed=embed,
+            view=MatchingGameView(games),
+            ephemeral=True,
+        )
+
+
 class MatchingQueueView(discord.ui.View):
     def __init__(self, game_name: str, match_size: int):
-        super().__init__(timeout=120)
+        super().__init__(timeout=None)
         self.game_name = game_name
         self.match_size = match_size
 
-    @discord.ui.button(label="큐 취소", style=discord.ButtonStyle.danger, custom_id="matching_cancel")
+    @discord.ui.button(
+        label="큐 참가",
+        style=discord.ButtonStyle.success,
+        custom_id="matching_join",
+    )
+    async def join_queue(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.voice or not interaction.user.voice.channel:
+            await interaction.response.send_message(
+                "❌ 먼저 매칭 대기실 음성채널에 입장해주세요.",
+                ephemeral=True,
+            )
+            return
+
+        current_voice = interaction.user.voice.channel
+
+        if not await is_waiting_room(current_voice.id):
+            await interaction.response.send_message(
+                "❌ 현재 음성채널은 매칭 대기실로 등록되어 있지 않습니다.",
+                ephemeral=True,
+            )
+            return
+
+        await remove_user_from_all_queues(interaction.user.id)
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+            INSERT OR IGNORE INTO matching_queue (
+                game_name,
+                user_id,
+                voice_channel_id
+            )
+            VALUES (?, ?, ?)
+            """, (
+                self.game_name,
+                interaction.user.id,
+                current_voice.id,
+            ))
+            await db.commit()
+
+        await process_queue_message(
+            bot=interaction.client,
+            guild=interaction.guild,
+            message=interaction.message,
+            game_name=self.game_name,
+            match_size=self.match_size,
+            interaction=interaction,
+        )
+
+    @discord.ui.button(
+        label="큐 취소",
+        style=discord.ButtonStyle.danger,
+        custom_id="matching_cancel",
+    )
     async def cancel_queue(self, interaction: discord.Interaction, button: discord.ui.Button):
         removed = await remove_user_from_all_queues(interaction.user.id)
 
@@ -226,47 +344,39 @@ class MatchingQueueView(discord.ui.View):
                 ephemeral=True,
             )
             return
+
         members = await cleanup_queue_members(interaction.guild, self.game_name)
 
-        embed = make_queue_embed(
-            interaction.guild,
-            self.game_name,
-            members,
-            self.match_size,
-        )
+        if len(members) == 0:
+            embed = discord.Embed(
+                title=f"❌ {self.game_name} 매칭 종료",
+                description="대기 인원이 없어 매칭이 종료되었습니다.",
+                color=discord.Color.dark_grey(),
+            )
 
-        try:
+            await interaction.message.edit(
+                content="❌ 매칭이 종료되었습니다.",
+                embed=embed,
+                view=None,
+            )
+            await delete_queue_post_record(interaction.message.id)
+
+        else:
+            embed = make_queue_embed(
+                interaction.guild,
+                self.game_name,
+                members,
+                self.match_size,
+            )
+
             await interaction.message.edit(
                 content="🎮 매칭 대기열이 갱신되었습니다.",
                 embed=embed,
                 view=MatchingQueueView(self.game_name, self.match_size),
             )
-        except discord.HTTPException:
-            pass
+
         await interaction.response.send_message(
             "✅ 매칭 큐 참가를 취소했습니다.",
-            ephemeral=True,
-        )
-
-    @discord.ui.button(
-        label="현재 인원 보기",
-        style=discord.ButtonStyle.secondary,
-        custom_id="matching_status",
-    )
-    async def view_status(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
-        members = await cleanup_queue_members(interaction.guild, self.game_name)
-
-        embed = make_queue_embed(
-            interaction.guild,
-            self.game_name,
-            members,
-            self.match_size,
-        )
-
-        await interaction.response.send_message(
-            embed=embed,
             ephemeral=True,
         )
 
@@ -323,72 +433,48 @@ class MatchingGameSelect(discord.ui.Select):
         await remove_user_from_all_queues(interaction.user.id)
 
         async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                """
+            await db.execute("""
             INSERT OR IGNORE INTO matching_queue (
                 game_name,
                 user_id,
                 voice_channel_id
             )
             VALUES (?, ?, ?)
-            """,
-                (
-                    game_name,
-                    interaction.user.id,
-                    current_voice.id,
-                ),
-            )
+            """, (
+                game_name,
+                interaction.user.id,
+                current_voice.id,
+            ))
 
             await db.commit()
 
         members = await cleanup_queue_members(interaction.guild, game_name)
 
-        if len(members) >= match_size:
-            members = await cleanup_queue_members(interaction.guild, game_name)
+        try:
+            await interaction.message.delete()
+        except Exception:
+            pass
 
-            if len(members) < match_size:
-                embed = make_queue_embed(
-                    interaction.guild,
-                    game_name,
-                    members,
-                    match_size,
-                )
+        post = await find_queue_post(game_name)
 
-                await interaction.response.send_message(
-                    content="⚠️ 매칭 직전 일부 인원이 대기실을 이탈하여 매칭이 취소되었습니다.",
-                    embed=embed,
-                    view=MatchingQueueView(game_name, match_size),
-                    ephemeral=True,
-                )
-                return
+        if post:
+            message_id, channel_id, saved_match_size = post
+            channel = interaction.guild.get_channel(channel_id)
 
-            matched_members = members[:match_size]
-
-            match_channel = await create_match_channel_and_move(
-                interaction.guild,
-                game_name,
-                tempvoice_creator_id,
-                matched_members,
-            )
-
-            async with aiosqlite.connect(DB_PATH) as db:
-                for (user_id,) in matched_members:
-                    await db.execute(
-                        """
-                    DELETE FROM matching_queue
-                    WHERE game_name = ?
-                    AND user_id = ?
-                    """,
-                        (game_name, user_id),
+            if channel:
+                try:
+                    message = await channel.fetch_message(message_id)
+                    await process_queue_message(
+                        bot=interaction.client,
+                        guild=interaction.guild,
+                        message=message,
+                        game_name=game_name,
+                        match_size=saved_match_size or match_size,
+                        interaction=interaction,
                     )
-
-                await db.commit()
-
-            await interaction.response.send_message(
-                f"🎉 `{game_name}` 매칭이 완료되었습니다.\n"
-                f"이동 채널: {match_channel.mention if match_channel else '생성 실패'}",
-            )
-            return
+                    return
+                except discord.HTTPException:
+                    await delete_queue_post_record(message_id)
 
         embed = make_queue_embed(
             interaction.guild,
@@ -397,16 +483,31 @@ class MatchingGameSelect(discord.ui.Select):
             match_size,
         )
 
-        try:
-            await interaction.message.delete()
-        except Exception:
-            pass
-
         await interaction.response.send_message(
             content=f"✅ `{game_name}` 매칭 큐에 참가했습니다.",
             embed=embed,
             view=MatchingQueueView(game_name, match_size),
         )
+
+        try:
+            message = await interaction.original_response()
+            await save_queue_post(
+                message.id,
+                message.channel.id,
+                game_name,
+                match_size,
+            )
+
+            await process_queue_message(
+                bot=interaction.client,
+                guild=interaction.guild,
+                message=message,
+                game_name=game_name,
+                match_size=match_size,
+                interaction=None,
+            )
+        except Exception:
+            pass
 
 
 class MatchingGameView(discord.ui.View):
@@ -415,9 +516,224 @@ class MatchingGameView(discord.ui.View):
         self.add_item(MatchingGameSelect(games))
 
 
+async def create_match_channel_and_move(
+    guild: discord.Guild,
+    game_name: str,
+    tempvoice_creator_id: int,
+    matched_members,
+):
+    creator_channel = guild.get_channel(tempvoice_creator_id)
+
+    if not creator_channel:
+        return None
+
+    overwrites = dict(creator_channel.overwrites)
+    existing_numbers = []
+
+    for channel in creator_channel.category.voice_channels:
+        if channel.name.startswith(f"{game_name}매칭 #"):
+            try:
+                number = int(channel.name.split("#")[1])
+                existing_numbers.append(number)
+            except (IndexError, ValueError):
+                pass
+
+    next_number = 1
+
+    while next_number in existing_numbers:
+        next_number += 1
+
+    match_channel = await guild.create_voice_channel(
+        name=f"{game_name}매칭 #{next_number}",
+        category=creator_channel.category,
+        overwrites=overwrites,
+    )
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        INSERT OR REPLACE INTO tempvoice_channels (
+            channel_id,
+            owner_id
+        )
+        VALUES (?, ?)
+        """, (
+            match_channel.id,
+            0,
+        ))
+        await db.commit()
+
+    for (user_id,) in matched_members:
+        member = guild.get_member(user_id)
+
+        if member and member.voice and member.voice.channel:
+            try:
+                await member.move_to(match_channel)
+            except discord.HTTPException:
+                pass
+
+    return match_channel
+
+
+async def process_queue_message(
+    bot: commands.Bot,
+    guild: discord.Guild,
+    message: discord.Message,
+    game_name: str,
+    match_size: int,
+    interaction: discord.Interaction | None = None,
+):
+    game_setting = await get_game_setting(game_name)
+
+    if not game_setting:
+        return
+
+    tempvoice_creator_id, match_size = game_setting
+    members = await cleanup_queue_members(guild, game_name)
+
+    if len(members) == 0:
+        embed = discord.Embed(
+            title=f"❌ {game_name} 매칭 종료",
+            description="대기 인원이 없어 매칭이 종료되었습니다.",
+            color=discord.Color.dark_grey(),
+        )
+
+        await message.edit(
+            content="❌ 매칭이 종료되었습니다.",
+            embed=embed,
+            view=None,
+        )
+        await delete_queue_post_record(message.id)
+
+        if interaction and not interaction.response.is_done():
+            await interaction.response.send_message(
+                "✅ 매칭 큐 상태가 갱신되었습니다.",
+                ephemeral=True,
+            )
+        return
+
+    if len(members) >= match_size:
+        matched_members = members[:match_size]
+
+        match_channel = await create_match_channel_and_move(
+            guild,
+            game_name,
+            tempvoice_creator_id,
+            matched_members,
+        )
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            for (user_id,) in matched_members:
+                await db.execute("""
+                DELETE FROM matching_queue
+                WHERE game_name = ?
+                AND user_id = ?
+                """, (
+                    game_name,
+                    user_id,
+                ))
+
+            await db.commit()
+
+        invite_url = None
+
+        if match_channel:
+            try:
+                invite = await match_channel.create_invite(
+                    max_age=86400,
+                    max_uses=0,
+                    unique=True,
+                    reason=f"{game_name} 매칭 참가/관전 링크",
+                )
+                invite_url = invite.url
+            except discord.HTTPException:
+                invite_url = None
+            except discord.Forbidden:
+                invite_url = None
+
+        embed = make_match_complete_embed(
+            guild,
+            game_name,
+            match_channel,
+            matched_members,
+        )
+
+        await message.edit(
+            content="🎉 매칭이 완료되었습니다.",
+            embed=embed,
+            view=MatchCompleteView(game_name, invite_url),
+        )
+
+        if match_channel:
+            await mark_post_matched(message.id, match_channel.id)
+
+        if interaction and not interaction.response.is_done():
+            await interaction.response.send_message(
+                f"🎉 `{game_name}` 매칭이 완료되었습니다.\n"
+                f"참가자들이 {match_channel.mention if match_channel else '`생성 실패`'} 채널로 이동되었습니다.",
+                ephemeral=True,
+            )
+        return
+
+    embed = make_queue_embed(
+        guild,
+        game_name,
+        members,
+        match_size,
+    )
+
+    await message.edit(
+        content="🎮 매칭 대기열이 갱신되었습니다.",
+        embed=embed,
+        view=MatchingQueueView(game_name, match_size),
+    )
+
+    if interaction and not interaction.response.is_done():
+        await interaction.response.send_message(
+            f"✅ `{game_name}` 매칭 큐에 참가했습니다.",
+            ephemeral=True,
+        )
+
+
 class Matching(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    async def cog_load(self):
+        await ensure_matching_tables()
+
+    @commands.Cog.listener()
+    async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel):
+        await ensure_matching_tables()
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+            SELECT message_id, channel_id, game_name
+            FROM matching_posts
+            WHERE match_channel_id = ?
+            AND status = 'matched'
+            """, (channel.id,)) as cursor:
+                rows = await cursor.fetchall()
+
+            for message_id, announcement_channel_id, game_name in rows:
+                announcement_channel = channel.guild.get_channel(announcement_channel_id)
+
+                if announcement_channel:
+                    try:
+                        message = await announcement_channel.fetch_message(message_id)
+                        await message.edit(
+                            content="🏁 게임이 종료되었습니다.",
+                            embed=make_match_ended_embed(game_name),
+                            view=None,
+                        )
+                    except discord.HTTPException:
+                        pass
+
+                await db.execute("""
+                DELETE FROM matching_posts
+                WHERE message_id = ?
+                """, (message_id,))
+
+            await db.commit()
 
     @commands.Cog.listener()
     async def on_voice_state_update(
@@ -432,20 +748,45 @@ class Matching(commands.Cog):
         if before.channel == after.channel:
             return
 
-        # 이전 채널이 대기실이 아니면 무시
         if before.channel is None:
             return
 
         if not await is_waiting_room(before.channel.id):
             return
 
-        # 다른 대기실로 이동한 경우는 큐 유지
         if after.channel and await is_waiting_room(after.channel.id):
             return
 
-        # 대기실을 완전히 나갔거나 일반 채널로 이동하면 큐 취소
         await remove_user_from_all_queues(member.id)
-        
+
+        await ensure_matching_tables()
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+            SELECT message_id, channel_id, game_name, match_size
+            FROM matching_posts
+            WHERE status = 'queue'
+            """) as cursor:
+                rows = await cursor.fetchall()
+
+        for message_id, channel_id, game_name, match_size in rows:
+            channel = member.guild.get_channel(channel_id)
+
+            if not channel:
+                continue
+
+            try:
+                message = await channel.fetch_message(message_id)
+                await process_queue_message(
+                    bot=self.bot,
+                    guild=member.guild,
+                    message=message,
+                    game_name=game_name,
+                    match_size=match_size,
+                    interaction=None,
+                )
+            except discord.HTTPException:
+                await delete_queue_post_record(message_id)
 
     @app_commands.command(name="매칭", description="게임 매칭 큐에 참가합니다.")
     async def matching(self, interaction: discord.Interaction):
@@ -455,19 +796,22 @@ class Matching(commands.Cog):
 
         if not games:
             await interaction.followup.send(
-                "❌ 등록된 게임 설정이 없습니다. `/게임관리`에서 먼저 게임을 추가해주세요."
+                "❌ 등록된 게임 설정이 없습니다. `/게임관리`에서 먼저 게임을 추가해주세요.",
+                ephemeral=True,
             )
             return
 
         if not interaction.user.voice or not interaction.user.voice.channel:
             await interaction.followup.send(
-                "❌ 먼저 매칭 대기실 음성채널에 입장해주세요."
+                "❌ 먼저 매칭 대기실 음성채널에 입장해주세요.",
+                ephemeral=True,
             )
             return
 
         if not await is_waiting_room(interaction.user.voice.channel.id):
             await interaction.followup.send(
-                "❌ 현재 음성채널은 매칭 대기실로 등록되어 있지 않습니다."
+                "❌ 현재 음성채널은 매칭 대기실로 등록되어 있지 않습니다.",
+                ephemeral=True,
             )
             return
 
@@ -480,6 +824,7 @@ class Matching(commands.Cog):
         await interaction.followup.send(
             embed=embed,
             view=MatchingGameView(games),
+            ephemeral=True,
         )
 
 
