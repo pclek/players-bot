@@ -8,6 +8,30 @@ from utils.checks import is_bot_admin
 DB_PATH = "database/bot.db"
 
 
+def make_matching_settings_embed():
+    return discord.Embed(
+        title="🎮 매칭 설정",
+        description="아래 드롭다운에서 원하는 작업을 선택하세요.",
+        color=discord.Color.blurple(),
+    )
+
+
+class MatchingSettingsBackButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="뒤로가기",
+            style=discord.ButtonStyle.gray,
+            emoji="↩️",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            content=None,
+            embed=make_matching_settings_embed(),
+            view=MatchingSettingsView(),
+        )
+
+
 class WaitingRoomAddSelect(discord.ui.ChannelSelect):
     def __init__(self):
         super().__init__(
@@ -33,9 +57,13 @@ class WaitingRoomAddSelect(discord.ui.ChannelSelect):
 
             await db.commit()
 
-        await interaction.response.send_message(
-            f"✅ {channel.mention} 채널을 매칭 대기실로 등록했습니다.",
-            ephemeral=True,
+        view = discord.ui.View(timeout=60)
+        view.add_item(MatchingSettingsBackButton())
+
+        await interaction.response.edit_message(
+            content=f"✅ {channel.mention} 채널을 매칭 대기실로 등록했습니다.",
+            embed=None,
+            view=view,
         )
 
 
@@ -62,16 +90,21 @@ class WaitingRoomRemoveSelect(discord.ui.ChannelSelect):
 
             await db.commit()
 
+        view = discord.ui.View(timeout=60)
+        view.add_item(MatchingSettingsBackButton())
+
         if cursor.rowcount == 0:
-            await interaction.response.send_message(
-                "❌ 해당 채널은 매칭 대기실로 등록되어 있지 않습니다.",
-                ephemeral=True,
+            await interaction.response.edit_message(
+                content="❌ 해당 채널은 매칭 대기실로 등록되어 있지 않습니다.",
+                embed=None,
+                view=view,
             )
             return
 
-        await interaction.response.send_message(
-            f"✅ {channel.mention} 대기실을 제거했습니다.",
-            ephemeral=True,
+        await interaction.response.edit_message(
+            content=f"✅ {channel.mention} 대기실을 제거했습니다.",
+            embed=None,
+            view=view,
         )
 
 
@@ -108,22 +141,24 @@ class MatchingSettingsSelect(discord.ui.Select):
         if selected == "add":
             view = discord.ui.View(timeout=60)
             view.add_item(WaitingRoomAddSelect())
+            view.add_item(MatchingSettingsBackButton())
 
-            await interaction.response.send_message(
-                "➕ 추가할 매칭 대기실 음성채널을 선택하세요.",
+            await interaction.response.edit_message(
+                content="➕ 추가할 매칭 대기실 음성채널을 선택하세요.",
+                embed=None,
                 view=view,
-                ephemeral=True,
             )
             return
 
         if selected == "remove":
             view = discord.ui.View(timeout=60)
             view.add_item(WaitingRoomRemoveSelect())
+            view.add_item(MatchingSettingsBackButton())
 
-            await interaction.response.send_message(
-                "➖ 제거할 매칭 대기실 음성채널을 선택하세요.",
+            await interaction.response.edit_message(
+                content="➖ 제거할 매칭 대기실 음성채널을 선택하세요.",
+                embed=None,
                 view=view,
-                ephemeral=True,
             )
             return
 
@@ -135,9 +170,13 @@ class MatchingSettingsSelect(discord.ui.Select):
                 rows = await cursor.fetchall()
 
         if not rows:
-            await interaction.response.send_message(
-                "📋 등록된 매칭 대기실이 없습니다.",
-                ephemeral=True,
+            view = discord.ui.View(timeout=60)
+            view.add_item(MatchingSettingsBackButton())
+
+            await interaction.response.edit_message(
+                content="📋 등록된 매칭 대기실이 없습니다.",
+                embed=None,
+                view=view,
             )
             return
 
@@ -165,9 +204,13 @@ class MatchingSettingsSelect(discord.ui.Select):
                 await db.commit()
 
         if not lines:
-            await interaction.response.send_message(
-                "📋 등록된 매칭 대기실이 없습니다.",
-                ephemeral=True,
+            view = discord.ui.View(timeout=60)
+            view.add_item(MatchingSettingsBackButton())
+
+            await interaction.response.edit_message(
+                content="📋 등록된 매칭 대기실이 없습니다.",
+                embed=None,
+                view=view,
             )
             return
 
@@ -177,9 +220,13 @@ class MatchingSettingsSelect(discord.ui.Select):
             color=discord.Color.blurple(),
         )
 
-        await interaction.response.send_message(
+        view = discord.ui.View(timeout=60)
+        view.add_item(MatchingSettingsBackButton())
+
+        await interaction.response.edit_message(
+            content=None,
             embed=embed,
-            ephemeral=True,
+            view=view,
         )
 
 
@@ -202,14 +249,8 @@ class MatchingSettings(commands.Cog):
             )
             return
 
-        embed = discord.Embed(
-            title="🎮 매칭 설정",
-            description="아래 드롭다운에서 원하는 작업을 선택하세요.",
-            color=discord.Color.blurple(),
-        )
-
         await interaction.response.send_message(
-            embed=embed,
+            embed=make_matching_settings_embed(),
             view=MatchingSettingsView(),
             ephemeral=True,
         )

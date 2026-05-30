@@ -8,6 +8,30 @@ from utils.checks import is_bot_admin
 DB_PATH = "database/bot.db"
 
 
+def make_punish_settings_embed():
+    return discord.Embed(
+        title="🛡 제재 설정",
+        description="아래 드롭다운에서 원하는 설정을 선택하세요.",
+        color=discord.Color.red(),
+    )
+
+
+class PunishBackButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="뒤로가기",
+            style=discord.ButtonStyle.gray,
+            emoji="↩️",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            content=None,
+            embed=make_punish_settings_embed(),
+            view=PunishMenuView(),
+        )
+
+
 async def set_setting(key: str, value: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -40,8 +64,13 @@ class PunishRoleSelect(discord.ui.RoleSelect):
         role = self.values[0]
         await set_setting(self.setting_key, str(role.id))
 
-        await interaction.response.send_message(
-            f"✅ {role.mention} 역할로 설정했습니다.", ephemeral=True
+        view = discord.ui.View(timeout=60)
+        view.add_item(PunishBackButton())
+
+        await interaction.response.edit_message(
+            content=f"✅ {role.mention} 역할로 설정했습니다.",
+            embed=None,
+            view=view,
         )
 class RejoinNoticeChannelSelect(discord.ui.ChannelSelect):
     def __init__(self):
@@ -57,9 +86,13 @@ class RejoinNoticeChannelSelect(discord.ui.ChannelSelect):
 
         await set_setting("rejoin_notice_channel_id", str(channel.id))
 
-        await interaction.response.send_message(
-            f"✅ 재입장 안내 채널을 {channel.mention} 으로 설정했습니다.",
-            ephemeral=True,
+        view = discord.ui.View(timeout=60)
+        view.add_item(PunishBackButton())
+
+        await interaction.response.edit_message(
+            content=f"✅ 재입장 안내 채널을 {channel.mention} 으로 설정했습니다.",
+            embed=None,
+            view=view,
         )
 
 
@@ -169,12 +202,18 @@ class InactiveTargetRoleSelect(discord.ui.RoleSelect):
 
         base_role = interaction.guild.get_role(self.base_role_id)
 
-        await interaction.response.send_message(
-            f"✅ 장기 미활동 설정을 저장했습니다.\n"
-            f"기준 역할: {base_role.mention if base_role else '`삭제된 역할`'}\n"
-            f"미활동 기간: `{self.inactive_days}일`\n"
-            f"지급 역할: {inactive_role.mention}",
-            ephemeral=True,
+        view = discord.ui.View(timeout=60)
+        view.add_item(PunishBackButton())
+
+        await interaction.response.edit_message(
+            content=(
+                f"✅ 장기 미활동 설정을 저장했습니다.\n"
+                f"기준 역할: {base_role.mention if base_role else '`삭제된 역할`'}\n"
+                f"미활동 기간: `{self.inactive_days}일`\n"
+                f"지급 역할: {inactive_role.mention}"
+            ),
+            embed=None,
+            view=view,
         )
 
 class PunishMenuSelect(discord.ui.Select):
@@ -228,8 +267,12 @@ class PunishMenuSelect(discord.ui.Select):
                 PunishRoleSelect("quarantine_role_id", "격리 역할을 선택하세요.")
             )
 
-            await interaction.response.send_message(
-                "🛡 격리 역할로 사용할 역할을 선택하세요.", view=view, ephemeral=True
+            view.add_item(PunishBackButton())
+
+            await interaction.response.edit_message(
+                content="🛡 격리 역할로 사용할 역할을 선택하세요.",
+                embed=None,
+                view=view,
             )
             return
 
@@ -239,34 +282,48 @@ class PunishMenuSelect(discord.ui.Select):
                 PunishRoleSelect("punish_exempt_role_id", "면역 역할을 선택하세요.")
             )
 
-            await interaction.response.send_message(
-                "🛡 자동 제재에서 제외할 면역 역할을 선택하세요.",
+            view.add_item(PunishBackButton())
+
+            await interaction.response.edit_message(
+                content="🛡 자동 제재에서 제외할 면역 역할을 선택하세요.",
+                embed=None,
                 view=view,
-                ephemeral=True,
             )
             return
         if selected == "inactive":
             view = discord.ui.View(timeout=60)
             view.add_item(InactiveBaseRoleSelect())
 
-            await interaction.response.send_message(
-                "📌 장기 미활동 기준 역할을 선택하세요.",
+            view.add_item(PunishBackButton())
+
+            await interaction.response.edit_message(
+                content="📌 장기 미활동 기준 역할을 선택하세요.",
+                embed=None,
                 view=view,
-                ephemeral=True,
             )
             return
         if selected == "rejoin_notice_channel":
             view = discord.ui.View(timeout=60)
             view.add_item(RejoinNoticeChannelSelect())
 
-            await interaction.response.send_message(
-                "📢 재입장 안내를 보낼 채널을 선택하세요.",
+            view.add_item(PunishBackButton())
+
+            await interaction.response.edit_message(
+                content="📢 재입장 안내를 보낼 채널을 선택하세요.",
+                embed=None,
                 view=view,
-                ephemeral=True,
             )
             return
 
         if selected == "rejoin_notice_message":
+            try:
+                await interaction.message.delete()
+            except Exception:
+                try:
+                    await interaction.delete_original_response()
+                except Exception:
+                    pass
+
             await interaction.response.send_modal(RejoinNoticeMessageModal())
             return        
 
@@ -332,7 +389,14 @@ class PunishMenuSelect(discord.ui.Select):
         embed.add_field(name="재입장 안내 채널", value=rejoin_channel_text, inline=False)
         embed.add_field(name="재입장 안내 문구", value=rejoin_message_text, inline=False)
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        view = discord.ui.View(timeout=60)
+        view.add_item(PunishBackButton())
+
+        await interaction.response.edit_message(
+            content=None,
+            embed=embed,
+            view=view,
+        )
 
 
 class PunishMenuView(discord.ui.View):

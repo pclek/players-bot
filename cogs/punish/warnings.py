@@ -10,6 +10,32 @@ from cogs.punish.punish_settings import get_setting
 DB_PATH = "database/bot.db"
 
 
+class WarningBackButton(discord.ui.Button):
+    def __init__(self, target):
+        self.target = target
+        super().__init__(
+            label="뒤로가기",
+            style=discord.ButtonStyle.gray,
+            emoji="↩️",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="🚨 경고 관리",
+            description=(
+                f"대상 유저: {self.target.mention}\n\n"
+                "아래 드롭다운에서 원하는 작업을 선택하세요."
+            ),
+            color=discord.Color.red(),
+        )
+
+        await interaction.response.edit_message(
+            content=None,
+            embed=embed,
+            view=WarningActionView(self.target),
+        )
+
+
 class WarningReasonModal(discord.ui.Modal):
     def __init__(self, target: discord.Member):
         super().__init__(title="경고 지급")
@@ -130,6 +156,11 @@ class WarningActionSelect(discord.ui.Select):
         selected = self.values[0]
 
         if selected == "add":
+            try:
+                await interaction.message.delete()
+            except Exception:
+                pass
+
             await interaction.response.send_modal(WarningReasonModal(self.target))
             return
 
@@ -170,10 +201,16 @@ class WarningActionSelect(discord.ui.Select):
 
             await db.commit()
 
-        await interaction.response.send_message(
-            f"✅ {self.target.mention} 님의 경고를 차감했습니다.\n"
-            f"현재 경고: `{current_warning - 1}`회",
-            ephemeral=True,
+        view = discord.ui.View(timeout=60)
+        view.add_item(WarningBackButton(self.target))
+
+        await interaction.response.edit_message(
+            content=(
+                f"✅ {self.target.mention} 님의 경고를 차감했습니다.\n"
+                f"현재 경고: `{current_warning - 1}`회"
+            ),
+            embed=None,
+            view=view,
         )
 
     async def view_warning(self, interaction: discord.Interaction):
@@ -222,7 +259,14 @@ class WarningActionSelect(discord.ui.Select):
         else:
             embed.add_field(name="최근 경고 기록", value="기록 없음", inline=False)
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        view = discord.ui.View(timeout=60)
+        view.add_item(WarningBackButton(self.target))
+
+        await interaction.response.edit_message(
+            content=None,
+            embed=embed,
+            view=view,
+        )
 
 
 class WarningActionView(discord.ui.View):

@@ -214,9 +214,16 @@ class BuyButton(discord.ui.Button):
             inline=True,
         )
 
+        try:
+            await interaction.message.delete()
+        except Exception:
+            try:
+                await interaction.delete_original_response()
+            except Exception:
+                pass
+
         await interaction.response.send_message(
             embed=embed,
-            ephemeral=True,
         )
                 # 상점 로그 채널 조회
         async with aiosqlite.connect(DB_PATH) as db:
@@ -508,9 +515,16 @@ class AdventureShopSelect(discord.ui.Select):
             color=discord.Color.green(),
         )
 
+        try:
+            await interaction.message.delete()
+        except Exception:
+            try:
+                await interaction.delete_original_response()
+            except Exception:
+                pass
+
         await interaction.response.send_message(
             embed=embed,
-            ephemeral=True,
         )
 
 

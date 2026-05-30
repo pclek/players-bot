@@ -8,6 +8,30 @@ from utils.checks import is_bot_admin
 DB_PATH = "database/bot.db"
 
 
+def make_tempvoice_settings_embed():
+    return discord.Embed(
+        title="➕ 채널 생성기 설정",
+        description="아래 드롭다운에서 원하는 작업을 선택하세요.",
+        color=discord.Color.blurple(),
+    )
+
+
+class TempVoiceBackButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="뒤로가기",
+            style=discord.ButtonStyle.gray,
+            emoji="↩️",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            content=None,
+            embed=make_tempvoice_settings_embed(),
+            view=TempVoiceMenuView(),
+        )
+
+
 class TempVoiceCreatorSelect(discord.ui.ChannelSelect):
     def __init__(self):
         super().__init__(
@@ -32,10 +56,16 @@ class TempVoiceCreatorSelect(discord.ui.ChannelSelect):
             )
             await db.commit()
 
-        await interaction.response.send_message(
-            f"✅ {channel.mention} 채널을 생성기로 등록했습니다.\n"
-            f"생성된 방은 같은 카테고리 맨 아래에 `[이름]의 영역` 형식으로 만들어집니다.",
-            ephemeral=True,
+        view = discord.ui.View(timeout=60)
+        view.add_item(TempVoiceBackButton())
+
+        await interaction.response.edit_message(
+            content=(
+                f"✅ {channel.mention} 채널을 생성기로 등록했습니다.\n"
+                f"생성된 방은 같은 카테고리 맨 아래에 `[이름]의 영역` 형식으로 만들어집니다."
+            ),
+            embed=None,
+            view=view,
         )
 
 
@@ -61,14 +91,21 @@ class TempVoiceRemoveSelect(discord.ui.ChannelSelect):
             )
             await db.commit()
 
+        view = discord.ui.View(timeout=60)
+        view.add_item(TempVoiceBackButton())
+
         if cursor.rowcount == 0:
-            await interaction.response.send_message(
-                "❌ 해당 채널은 생성기로 등록되어 있지 않습니다.", ephemeral=True
+            await interaction.response.edit_message(
+                content="❌ 해당 채널은 생성기로 등록되어 있지 않습니다.",
+                embed=None,
+                view=view,
             )
             return
 
-        await interaction.response.send_message(
-            f"✅ {channel.mention} 생성기를 제거했습니다.", ephemeral=True
+        await interaction.response.edit_message(
+            content=f"✅ {channel.mention} 생성기를 제거했습니다.",
+            embed=None,
+            view=view,
         )
 
 
@@ -105,18 +142,24 @@ class TempVoiceMenuSelect(discord.ui.Select):
         if selected == "add":
             view = discord.ui.View(timeout=60)
             view.add_item(TempVoiceCreatorSelect())
+            view.add_item(TempVoiceBackButton())
 
-            await interaction.response.send_message(
-                "➕ 생성기로 사용할 음성채널을 선택하세요.", view=view, ephemeral=True
+            await interaction.response.edit_message(
+                content="➕ 생성기로 사용할 음성채널을 선택하세요.",
+                embed=None,
+                view=view,
             )
             return
 
         if selected == "remove":
             view = discord.ui.View(timeout=60)
             view.add_item(TempVoiceRemoveSelect())
+            view.add_item(TempVoiceBackButton())
 
-            await interaction.response.send_message(
-                "➖ 제거할 생성기 음성채널을 선택하세요.", view=view, ephemeral=True
+            await interaction.response.edit_message(
+                content="➖ 제거할 생성기 음성채널을 선택하세요.",
+                embed=None,
+                view=view,
             )
             return
 
@@ -128,8 +171,13 @@ class TempVoiceMenuSelect(discord.ui.Select):
                 rows = await cursor.fetchall()
 
         if not rows:
-            await interaction.response.send_message(
-                "📋 등록된 채널 생성기가 없습니다.", ephemeral=True
+            view = discord.ui.View(timeout=60)
+            view.add_item(TempVoiceBackButton())
+
+            await interaction.response.edit_message(
+                content="📋 등록된 채널 생성기가 없습니다.",
+                embed=None,
+                view=view,
             )
             return
 
@@ -161,9 +209,13 @@ class TempVoiceMenuSelect(discord.ui.Select):
                 await db.commit()
 
         if not lines:
-            await interaction.response.send_message(
-                "📋 등록된 채널 생성기가 없습니다.",
-                ephemeral=True
+            view = discord.ui.View(timeout=60)
+            view.add_item(TempVoiceBackButton())
+
+            await interaction.response.edit_message(
+                content="📋 등록된 채널 생성기가 없습니다.",
+                embed=None,
+                view=view,
             )
             return
 
@@ -173,7 +225,14 @@ class TempVoiceMenuSelect(discord.ui.Select):
             color=discord.Color.blurple(),
         )
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        view = discord.ui.View(timeout=60)
+        view.add_item(TempVoiceBackButton())
+
+        await interaction.response.edit_message(
+            content=None,
+            embed=embed,
+            view=view,
+        )
 
 
 class TempVoiceMenuView(discord.ui.View):
@@ -196,14 +255,10 @@ class TempVoiceSettings(commands.Cog):
             )
             return
 
-        embed = discord.Embed(
-            title="➕ 채널 생성기 설정",
-            description="아래 드롭다운에서 원하는 작업을 선택하세요.",
-            color=discord.Color.blurple(),
-        )
-
         await interaction.response.send_message(
-            embed=embed, view=TempVoiceMenuView(), ephemeral=True
+            embed=make_tempvoice_settings_embed(),
+            view=TempVoiceMenuView(),
+            ephemeral=True,
         )
 
 

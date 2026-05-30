@@ -9,6 +9,30 @@ from utils.checks import is_bot_admin
 DB_PATH = "database/bot.db"
 
 
+def make_shop_admin_embed():
+    return discord.Embed(
+        title="🛒 상점 관리",
+        description="아래 드롭다운에서 원하는 작업을 선택하세요.",
+        color=discord.Color.blurple(),
+    )
+
+
+class ShopAdminBackButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="뒤로가기",
+            style=discord.ButtonStyle.gray,
+            emoji="↩️",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            embed=make_shop_admin_embed(),
+            content=None,
+            view=ShopAdminMenuView(),
+        )
+
+
 class ShopItemModal(discord.ui.Modal):
     def __init__(self):
         super().__init__(title="상품 등록")
@@ -151,8 +175,8 @@ class AdventureShopPriceModal(discord.ui.Modal):
 
         self.user_limit = discord.ui.TextInput(
             label="1인당 일일 구매 제한",
-            placeholder="예: 20 (0=무제한)",
-            required=True,
+            placeholder="예: 20 / 비워두면 무제한",
+            required=False,
             max_length=10,
         )
 
@@ -164,7 +188,8 @@ class AdventureShopPriceModal(discord.ui.Modal):
         try:
             price = int(str(self.price.value))
             stock = int(str(self.stock.value))
-            user_limit = int(str(self.user_limit.value))
+            user_limit_text = str(self.user_limit.value).strip()
+            user_limit = int(user_limit_text) if user_limit_text else 0
         except ValueError:
             await interaction.response.send_message(
                 "❌ 가격, 재고, 구매 제한은 숫자로 입력해주세요.",
@@ -202,7 +227,6 @@ class AdventureShopPriceModal(discord.ui.Modal):
         await interaction.response.send_message(
             f"✅ 모험상품 `{self.item_name}` 등록 완료\n"
             f"가격: `{price}P` / 재고: `{stock}개` / 일일 제한: `{user_limit}개`",
-            ephemeral=True,
         )
 
 
@@ -243,6 +267,7 @@ class AdventureShopCategorySelect(discord.ui.Select):
 
         view = discord.ui.View(timeout=60)
         view.add_item(AdventureShopItemSelect(rows))
+        view.add_item(ShopAdminBackButton())
 
         await interaction.response.edit_message(
             content=f"🧭 {category} 카테고리 아이템 선택",
@@ -276,7 +301,10 @@ class AdventureShopItemSelect(discord.ui.Select):
         try:
             await interaction.message.delete()
         except Exception:
-            pass
+            try:
+                await interaction.delete_original_response()
+            except Exception:
+                pass
 
         await interaction.response.send_modal(
             AdventureShopPriceModal(item_name)
@@ -344,9 +372,13 @@ class ShopItemSelect(discord.ui.Select):
             )
             return
 
-        await interaction.response.send_message(
-            f"✅ 상품 #{item_id} 을(를) {action_text}했습니다.",
-            ephemeral=True,
+        view = discord.ui.View(timeout=60)
+        view.add_item(ShopAdminBackButton())
+
+        await interaction.response.edit_message(
+            content=f"✅ 상품 #{item_id} 을(를) {action_text}했습니다.",
+            embed=None,
+            view=view,
         )
 
 class ShopLogChannelSelect(discord.ui.ChannelSelect):
@@ -386,9 +418,13 @@ class ShopLogChannelSelect(discord.ui.ChannelSelect):
             color=discord.Color.green(),
         )
 
-        await interaction.response.send_message(
+        view = discord.ui.View(timeout=60)
+        view.add_item(ShopAdminBackButton())
+
+        await interaction.response.edit_message(
+            content=None,
             embed=embed,
-            ephemeral=True,
+            view=view,
         )
 
 class ShopBoardChannelSelect(discord.ui.ChannelSelect):
@@ -429,9 +465,13 @@ class ShopBoardChannelSelect(discord.ui.ChannelSelect):
             color=discord.Color.green(),
         )
 
-        await interaction.response.send_message(
+        view = discord.ui.View(timeout=60)
+        view.add_item(ShopAdminBackButton())
+
+        await interaction.response.edit_message(
+            content=None,
             embed=embed,
-            ephemeral=True,
+            view=view,
         )
 
 class InventoryStatusButton(discord.ui.Button):
@@ -462,12 +502,13 @@ class InventoryStatusButton(discord.ui.Button):
             return
 
         view = discord.ui.View(timeout=60)
-        view.add_item(InventorySelect(rows,interaction.guild))
+        view.add_item(InventorySelect(rows, interaction.guild))
+        view.add_item(ShopAdminBackButton())
 
-        await interaction.response.send_message(
-            "📦 상태를 변경할 상품을 선택하세요.",
+        await interaction.response.edit_message(
+            content="📦 상태를 변경할 상품을 선택하세요.",
+            embed=None,
             view=view,
-            ephemeral=True,
         )
 
 class InventorySelect(discord.ui.Select):
@@ -587,10 +628,10 @@ class InventorySelect(discord.ui.Select):
             )
         )
 
-        await interaction.response.send_message(
+        await interaction.response.edit_message(
+            content=None,
             embed=embed,
             view=view,
-            ephemeral=True,
         )
 
 
@@ -811,6 +852,14 @@ class ShopAdminMenuSelect(discord.ui.Select):
         selected = self.values[0]
 
         if selected == "add":
+            try:
+                await interaction.message.delete()
+            except Exception:
+                try:
+                    await interaction.delete_original_response()
+                except Exception:
+                    pass
+
             await interaction.response.send_modal(ShopItemModal())
             return
 
@@ -834,11 +883,12 @@ class ShopAdminMenuSelect(discord.ui.Select):
 
             view = discord.ui.View(timeout=60)
             view.add_item(AdventureShopCategorySelect(rows))
+            view.add_item(ShopAdminBackButton())
 
-            await interaction.response.send_message(
-                "🧭 판매할 모험 아이템 카테고리를 선택하세요.",
+            await interaction.response.edit_message(
+                content="🧭 판매할 모험 아이템 카테고리를 선택하세요.",
+                embed=None,
                 view=view,
-                ephemeral=True,
             )
             return
 
@@ -852,22 +902,24 @@ class ShopAdminMenuSelect(discord.ui.Select):
             view.add_item(
                 ShopLogChannelSelect()
             )
+            view.add_item(ShopAdminBackButton())
 
-            await interaction.response.send_message(
-                "📢 상점 로그 채널을 선택하세요.",
+            await interaction.response.edit_message(
+                content="📢 상점 로그 채널을 선택하세요.",
+                embed=None,
                 view=view,
-                ephemeral=True,
             )
             return
         
         if selected == "shop_board_channel":
             view = discord.ui.View(timeout=60)
             view.add_item(ShopBoardChannelSelect())
+            view.add_item(ShopAdminBackButton())
 
-            await interaction.response.send_message(
-                "🛒 상점 게시판으로 사용할 채널을 선택하세요.",
+            await interaction.response.edit_message(
+                content="🛒 상점 게시판으로 사용할 채널을 선택하세요.",
+                embed=None,
                 view=view,
-                ephemeral=True,
             )
             return        
         
@@ -894,11 +946,12 @@ class ShopAdminMenuSelect(discord.ui.Select):
                     "cancelled",
                 )
             )
+            view.add_item(ShopAdminBackButton())
 
-            await interaction.response.send_message(
-                "📦 조회할 판매 상태를 선택하세요.",
+            await interaction.response.edit_message(
+                content="📦 조회할 판매 상태를 선택하세요.",
+                embed=None,
                 view=view,
-                ephemeral=True,
             )
             return
 
@@ -919,11 +972,12 @@ class ShopAdminMenuSelect(discord.ui.Select):
         
         view = discord.ui.View(timeout=60)
         view.add_item(ShopItemSelect(rows, selected))
+        view.add_item(ShopAdminBackButton())
 
-        await interaction.response.send_message(
-            "처리할 상품을 선택하세요.",
+        await interaction.response.edit_message(
+            content="처리할 상품을 선택하세요.",
+            embed=None,
             view=view,
-            ephemeral=True,
         )
 
 
@@ -943,9 +997,13 @@ async def send_shop_admin_list(interaction: discord.Interaction):
             rows = await cursor.fetchall()
 
     if not rows:
-        await interaction.response.send_message(
-            "📋 등록된 상품이 없습니다.",
-            ephemeral=True,
+        view = discord.ui.View(timeout=60)
+        view.add_item(ShopAdminBackButton())
+
+        await interaction.response.edit_message(
+            content="📋 등록된 상품이 없습니다.",
+            embed=None,
+            view=view,
         )
         return
 
@@ -973,9 +1031,13 @@ async def send_shop_admin_list(interaction: discord.Interaction):
         color=discord.Color.blurple(),
     )
 
-    await interaction.response.send_message(
+    view = discord.ui.View(timeout=60)
+    view.add_item(ShopAdminBackButton())
+
+    await interaction.response.edit_message(
+        content=None,
         embed=embed,
-        ephemeral=True,
+        view=view,
     )
 
 
@@ -992,14 +1054,8 @@ class ShopAdmin(commands.Cog):
             )
             return
 
-        embed = discord.Embed(
-            title="🛒 상점 관리",
-            description="아래 드롭다운에서 원하는 작업을 선택하세요.",
-            color=discord.Color.blurple(),
-        )
-
         await interaction.response.send_message(
-            embed=embed,
+            embed=make_shop_admin_embed(),
             view=ShopAdminMenuView(),
             ephemeral=True,
         )

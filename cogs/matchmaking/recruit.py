@@ -29,15 +29,20 @@ async def get_recruit_members(message_id: int):
 
 
 class RecruitPostView(discord.ui.View):
-    def __init__(self, is_full=False, voice_channel_id: int | None = None):
+    def __init__(
+        self,
+        is_full=False,
+        voice_channel_id: int | None = None,
+        guild_id: int | None = None,
+    ):
         super().__init__(timeout=None)
 
-        if voice_channel_id:
+        if voice_channel_id and guild_id:
             self.add_item(
                 discord.ui.Button(
                     label="음성채널 입장",
                     style=discord.ButtonStyle.link,
-                    url=f"https://discord.com/channels/@me/{voice_channel_id}",
+                    url=f"https://discord.com/channels/{guild_id}/{voice_channel_id}",
                 )
             )
 
@@ -318,10 +323,13 @@ class RecruitGameSelect(discord.ui.Select):
         content = role.mention if role else ""
 
         message = await recruit_channel.send(
-            content=content, embed=embed, view=RecruitPostView(
-            is_full=False,
-            voice_channel_id=voice_channel.id,
-        )
+            content=content,
+            embed=embed,
+            view=RecruitPostView(
+                is_full=False,
+                voice_channel_id=voice_channel.id,
+                guild_id=interaction.guild.id,
+            ),
         )
 
         async with aiosqlite.connect(DB_PATH) as db:
@@ -364,8 +372,7 @@ class RecruitGameSelect(discord.ui.Select):
             pass
 
         await interaction.response.send_message(
-            f"✅ {recruit_channel.mention} 채널에 모집글을 올렸습니다.",
-            ephemeral=True
+            f"✅ {recruit_channel.mention} 채널에 모집글을 올렸습니다."
         )   
 
 
@@ -441,6 +448,7 @@ async def update_recruit_message(message: discord.Message):
         view=RecruitPostView(
             is_full=is_full,
             voice_channel_id=voice_channel_id,
+            guild_id=message.guild.id,
         )
     )
 

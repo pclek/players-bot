@@ -8,6 +8,30 @@ from utils.checks import is_bot_admin
 DB_PATH = "database/bot.db"
 
 
+def make_game_settings_embed():
+    return discord.Embed(
+        title="🎮 게임 관리",
+        description="아래 드롭다운에서 원하는 작업을 선택하세요.",
+        color=discord.Color.blurple(),
+    )
+
+
+class GameBackButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="뒤로가기",
+            style=discord.ButtonStyle.gray,
+            emoji="↩️",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            content=None,
+            embed=make_game_settings_embed(),
+            view=GameMenuView(),
+        )
+
+
 class GameNameModal(discord.ui.Modal):
     def __init__(
         self,
@@ -115,6 +139,14 @@ class GameTempVoiceSelect(discord.ui.ChannelSelect):
     async def callback(self, interaction: discord.Interaction):
         tempvoice_channel = self.values[0]
 
+        try:
+            await interaction.message.delete()
+        except Exception:
+            try:
+                await interaction.delete_original_response()
+            except Exception:
+                pass
+
         await interaction.response.send_modal(
             GameNameModal(
                 self.role,
@@ -140,11 +172,12 @@ class GameRecruitChannelSelect(discord.ui.ChannelSelect):
 
         view = discord.ui.View(timeout=60)
         view.add_item(GameTempVoiceSelect(self.role, recruit_channel))
+        view.add_item(GameBackButton())
 
-        await interaction.response.send_message(
-            "🎙 매칭/생성에 사용할 TempVoice 생성기 음성채널을 선택하세요.",
+        await interaction.response.edit_message(
+            content="🎙 매칭/생성에 사용할 TempVoice 생성기 음성채널을 선택하세요.",
+            embed=None,
             view=view,
-            ephemeral=True,
         )
 
 
@@ -161,11 +194,12 @@ class GameRoleSelect(discord.ui.RoleSelect):
 
         view = discord.ui.View(timeout=60)
         view.add_item(GameRecruitChannelSelect(role))
+        view.add_item(GameBackButton())
 
-        await interaction.response.send_message(
-            "📢 모집글이 올라갈 텍스트 채널을 선택하세요.",
+        await interaction.response.edit_message(
+            content="📢 모집글이 올라갈 텍스트 채널을 선택하세요.",
+            embed=None,
             view=view,
-            ephemeral=True,
         )
 
 
@@ -203,16 +237,21 @@ class GameDeleteSelect(discord.ui.Select):
 
             await db.commit()
 
+        view = discord.ui.View(timeout=60)
+        view.add_item(GameBackButton())
+
         if cursor.rowcount == 0:
-            await interaction.response.send_message(
-                "❌ 해당 게임이 존재하지 않습니다.",
-                ephemeral=True,
+            await interaction.response.edit_message(
+                content="❌ 해당 게임이 존재하지 않습니다.",
+                embed=None,
+                view=view,
             )
             return
 
-        await interaction.response.send_message(
-            f"✅ `{game_name}` 게임 설정을 삭제했습니다.",
-            ephemeral=True,
+        await interaction.response.edit_message(
+            content=f"✅ `{game_name}` 게임 설정을 삭제했습니다.",
+            embed=None,
+            view=view,
         )
 
 class GameEditSelect(discord.ui.Select):
@@ -266,6 +305,14 @@ class GameEditSelect(discord.ui.Select):
             )
             return
 
+        try:
+            await interaction.message.delete()
+        except Exception:
+            try:
+                await interaction.delete_original_response()
+            except Exception:
+                pass
+
         await interaction.response.send_modal(
             GameNameModal(
                 role,
@@ -314,11 +361,12 @@ class GameMenuSelect(discord.ui.Select):
         if selected == "add":
             view = discord.ui.View(timeout=60)
             view.add_item(GameRoleSelect())
+            view.add_item(GameBackButton())
 
-            await interaction.response.send_message(
-                "🎭 모집 시 태그할 역할을 선택하세요.",
+            await interaction.response.edit_message(
+                content="🎭 모집 시 태그할 역할을 선택하세요.",
+                embed=None,
                 view=view,
-                ephemeral=True,
             )
             return
 
@@ -331,19 +379,24 @@ class GameMenuSelect(discord.ui.Select):
                     rows = await cursor.fetchall()
 
             if not rows:
-                await interaction.response.send_message(
-                    "❌ 수정할 게임 설정이 없습니다.",
-                    ephemeral=True,
+                view = discord.ui.View(timeout=60)
+                view.add_item(GameBackButton())
+
+                await interaction.response.edit_message(
+                    content="❌ 수정할 게임 설정이 없습니다.",
+                    embed=None,
+                    view=view,
                 )
                 return
 
             view = discord.ui.View(timeout=60)
             view.add_item(GameEditSelect(rows))
+            view.add_item(GameBackButton())
 
-            await interaction.response.send_message(
-                "✏️ 수정할 게임을 선택하세요.",
+            await interaction.response.edit_message(
+                content="✏️ 수정할 게임을 선택하세요.",
+                embed=None,
                 view=view,
-                ephemeral=True,
             )
             return
 
@@ -356,19 +409,24 @@ class GameMenuSelect(discord.ui.Select):
                     rows = await cursor.fetchall()
 
             if not rows:
-                await interaction.response.send_message(
-                    "❌ 삭제할 게임 설정이 없습니다.",
-                    ephemeral=True,
+                view = discord.ui.View(timeout=60)
+                view.add_item(GameBackButton())
+
+                await interaction.response.edit_message(
+                    content="❌ 삭제할 게임 설정이 없습니다.",
+                    embed=None,
+                    view=view,
                 )
                 return
 
             view = discord.ui.View(timeout=60)
             view.add_item(GameDeleteSelect(rows))
+            view.add_item(GameBackButton())
 
-            await interaction.response.send_message(
-                "🗑 삭제할 게임을 선택하세요.",
+            await interaction.response.edit_message(
+                content="🗑 삭제할 게임을 선택하세요.",
+                embed=None,
                 view=view,
-                ephemeral=True,
             )
             return
 
@@ -390,9 +448,13 @@ async def send_game_list(interaction: discord.Interaction):
             rows = await cursor.fetchall()
 
     if not rows:
-        await interaction.response.send_message(
-            "📋 등록된 게임이 없습니다.",
-            ephemeral=True,
+        view = discord.ui.View(timeout=60)
+        view.add_item(GameBackButton())
+
+        await interaction.response.edit_message(
+            content="📋 등록된 게임이 없습니다.",
+            embed=None,
+            view=view,
         )
         return
 
@@ -419,9 +481,13 @@ async def send_game_list(interaction: discord.Interaction):
         color=discord.Color.blurple(),
     )
 
-    await interaction.response.send_message(
+    view = discord.ui.View(timeout=60)
+    view.add_item(GameBackButton())
+
+    await interaction.response.edit_message(
+        content=None,
         embed=embed,
-        ephemeral=True,
+        view=view,
     )
 
 
@@ -451,7 +517,7 @@ class GameSettings(commands.Cog):
         )
 
         await interaction.response.send_message(
-            embed=embed,
+            embed=make_game_settings_embed(),
             view=GameMenuView(),
             ephemeral=True,
         )

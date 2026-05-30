@@ -8,6 +8,30 @@ from utils.checks import is_bot_admin
 DB_PATH = "database/bot.db"
 
 
+def make_admin_settings_embed():
+    return discord.Embed(
+        title="🛠 관리자 설정 메뉴",
+        description="아래 드롭다운에서 원하는 설정을 선택하세요.\n\n서버장은 항상 최고 관리자로 인정됩니다.",
+        color=discord.Color.blurple(),
+    )
+
+
+class AdminBackButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="뒤로가기",
+            style=discord.ButtonStyle.gray,
+            emoji="↩️",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            content=None,
+            embed=make_admin_settings_embed(),
+            view=AdminMenuView(),
+        )
+
+
 class AdminRoleSelect(discord.ui.RoleSelect):
     def __init__(self, mode: str):
         self.mode = mode
@@ -48,7 +72,14 @@ class AdminRoleSelect(discord.ui.RoleSelect):
 
             await db.commit()
 
-        await interaction.response.send_message(message, ephemeral=True)
+        view = discord.ui.View(timeout=60)
+        view.add_item(AdminBackButton())
+
+        await interaction.response.edit_message(
+            content=message,
+            embed=None,
+            view=view,
+        )
 
 
 class AdminMenuSelect(discord.ui.Select):
@@ -97,7 +128,13 @@ class AdminMenuSelect(discord.ui.Select):
                 else "제거할 관리자 역할을 선택하세요."
             )
 
-            await interaction.response.send_message(text, view=view, ephemeral=True)
+            view.add_item(AdminBackButton())
+
+            await interaction.response.edit_message(
+                content=text,
+                embed=None,
+                view=view,
+            )
             return
 
         async with aiosqlite.connect(DB_PATH) as db:
@@ -129,7 +166,14 @@ class AdminMenuSelect(discord.ui.Select):
                 name="관리자 역할", value="\n".join(role_texts), inline=False
             )
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        view = discord.ui.View(timeout=60)
+        view.add_item(AdminBackButton())
+
+        await interaction.response.edit_message(
+            content=None,
+            embed=embed,
+            view=view,
+        )
 
 
 class AdminMenuView(discord.ui.View):
@@ -150,14 +194,10 @@ class AdminSettings(commands.Cog):
             )
             return
 
-        embed = discord.Embed(
-            title="🛠 관리자 설정 메뉴",
-            description="아래 드롭다운에서 원하는 설정을 선택하세요.\n\n서버장은 항상 최고 관리자로 인정됩니다.",
-            color=discord.Color.blurple(),
-        )
-
         await interaction.response.send_message(
-            embed=embed, view=AdminMenuView(), ephemeral=True
+            embed=make_admin_settings_embed(),
+            view=AdminMenuView(),
+            ephemeral=True,
         )
 
 
