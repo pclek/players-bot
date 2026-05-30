@@ -37,15 +37,6 @@ class RecruitPostView(discord.ui.View):
     ):
         super().__init__(timeout=None)
 
-        if voice_channel_id and guild_id:
-            self.add_item(
-                discord.ui.Button(
-                    label="음성채널 입장",
-                    style=discord.ButtonStyle.link,
-                    url=f"https://discord.com/channels/{guild_id}/{voice_channel_id}",
-                )
-            )
-
         if is_full:
             for item in self.children:
                 if getattr(item, "custom_id", None) == "recruit_join":
@@ -92,9 +83,34 @@ class RecruitPostView(discord.ui.View):
 
         voice_channel = interaction.guild.get_channel(post[2])
 
+        embed = discord.Embed(
+            title="✅ 모집에 참여했습니다.",
+            description="아래 버튼을 눌러 음성채널에 입장하세요.",
+            color=discord.Color.green(),
+        )
+
+        view = discord.ui.View(timeout=300)
+
+        if voice_channel:
+            view.add_item(
+                discord.ui.Button(
+                    label="음성채널 링크",
+                    style=discord.ButtonStyle.link,
+                    url=f"https://discord.com/channels/{interaction.guild.id}/{voice_channel.id}",
+                )
+            )
+
+            embed.add_field(
+                name="🎧 음성채널",
+                value=voice_channel.mention,
+                inline=False,
+            )
+        else:
+            embed.description = "음성채널을 찾을 수 없습니다."
+
         await interaction.response.send_message(
-            f"✅ 모집에 참여했습니다.\n"
-            f"음성채널: {voice_channel.mention if voice_channel else '알 수 없음'}",
+            embed=embed,
+            view=view if voice_channel else None,
             ephemeral=True,
         )
 
