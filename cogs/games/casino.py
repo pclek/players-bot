@@ -14,20 +14,17 @@ DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
 
 MIN_BET = 50
-MAX_BET = 1000
+MAX_BET = 500
 CASINO_COOLDOWN_SECONDS = 60 * 60
 CASINO_DAILY_LIMIT = 5
 
-DEALER_BOOST_CHANCE = 0.35
-DEALER_BOOST_TRIES = 2
-
-POKER_MAX_TOTAL_BET = 3000
-POKER_WIN_MULTIPLIER = 2.2
+POKER_MAX_TOTAL_BET = 1500
+POKER_WIN_MULTIPLIER = 2.0
 POKER_FOLD_REFUNDS = {
-    0: 0.70,
-    1: 0.50,
-    2: 0.30,
-    3: 0.10,
+    0: 0.50,
+    1: 0.35,
+    2: 0.20,
+    3: 0.05,
 }
 
 
@@ -1189,29 +1186,29 @@ class SlotBetButton(discord.ui.Button):
 
         roll = random.randint(1, 1000)
 
-        if roll <= 650:
+        if roll <= 700:
             symbols = random.sample(SLOT_SYMBOLS, 3)
             multiplier = 0
             result = "꽝"
-        elif roll <= 850:
+        elif roll <= 880:
             symbol = random.choice(SLOT_SYMBOLS)
             other = random.choice([s for s in SLOT_SYMBOLS if s != symbol])
             symbols = [symbol, symbol, other]
             random.shuffle(symbols)
-            multiplier = 1.2
+            multiplier = 1.1
             result = "2개 일치"
-        elif roll <= 950:
+        elif roll <= 965:
             symbol = random.choice(SLOT_SYMBOLS)
             symbols = [symbol, symbol, symbol]
-            multiplier = 2
+            multiplier = 1.8
             result = "3개 일치"
-        elif roll <= 990:
+        elif roll <= 995:
             symbols = ["💎", "💎", "💎"]
-            multiplier = 5
+            multiplier = 4
             result = "다이아 잭팟"
         else:
             symbols = ["7️⃣", "7️⃣", "7️⃣"]
-            multiplier = 10
+            multiplier = 8
             result = "777 잭팟"
 
         payout = int(self.bet * multiplier)
@@ -1308,7 +1305,7 @@ class SlotBetView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=120)
 
-        for bet in [50, 100, 300, 500, 1000]:
+        for bet in [50, 100, 200, 300, 500]:
             self.add_item(SlotBetButton(bet))
 
         self.add_item(BackToCasinoButton())
