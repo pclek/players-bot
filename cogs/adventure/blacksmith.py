@@ -11,6 +11,8 @@ from cogs.adventure.adventure_utils import (
     get_adventure_item_count,
     get_repairable_equipment,
     repair_equipment_instance,
+    get_adventure_inventory,
+    EQUIPMENT_NAMES,
 )
 
 DB_PATH = "database/bot.db"
@@ -231,11 +233,122 @@ async def get_missing_materials(user_id: int, materials: dict[str, int]):
     return missing
 
 
+BLACKSMITH_MATERIALS = [
+    "석탄",
+    "구리광석",
+    "철광석",
+    "은광석",
+    "금광석",
+    "다이아원석",
+    "비브라늄원석",
+    "구리주괴",
+    "철주괴",
+    "은주괴",
+    "금주괴",
+    "다이아결정",
+    "비브라늄주괴",
+]
+
+
+async def can_make_materials(user_id: int, materials: dict[str, int]) -> bool:
+    for item_name, needed in materials.items():
+        count = await get_adventure_item_count(user_id, item_name)
+
+        if count < needed:
+            return False
+
+    return True
+
+
+async def get_available_smelt_keys(user_id: int):
+    available = []
+
+    for key, recipe in SMELT_RECIPES.items():
+        if await can_make_materials(user_id, recipe["materials"]):
+            available.append(key)
+
+    return available
+
+
+async def get_available_equipment_recipe_keys(user_id: int):
+    available = []
+
+    for key, recipe in EQUIPMENT_RECIPES.items():
+        if await can_make_materials(user_id, recipe["materials"]):
+            available.append(key)
+
+    return available
+
+
+async def make_blacksmith_embed(user_id: int):
+    rows = await get_adventure_inventory(user_id)
+    inventory = {
+        item_name: quantity
+        for item_name, quantity, category in rows
+    }
+
+    material_lines = []
+
+    for item_name in BLACKSMITH_MATERIALS:
+        count = inventory.get(item_name, 0)
+
+        if count > 0:
+            material_lines.append(f"`{item_name}` x{count}")
+
+    equipment_lines = []
+
+    for item_name, quantity, category in rows:
+        if item_name in EQUIPMENT_NAMES and item_name != "녹슨검":
+            equipment_lines.append(f"`{item_name}` x{quantity}")
+
+    smelt_keys = await get_available_smelt_keys(user_id)
+    craft_keys = await get_available_equipment_recipe_keys(user_id)
+    repair_rows = await get_repairable_equipment(user_id)
+
+    smelt_lines = [f"🔥 {SMELT_RECIPES[key]['name']}" for key in smelt_keys]
+    craft_lines = [f"⚒️ {EQUIPMENT_RECIPES[key]['name']}" for key in craft_keys]
+    repair_lines = [
+        f"🛠 {item_name} #{equipment_id} `{durability}/{max_durability}`"
+        for equipment_id, item_name, durability, max_durability, break_count in repair_rows[:10]
+    ]
+
+    embed = discord.Embed(
+        title="⚒️ 대장간",
+        description="보유 재료/장비 기준으로 가능한 작업만 선택할 수 있습니다.",
+        color=discord.Color.dark_orange(),
+    )
+
+    embed.add_field(
+        name="📦 보유 대장간 재료",
+        value="\n".join(material_lines[:20]) if material_lines else "보유한 대장간 재료가 없습니다.",
+        inline=False,
+    )
+
+    embed.add_field(
+        name="🧰 보유 장비",
+        value="\n".join(equipment_lines[:15]) if equipment_lines else "보유한 장비가 없습니다.",
+        inline=False,
+    )
+
+    embed.add_field(
+        name="✅ 가능한 작업",
+        value=(
+            f"**제련**\n{chr(10).join(smelt_lines) if smelt_lines else '가능한 제련 없음'}\n\n"
+            f"**장비 제작**\n{chr(10).join(craft_lines) if craft_lines else '가능한 장비 제작 없음'}\n\n"
+            f"**수리**\n{chr(10).join(repair_lines) if repair_lines else '수리할 장비 없음'}"
+        ),
+        inline=False,
+    )
+
+    return embed
+
+
 class SmeltSelect(discord.ui.Select):
-    def __init__(self):
+    def __init__(self, recipe_keys):
         options = []
 
-        for key, recipe in SMELT_RECIPES.items():
+        for key in recipe_keys:
+            recipe = SMELT_RECIPES[key]
             options.append(
                 discord.SelectOption(
                     label=recipe["name"],
@@ -244,16 +357,33 @@ class SmeltSelect(discord.ui.Select):
                 )
             )
 
+        if not options:
+            options.append(
+                discord.SelectOption(
+                    label="가능한 제련 없음",
+                    description="현재 보유 재료로 제련할 수 있는 항목이 없습니다.",
+                    value="none",
+                )
+            )
+
         super().__init__(
             placeholder="제련할 재료를 선택하세요.",
             min_values=1,
             max_values=1,
-            options=options,
+            options=options[:25],
         )
 
     async def callback(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         recipe_key = self.values[0]
+
+        if recipe_key == "none":
+            await interaction.response.send_message(
+                "❌ 현재 가능한 제련이 없습니다.",
+                ephemeral=True,
+            )
+            return
+
         recipe = SMELT_RECIPES[recipe_key]
 
         await ensure_adventure_profile(user_id)
@@ -292,15 +422,25 @@ class SmeltSelect(discord.ui.Select):
 
 
 class EquipmentCraftSelect(discord.ui.Select):
-    def __init__(self):
+    def __init__(self, recipe_keys):
         options = []
 
-        for key, recipe in EQUIPMENT_RECIPES.items():
+        for key in recipe_keys:
+            recipe = EQUIPMENT_RECIPES[key]
             options.append(
                 discord.SelectOption(
                     label=recipe["name"],
                     description=f"{material_text(recipe['materials'])} / {recipe['cost']}P"[:100],
                     value=key,
+                )
+            )
+
+        if not options:
+            options.append(
+                discord.SelectOption(
+                    label="제작 가능한 장비 없음",
+                    description="현재 보유 재료로 제작할 수 있는 장비가 없습니다.",
+                    value="none",
                 )
             )
 
@@ -314,6 +454,14 @@ class EquipmentCraftSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         recipe_key = self.values[0]
+
+        if recipe_key == "none":
+            await interaction.response.send_message(
+                "❌ 현재 제작 가능한 장비가 없습니다.",
+                ephemeral=True,
+            )
+            return
+
         recipe = EQUIPMENT_RECIPES[recipe_key]
 
         await ensure_adventure_profile(user_id)
@@ -492,17 +640,18 @@ class RepairSelect(discord.ui.Select):
 
 
 class BlacksmithMenuSelect(discord.ui.Select):
-    def __init__(self):
+    def __init__(self, user_id: int):
+        self.user_id = user_id
         options = [
             discord.SelectOption(
                 label="제련",
-                description="광석과 석탄과 포인트로 주괴를 만듭니다.",
+                description="보유 광석과 석탄으로 주괴를 만듭니다.",
                 emoji="🔥",
                 value="smelt",
             ),
             discord.SelectOption(
                 label="장비 제작",
-                description="재료와 포인트로 무기/방어구를 제작합니다.",
+                description="보유 재료와 포인트로 무기/방어구를 제작합니다.",
                 emoji="⚒️",
                 value="craft_equipment",
             ),
@@ -522,46 +671,70 @@ class BlacksmithMenuSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "❌ 본인의 대장간 메뉴만 조작할 수 있습니다.",
+                ephemeral=True,
+            )
+            return
+
         selected = self.values[0]
 
         if selected == "smelt":
+            recipe_keys = await get_available_smelt_keys(interaction.user.id)
+
             view = discord.ui.View(timeout=60)
-            view.add_item(SmeltSelect())
+            view.add_item(SmeltSelect(recipe_keys))
 
             lines = []
 
-            for recipe in SMELT_RECIPES.values():
+            for key in recipe_keys:
+                recipe = SMELT_RECIPES[key]
                 lines.append(
                     f"`{recipe['name']}` : {material_text(recipe['materials'])} + {recipe['cost']}P"
                 )
 
             embed = discord.Embed(
                 title="🔥 제련",
-                description="제련할 재료를 선택하세요.\n\n" + "\n".join(lines),
+                description=(
+                    "현재 보유 재료로 가능한 제련만 표시됩니다.\n\n"
+                    + ("\n".join(lines) if lines else "현재 가능한 제련이 없습니다.")
+                ),
                 color=discord.Color.orange(),
             )
 
-            await interaction.response.send_message(
+            await interaction.response.edit_message(
                 embed=embed,
                 view=view,
-                ephemeral=True,
             )
             return
 
         if selected == "craft_equipment":
+            recipe_keys = await get_available_equipment_recipe_keys(interaction.user.id)
+
             view = discord.ui.View(timeout=60)
-            view.add_item(EquipmentCraftSelect())
+            view.add_item(EquipmentCraftSelect(recipe_keys))
+
+            lines = []
+
+            for key in recipe_keys:
+                recipe = EQUIPMENT_RECIPES[key]
+                lines.append(
+                    f"`{recipe['name']}` : {material_text(recipe['materials'])} + {recipe['cost']}P"
+                )
 
             embed = discord.Embed(
                 title="⚒️ 장비 제작",
-                description="제작할 무기 또는 방어구를 선택하세요.\n제작에는 재료와 포인트가 함께 필요합니다.",
+                description=(
+                    "현재 보유 재료로 제작 가능한 장비만 표시됩니다.\n\n"
+                    + ("\n".join(lines) if lines else "현재 제작 가능한 장비가 없습니다.")
+                ),
                 color=discord.Color.green(),
             )
 
-            await interaction.response.send_message(
+            await interaction.response.edit_message(
                 embed=embed,
                 view=view,
-                ephemeral=True,
             )
             return
 
@@ -569,9 +742,14 @@ class BlacksmithMenuSelect(discord.ui.Select):
             rows = await get_repairable_equipment(interaction.user.id)
 
             if not rows:
-                await interaction.response.send_message(
-                    "✅ 현재 수리할 장비가 없습니다.",
-                    ephemeral=True,
+                await interaction.response.edit_message(
+                    content=None,
+                    embed=discord.Embed(
+                        title="🛠 장비 수리",
+                        description="✅ 현재 수리할 장비가 없습니다.",
+                        color=discord.Color.orange(),
+                    ),
+                    view=None,
                 )
                 return
 
@@ -588,18 +766,17 @@ class BlacksmithMenuSelect(discord.ui.Select):
                 color=discord.Color.orange(),
             )
 
-            await interaction.response.send_message(
+            await interaction.response.edit_message(
                 embed=embed,
                 view=view,
-                ephemeral=True,
             )
             return
 
 
 class BlacksmithMenuView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, user_id: int):
         super().__init__(timeout=60)
-        self.add_item(BlacksmithMenuSelect())
+        self.add_item(BlacksmithMenuSelect(user_id))
 
 
 class Blacksmith(commands.Cog):

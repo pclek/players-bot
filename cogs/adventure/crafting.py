@@ -6,6 +6,7 @@ from cogs.adventure.adventure_utils import (
     add_adventure_item,
     remove_adventure_item,
     get_adventure_item_count,
+    get_adventure_inventory,
 )
 
 RECIPES = {
@@ -30,20 +31,112 @@ RECIPES = {
 }
 
 
+COOKING_MATERIALS = [
+    "고등어",
+    "연어",
+    "참치",
+    "황금잉어",
+    "전설의심해어",
+    "감자",
+    "밀",
+    "허브",
+    "황금감자",
+]
+
+
+def material_text(materials: dict[str, int]) -> str:
+    return ", ".join([f"{name} x{count}" for name, count in materials.items()])
+
+
+async def can_make_recipe(user_id: int, materials: dict[str, int]) -> bool:
+    for item_name, needed in materials.items():
+        count = await get_adventure_item_count(user_id, item_name)
+
+        if count < needed:
+            return False
+
+    return True
+
+
+async def get_craftable_recipe_keys(user_id: int):
+    craftable = []
+
+    for key, (result_name, materials, heal_text) in RECIPES.items():
+        if await can_make_recipe(user_id, materials):
+            craftable.append(key)
+
+    return craftable
+
+
+async def make_cooking_embed(user_id: int):
+    rows = await get_adventure_inventory(user_id)
+    inventory = {
+        item_name: quantity
+        for item_name, quantity, category in rows
+    }
+
+    material_lines = []
+
+    for item_name in COOKING_MATERIALS:
+        count = inventory.get(item_name, 0)
+
+        if count > 0:
+            material_lines.append(f"`{item_name}` x{count}")
+
+    craftable_keys = await get_craftable_recipe_keys(user_id)
+    craftable_lines = []
+
+    for key in craftable_keys:
+        result_name, materials, heal_text = RECIPES[key]
+        craftable_lines.append(
+            f"🍽 **{result_name}**\n"
+            f"└ {material_text(materials)} / {heal_text}"
+        )
+
+    embed = discord.Embed(
+        title="🍳 요리",
+        description="보유 재료로 만들 수 있는 요리만 선택할 수 있습니다.",
+        color=discord.Color.orange(),
+    )
+
+    embed.add_field(
+        name="📦 보유 요리 재료",
+        value="\n".join(material_lines[:20]) if material_lines else "보유한 요리 재료가 없습니다.",
+        inline=False,
+    )
+
+    embed.add_field(
+        name="✅ 제작 가능한 요리",
+        value="\n\n".join(craftable_lines[:10]) if craftable_lines else "현재 만들 수 있는 요리가 없습니다.",
+        inline=False,
+    )
+
+    return embed, craftable_keys
+
+
 class CraftSelect(discord.ui.Select):
-    def __init__(self):
+    def __init__(self, recipe_keys):
+        self.recipe_keys = recipe_keys
         options = []
 
-        for key, (result_name, materials, heal_text) in RECIPES.items():
-            material_text = ", ".join(
-                [f"{name} x{count}" for name, count in materials.items()]
-            )
+        for key in recipe_keys:
+            result_name, materials, heal_text = RECIPES[key]
+            material_info = material_text(materials)
 
             options.append(
                 discord.SelectOption(
                     label=result_name[:100],
-                    description=f"{material_text} / {heal_text}"[:100],
+                    description=f"{material_info} / {heal_text}"[:100],
                     value=key,
+                )
+            )
+
+        if not options:
+            options.append(
+                discord.SelectOption(
+                    label="제작 가능한 요리 없음",
+                    description="현재 보유 재료로 만들 수 있는 요리가 없습니다.",
+                    value="none",
                 )
             )
 
@@ -57,6 +150,13 @@ class CraftSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         recipe_key = self.values[0]
+
+        if recipe_key == "none":
+            await interaction.response.send_message(
+                "❌ 현재 제작 가능한 요리가 없습니다.",
+                ephemeral=True,
+            )
+            return
 
         await ensure_adventure_profile(user_id)
 
@@ -90,12 +190,10 @@ class CraftSelect(discord.ui.Select):
 
         await add_adventure_item(user_id, result_name, 1)
 
-        used_text = ", ".join(
-            [f"{item_name} x{needed}" for item_name, needed in materials.items()]
-        )
+        used_text = material_text(materials)
 
         embed = discord.Embed(
-            title="🍳 요리 제작 완료",
+            title="🍳 요리 완료",
             description=(
                 f"제작 결과 : `{result_name} x1`\n"
                 f"사용 재료 : `{used_text}`\n"
@@ -104,16 +202,16 @@ class CraftSelect(discord.ui.Select):
             color=discord.Color.green(),
         )
 
-        await interaction.response.send_message(
+        await interaction.response.edit_message(
             embed=embed,
-            ephemeral=True,
+            view=None,
         )
 
 
 class CraftView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, recipe_keys):
         super().__init__(timeout=60)
-        self.add_item(CraftSelect())
+        self.add_item(CraftSelect(recipe_keys))
 
 
 class Crafting(commands.Cog):

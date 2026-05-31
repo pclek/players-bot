@@ -4,8 +4,8 @@ from discord.ext import commands, tasks
 import aiosqlite
 import random
 from datetime import datetime, timedelta
-from cogs.adventure.crafting import CraftView
-from cogs.adventure.blacksmith import BlacksmithMenuView
+from cogs.adventure.crafting import CraftView, make_cooking_embed
+from cogs.adventure.blacksmith import BlacksmithMenuView, make_blacksmith_embed
 from cogs.adventure.equipment import EquipView
 from cogs.profile.profile import get_attendance_day_key
 
@@ -228,8 +228,8 @@ class AdventureSelect(discord.ui.Select):
                 value="hunting",
             ),
             discord.SelectOption(
-                label="제작",
-                description="모험 재료로 요리를 제작합니다.",
+                label="요리",
+                description="보유 재료로 요리를 제작합니다.",
                 emoji="🍳",
                 value="crafting",
             ),
@@ -303,53 +303,20 @@ class AdventureSelect(discord.ui.Select):
             return
         
         if job_type == "crafting":
-            embed = discord.Embed(
-                title="🍳 제작",
-                description=(
-                    "요리를 제작할 수 있습니다.\n\n"
-                    "`빵` : 밀 x3\n"
-                    "`허브감자` : 감자 x2 + 허브 x1\n"
-                    "`생선스테이크` : 생선 x1 + 허브 x1\n"
-                    "`피쉬앤칩스` : 생선 x1 + 감자 x1 + 밀 x1\n"
-                    "`황금정식` : 황금감자 x1 + 황금잉어 x1"
-                ),
-                color=discord.Color.orange(),
-            )
+            embed, recipe_keys = await make_cooking_embed(user_id)
 
             await interaction.edit_original_response(
                 embed=embed,
-                view=CraftView(),
+                view=CraftView(recipe_keys),
             )
             return
 
         if job_type == "blacksmith":
-            embed = discord.Embed(
-                title="⚒️ 대장간",
-                description="원하는 작업을 선택하세요.",
-                color=discord.Color.dark_orange(),
-            )
-
-            embed.add_field(
-                name="🔥 제련",
-                value="광석과 석탄으로 주괴를 만듭니다.",
-                inline=False,
-            )
-
-            embed.add_field(
-                name="⚒️ 장비 제작",
-                value="무기와 방어구를 제작합니다.",
-                inline=False,
-            )
-
-            embed.add_field(
-                name="🛠️ 수리",
-                value="손상된 방어구를 수리합니다.",
-                inline=False,
-            )
+            embed = await make_blacksmith_embed(user_id)
 
             await interaction.edit_original_response(
                 embed=embed,
-                view=BlacksmithMenuView(),
+                view=BlacksmithMenuView(user_id),
             )
             return
 
@@ -531,6 +498,12 @@ def get_job_name(job_type: str) -> str:
         return "농장"
     if job_type == "hunting":
         return "사냥"
+    if job_type == "crafting":
+        return "요리"
+    if job_type == "blacksmith":
+        return "대장간"
+    if job_type == "equipment":
+        return "장착"
     return "알 수 없음"
 
 def roll_adventure_result(job_type: str, current_hp: int):
@@ -796,8 +769,8 @@ class Adventure(commands.Cog):
         )
 
         embed.add_field(
-            name="🍳 제작",
-            value="음식을 제작합니다.",
+            name="🍳 요리",
+            value="요리를 제작합니다.",
             inline=False,
         )
 

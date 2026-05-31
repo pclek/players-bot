@@ -405,19 +405,16 @@ class RecruitGameSelect(discord.ui.Select):
 
             await db.commit()
 
-        try:
-            await interaction.message.delete()
-        except Exception:
-            pass
-
-        await interaction.response.send_message(
-            f"✅ {recruit_channel.mention} 채널에 모집글을 올렸습니다."
-        )   
+        await interaction.response.edit_message(
+            content=f"✅ {recruit_channel.mention} 채널에 모집글을 올렸습니다.",
+            embed=None,
+            view=None,
+        )
 
 
 class RecruitGameView(discord.ui.View):
     def __init__(self, games):
-        super().__init__(timeout=60)
+        super().__init__(timeout=None)
         self.add_item(RecruitGameSelect(games))
 
 
