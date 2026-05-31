@@ -21,7 +21,7 @@ CASINO_DAILY_LIMIT = 5
 DEALER_BOOST_CHANCE = 0.35
 DEALER_BOOST_TRIES = 2
 
-POKER_MAX_TOTAL_BET = 1000
+POKER_MAX_TOTAL_BET = 3000
 POKER_WIN_MULTIPLIER = 2.2
 POKER_FOLD_REFUNDS = {
     0: 0.70,
@@ -966,17 +966,23 @@ class PokerGameView(discord.ui.View):
         if self.game.finished:
             return
 
-        must_bet = self.game.needs_bet_before_next_card()
+        # 진행 순서
+        # 프리플랍: 체크 / 폴드
+        # 플랍/턴: 체크 / 기본배팅금만큼 추가 배팅 / 폴드
+        # 리버: 쇼다운 / 폴드
+        # 추가 배팅 버튼을 누르면 기본배팅금만큼 배팅한 뒤 바로 다음 카드가 공개됩니다.
+        if self.game.stage == 0:
+            self.add_item(PokerActionButton("✅ 체크", "check"))
 
-        if self.game.stage < 3:
-            if not must_bet:
-                self.add_item(PokerActionButton("✅ 체크", "check"))
-        else:
+        elif self.game.stage in (1, 2):
+            self.add_item(PokerActionButton("✅ 체크", "check"))
+
+            amount = self.game.base_bet
+            if self.game.total_bet + amount <= POKER_MAX_TOTAL_BET:
+                self.add_item(PokerBetAndRevealButton(amount))
+
+        elif self.game.stage == 3:
             self.add_item(PokerActionButton("🃏 쇼다운", "showdown"))
-
-        if self.game.total_bet < POKER_MAX_TOTAL_BET and self.game.stage < 4:
-            self.add_item(PokerAddBetButton(100))
-            self.add_item(PokerAddBetButton(300))
 
         if self.game.stage <= 3:
             self.add_item(PokerActionButton("🏳️ 폴드", "fold", discord.ButtonStyle.red))
@@ -990,6 +996,48 @@ class PokerGameView(discord.ui.View):
             return False
 
         return True
+
+
+class PokerBetAndRevealButton(discord.ui.Button):
+    def __init__(self, amount: int):
+        super().__init__(
+            label=f"💰 +{amount}P 배팅",
+            style=discord.ButtonStyle.blurple,
+        )
+        self.amount = amount
+
+    async def callback(self, interaction: discord.Interaction):
+        view: PokerGameView = self.view
+        game = view.game
+
+        success, message = await game.add_bet(self.amount)
+
+        if not success:
+            await interaction.response.send_message(
+                message,
+                ephemeral=True,
+            )
+            return
+
+        progress_text = game.reveal_next()
+
+        stage_key = {
+            1: "flop",
+            2: "turn",
+            3: "river",
+        }.get(game.stage, "river")
+
+        result_text = message + "\n" + progress_text + "\n\n" + game.random_reactions(stage_key)
+
+        view.refresh_buttons()
+
+        if view.table_message:
+            await view.table_message.edit(embed=game.make_table_embed())
+
+        await interaction.response.edit_message(
+            embed=game.make_reaction_embed(result_text),
+            view=view,
+        )
 
 
 class PokerAddBetButton(discord.ui.Button):
