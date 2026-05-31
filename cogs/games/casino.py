@@ -1297,7 +1297,7 @@ class SlotBetButton(discord.ui.Button):
 
         await slot_message.edit(
             embed=embed,
-            view=SlotBetView(),
+            view=None,
         )
 
 
