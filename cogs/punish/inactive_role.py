@@ -66,12 +66,14 @@ class InactiveRole(commands.Cog):
 
         base_role_id = await get_setting("inactive_base_role_id")
         inactive_role_id = await get_setting("inactive_role_id")
+        extra_role_id = await get_setting("reauth_extra_role_id")
 
         if not base_role_id or not inactive_role_id:
             return
 
         base_role = message.guild.get_role(int(base_role_id))
         inactive_role = message.guild.get_role(int(inactive_role_id))
+        extra_role = message.guild.get_role(int(extra_role_id)) if extra_role_id else None
 
         if not base_role or not inactive_role:
             return
@@ -87,19 +89,32 @@ class InactiveRole(commands.Cog):
                 reason="재인증 채널 활동으로 미활동 역할 제거",
             )
 
+            added_roles = []
+
             if base_role not in member.roles:
                 await member.add_roles(
                     base_role,
                     reason="재인증 채널 활동으로 기준 역할 복구",
                 )
+                added_roles.append(base_role.mention)
+
+            if extra_role and extra_role not in member.roles:
+                await member.add_roles(
+                    extra_role,
+                    reason="재인증 채널 활동으로 추가 역할 지급",
+                )
+                added_roles.append(extra_role.mention)
 
             await update_user_activity(member.id)
+
+            added_text = ", ".join(added_roles) if added_roles else "추가 지급 역할 없음"
 
             embed = discord.Embed(
                 title="✅ 재인증 완료",
                 description=(
                     f"{member.mention} 님의 재인증이 완료되었습니다.\n"
-                    f"{inactive_role.mention} 역할을 제거하고 {base_role.mention} 역할을 지급했습니다."
+                    f"{inactive_role.mention} 역할을 제거했습니다.\n"
+                    f"지급 역할 : {added_text}"
                 ),
                 color=discord.Color.green(),
             )

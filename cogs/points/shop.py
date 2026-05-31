@@ -630,6 +630,175 @@ FOOD_HEALS = {
 }
 
 
+
+class GeneralInventorySelect(discord.ui.Select):
+    def __init__(self, rows):
+        self.rows = rows
+
+        options = []
+
+        for inventory_id, item_name, status, purchased_at in rows[:25]:
+            if status == "pending":
+                status_text = "지급 대기"
+            elif status == "completed":
+                status_text = "지급 완료"
+            elif status == "used":
+                status_text = "사용 완료"
+            elif status == "discarded":
+                status_text = "버림"
+            else:
+                status_text = "취소됨"
+
+            options.append(
+                discord.SelectOption(
+                    label=item_name[:100],
+                    value=str(inventory_id),
+                    description=f"{status_text} / 버리기 가능"[:100],
+                )
+            )
+
+        if not options:
+            options.append(
+                discord.SelectOption(
+                    label="버릴 일반상점 상품 없음",
+                    value="none",
+                    description="버릴 수 있는 일반상점 상품이 없습니다.",
+                )
+            )
+
+        super().__init__(
+            placeholder="버릴 일반상점 상품을 선택하세요.",
+            min_values=1,
+            max_values=1,
+            options=options[:25],
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.values[0] == "none":
+            await interaction.response.send_message(
+                "❌ 버릴 수 있는 일반상점 상품이 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        inventory_id = int(self.values[0])
+        selected = None
+
+        for row in self.rows:
+            if row[0] == inventory_id:
+                selected = row
+                break
+
+        if not selected:
+            await interaction.response.send_message(
+                "❌ 상품을 찾을 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        inventory_id, item_name, status, purchased_at = selected
+
+        view = discord.ui.View(timeout=60)
+        view.add_item(GeneralInventoryDiscardConfirmButton(inventory_id, item_name))
+        view.add_item(GeneralInventoryDiscardCancelButton())
+
+        embed = discord.Embed(
+            title="🗑 일반상점 상품 버리기",
+            description=(
+                f"`{item_name}` 상품을 정말 버릴까요?\n\n"
+                "버린 상품은 인벤토리에서 숨겨지며, 기록 확인을 위해 DB에는 `discarded` 상태로 남습니다."
+            ),
+            color=discord.Color.red(),
+        )
+
+        await interaction.response.send_message(
+            embed=embed,
+            view=view,
+            ephemeral=True,
+        )
+
+
+class GeneralInventoryDiscardConfirmButton(discord.ui.Button):
+    def __init__(self, inventory_id: int, item_name: str):
+        super().__init__(
+            label="버리기 확인",
+            style=discord.ButtonStyle.red,
+        )
+        self.inventory_id = inventory_id
+        self.item_name = item_name
+
+    async def callback(self, interaction: discord.Interaction):
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+            SELECT status
+            FROM inventory
+            WHERE id = ?
+            AND user_id = ?
+            """, (
+                self.inventory_id,
+                interaction.user.id,
+            )) as cursor:
+                row = await cursor.fetchone()
+
+            if not row:
+                await interaction.response.send_message(
+                    "❌ 상품을 찾을 수 없습니다.",
+                    ephemeral=True,
+                )
+                return
+
+            if row[0] in ("used", "canceled", "discarded"):
+                await interaction.response.send_message(
+                    "❌ 이미 사용/취소/버림 처리된 상품입니다.",
+                    ephemeral=True,
+                )
+                return
+
+            await db.execute("""
+            UPDATE inventory
+            SET status = 'discarded'
+            WHERE id = ?
+            AND user_id = ?
+            """, (
+                self.inventory_id,
+                interaction.user.id,
+            ))
+
+            await db.commit()
+
+        await interaction.response.edit_message(
+            content=f"🗑 `{self.item_name}` 상품을 버렸습니다.",
+            embed=None,
+            view=None,
+        )
+
+
+class GeneralInventoryDiscardCancelButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="취소",
+            style=discord.ButtonStyle.gray,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            content="✅ 취소했습니다.",
+            embed=None,
+            view=None,
+        )
+
+
+class CombinedInventoryManageView(discord.ui.View):
+    def __init__(self, general_rows, adventure_rows, profile):
+        super().__init__(timeout=60)
+
+        if general_rows:
+            self.add_item(GeneralInventorySelect(general_rows))
+
+        if adventure_rows:
+            self.add_item(AdventureInventorySelect(adventure_rows, profile))
+
+
 class AdventureInventorySelect(discord.ui.Select):
     def __init__(self, rows, profile):
         self.rows = rows
@@ -986,8 +1155,7 @@ class AdventureItemGiftUserSelect(discord.ui.UserSelect):
         )
 
         await interaction.response.send_message(
-            f"🎁 {target.mention} 님에게 `{self.item_name}` 1개를 선물했습니다.",
-            ephemeral=True,
+            f"🎁 {interaction.user.mention} 님이 {target.mention} 님에게 `{self.item_name}` 1개를 선물했습니다.",
         )
 
 
@@ -1159,9 +1327,10 @@ class Shop(commands.Cog):
 
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("""
-            SELECT item_name, status, purchased_at
+            SELECT id, item_name, status, purchased_at
             FROM inventory
             WHERE user_id = ?
+            AND status NOT IN ('used', 'canceled', 'discarded')
             ORDER BY id DESC
             """, (interaction.user.id,)) as cursor:
                 rows = await cursor.fetchall()
@@ -1169,7 +1338,7 @@ class Shop(commands.Cog):
 
         lines = []
 
-        for item_name, status, purchased_at in rows[:20]:
+        for inventory_id, item_name, status, purchased_at in rows[:20]:
             if status == "pending":
                 status_text = "⏳ 지급 대기"
             elif status == "completed":
@@ -1222,9 +1391,10 @@ class Shop(commands.Cog):
 
         manage_view = None
 
-        if adventure_rows:
+        if rows or adventure_rows:
             adventure_profile = await get_adventure_profile(interaction.user.id)
-            manage_view = AdventureInventoryManageView(
+            manage_view = CombinedInventoryManageView(
+                rows,
                 adventure_rows,
                 adventure_profile,
             )

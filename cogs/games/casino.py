@@ -421,6 +421,18 @@ class CasinoMainSelect(discord.ui.Select):
         selected = self.values[0]
 
         if selected == "poker":
+            attendance_error = await check_casino_attendance(interaction.user.id)
+
+            if attendance_error:
+                await interaction.response.send_message(attendance_error, ephemeral=True)
+                return
+
+            limit_error = await check_casino_limit(interaction.user.id, "poker")
+
+            if limit_error:
+                await interaction.response.send_message(limit_error, ephemeral=True)
+                return
+
             embed = discord.Embed(
                 title="🃏 카지노 포커",
                 description=(
@@ -442,6 +454,18 @@ class CasinoMainSelect(discord.ui.Select):
             return
 
         if selected == "slot":
+            attendance_error = await check_casino_attendance(interaction.user.id)
+
+            if attendance_error:
+                await interaction.response.send_message(attendance_error, ephemeral=True)
+                return
+
+            limit_error = await check_casino_limit(interaction.user.id, "slot")
+
+            if limit_error:
+                await interaction.response.send_message(limit_error, ephemeral=True)
+                return
+
             embed = discord.Embed(
                 title="🎰 슬롯머신",
                 description=(
@@ -542,8 +566,18 @@ class PokerBetButton(discord.ui.Button):
 
         game = PokerGame(interaction.user.id, self.bet)
         embed = game.make_embed()
+        embed.description = (
+            f"{interaction.user.mention} 님의 포커 게임이 시작되었습니다.\n\n"
+            + embed.description
+        )
 
         await interaction.response.edit_message(
+            content="✅ 포커 게임을 공개 채널에 시작했습니다.",
+            embed=None,
+            view=None,
+        )
+
+        await interaction.channel.send(
             embed=embed,
             view=PokerGameView(game),
         )
@@ -943,6 +977,7 @@ class SlotBetButton(discord.ui.Button):
         spin_embed = discord.Embed(
             title="🎰 슬롯머신 작동중...",
             description=(
+                f"{interaction.user.mention} 님이 슬롯머신을 돌렸습니다.\n\n"
                 "```text\n"
                 "[ ❔ | ❔ | ❔ ]\n"
                 "```\n"
@@ -952,9 +987,12 @@ class SlotBetButton(discord.ui.Button):
         )
 
         await interaction.response.edit_message(
-            embed=spin_embed,
+            content="✅ 슬롯머신을 공개 채널에 시작했습니다.",
+            embed=None,
             view=None,
         )
+
+        slot_message = await interaction.channel.send(embed=spin_embed)
 
         reveal_states = [
             f"[ {symbols[0]} | ❔ | ❔ ]",
@@ -968,6 +1006,7 @@ class SlotBetButton(discord.ui.Button):
             reveal_embed = discord.Embed(
                 title="🎰 슬롯머신 작동중...",
                 description=(
+                    f"{interaction.user.mention} 님의 슬롯머신\n\n"
                     "```text\n"
                     f"{state}\n"
                     "```\n"
@@ -976,7 +1015,7 @@ class SlotBetButton(discord.ui.Button):
                 color=discord.Color.gold(),
             )
 
-            await interaction.edit_original_response(embed=reveal_embed, view=None)
+            await slot_message.edit(embed=reveal_embed)
 
         await asyncio.sleep(0.5)
 
@@ -988,6 +1027,7 @@ class SlotBetButton(discord.ui.Button):
         embed = discord.Embed(
             title=title,
             description=(
+                f"{interaction.user.mention} 님의 슬롯머신 결과입니다.\n\n"
                 "```text\n"
                 f"[ {symbols[0]} | {symbols[1]} | {symbols[2]} ]\n"
                 "```\n"
@@ -1006,7 +1046,7 @@ class SlotBetButton(discord.ui.Button):
                 inline=False,
             )
 
-        await interaction.edit_original_response(
+        await slot_message.edit(
             embed=embed,
             view=SlotBetView(),
         )
@@ -1047,6 +1087,7 @@ class Casino(commands.Cog):
         await interaction.response.send_message(
             embed=embed,
             view=CasinoMainView(),
+            ephemeral=True,
         )
 
 

@@ -496,6 +496,9 @@ class Recruit(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    async def cog_load(self):
+        self.bot.add_view(RecruitPostView())
+
     @commands.Cog.listener()
     async def on_voice_state_update(
         self,

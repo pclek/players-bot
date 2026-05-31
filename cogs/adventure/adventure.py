@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from cogs.adventure.crafting import CraftView
 from cogs.adventure.blacksmith import BlacksmithMenuView
 from cogs.adventure.equipment import EquipView
+from cogs.profile.profile import get_attendance_day_key
 
 from cogs.adventure.adventure_utils import (
     ensure_adventure_profile,
@@ -25,6 +26,69 @@ from cogs.adventure.hunting import HuntView, ARMOR_SHIELDS
 from cogs.adventure.hunting import WEAPON_STATS
 
 DB_PATH = "database/bot.db"
+
+async def ensure_adventure_daily_limit_schema():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS adventure_daily_limits (
+            user_id INTEGER NOT NULL,
+            job_type TEXT NOT NULL,
+            day_key TEXT NOT NULL,
+            count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (user_id, job_type, day_key)
+        )
+        """)
+
+        await db.commit()
+
+
+async def get_adventure_daily_count(user_id: int, job_type: str) -> int:
+    await ensure_adventure_daily_limit_schema()
+
+    day_key = get_attendance_day_key()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT count
+        FROM adventure_daily_limits
+        WHERE user_id = ?
+        AND job_type = ?
+        AND day_key = ?
+        """, (
+            user_id,
+            job_type,
+            day_key,
+        )) as cursor:
+            row = await cursor.fetchone()
+
+    return row[0] if row else 0
+
+
+async def add_adventure_daily_count(user_id: int, job_type: str):
+    await ensure_adventure_daily_limit_schema()
+
+    day_key = get_attendance_day_key()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        INSERT INTO adventure_daily_limits (
+            user_id,
+            job_type,
+            day_key,
+            count
+        )
+        VALUES (?, ?, ?, 1)
+        ON CONFLICT(user_id, job_type, day_key)
+        DO UPDATE SET count = count + 1
+        """, (
+            user_id,
+            job_type,
+            day_key,
+        ))
+
+        await db.commit()
+
+
 
 async def ensure_adventure_job_schema():
     async with aiosqlite.connect(DB_PATH) as db:
@@ -97,7 +161,6 @@ class AdventureResultButton(discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message(
                 "❌ 본인의 모험 결과만 확인할 수 있습니다.",
-                ephemeral=True,
             )
             return
 
@@ -114,7 +177,6 @@ class AdventureResultButton(discord.ui.Button):
             if not job:
                 await interaction.response.send_message(
                     "❌ 확인할 모험 결과가 없습니다.",
-                    ephemeral=True,
                 )
                 return
 
@@ -124,7 +186,6 @@ class AdventureResultButton(discord.ui.Button):
             if datetime.now() < end_time:
                 await interaction.response.send_message(
                     "⏳ 아직 모험이 끝나지 않았습니다.",
-                    ephemeral=True,
                 )
                 return
 
@@ -194,7 +255,7 @@ class AdventureSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer()
 
         user_id = interaction.user.id
         job_type = self.values[0]
@@ -209,9 +270,10 @@ class AdventureSelect(discord.ui.Select):
             armor_name = profile[2] or ""
 
             if current_hp <= 1:
-                await interaction.followup.send(
-                    "❌ 체력이 너무 낮아 사냥을 시작할 수 없습니다.",
-                    ephemeral=True,
+                await interaction.edit_original_response(
+                    content="❌ 체력이 너무 낮아 사냥을 시작할 수 없습니다.",
+                    embed=None,
+                    view=None,
                 )
                 return
 
@@ -234,7 +296,7 @@ class AdventureSelect(discord.ui.Select):
                 armor_name=armor_name,
             )
 
-            await interaction.followup.send(
+            await interaction.edit_original_response(
                 embed=view.make_embed("전투를 시작합니다."),
                 view=view,
             )
@@ -254,10 +316,9 @@ class AdventureSelect(discord.ui.Select):
                 color=discord.Color.orange(),
             )
 
-            await interaction.followup.send(
+            await interaction.edit_original_response(
                 embed=embed,
                 view=CraftView(),
-                ephemeral=True,
             )
             return
 
@@ -286,10 +347,9 @@ class AdventureSelect(discord.ui.Select):
                 inline=False,
             )
 
-            await interaction.followup.send(
+            await interaction.edit_original_response(
                 embed=embed,
                 view=BlacksmithMenuView(),
-                ephemeral=True,
             )
             return
 
@@ -315,9 +375,10 @@ class AdventureSelect(discord.ui.Select):
             ]
 
             if not equip_rows:
-                await interaction.followup.send(
-                    "❌ 장착할 수 있는 장비가 없습니다.",
-                    ephemeral=True,
+                await interaction.edit_original_response(
+                    content="❌ 장착할 수 있는 장비가 없습니다.",
+                    embed=None,
+                    view=None,
                 )
                 return
 
@@ -327,10 +388,9 @@ class AdventureSelect(discord.ui.Select):
                 color=discord.Color.blurple(),
             )
 
-            await interaction.followup.send(
+            await interaction.edit_original_response(
                 embed=embed,
                 view=EquipView(equip_rows),
-                ephemeral=True,
             )
             return
 
@@ -345,23 +405,42 @@ class AdventureSelect(discord.ui.Select):
             if active_job:
                 active_job_type, end_at = active_job
 
-                await interaction.followup.send(
-                    f"❌ 이미 진행 중인 모험이 있습니다.\n"
-                    f"진행 중 : `{get_job_name(active_job_type)}`\n"
-                    f"종료 예정 : `{end_at[:19]}`",
-                    ephemeral=True,
+                await interaction.edit_original_response(
+                    content=(
+                        f"❌ 이미 진행 중인 모험이 있습니다.\n"
+                        f"진행 중 : `{get_job_name(active_job_type)}`\n"
+                        f"종료 예정 : `{end_at[:19]}`"
+                    ),
+                    embed=None,
+                    view=None,
                 )
                 return
 
             now = datetime.now()
 
+            if job_type == "mining":
+                mining_count = await get_adventure_daily_count(user_id, "mining")
+
+                if mining_count >= 10:
+                    await interaction.edit_original_response(
+                        content=(
+                            "❌ 오늘 광산 탐사 횟수를 모두 사용했습니다.\n"
+                            "하루 제한 : `10회`\n"
+                            "초기화 시간 : `매일 오전 6시`"
+                        ),
+                        embed=None,
+                        view=None,
+                    )
+                    return
+
             if job_type == "fishing":
                 bait_count = await get_adventure_item_count(user_id, "랜덤미끼")
 
                 if bait_count < 1:
-                    await interaction.followup.send(
-                        "❌ 낚시를 시작하려면 `랜덤미끼 x1` 이 필요합니다.",
-                        ephemeral=True,
+                    await interaction.edit_original_response(
+                        content="❌ 낚시를 시작하려면 `랜덤미끼 x1` 이 필요합니다.",
+                        embed=None,
+                        view=None,
                     )
                     return
 
@@ -371,9 +450,10 @@ class AdventureSelect(discord.ui.Select):
                 seed_count = await get_adventure_item_count(user_id, "랜덤씨앗")
 
                 if seed_count < 1:
-                    await interaction.followup.send(
-                        "❌ 농장을 시작하려면 `랜덤씨앗 x1` 이 필요합니다.",
-                        ephemeral=True,
+                    await interaction.edit_original_response(
+                        content="❌ 농장을 시작하려면 `랜덤씨앗 x1` 이 필요합니다.",
+                        embed=None,
+                        view=None,
                     )
                     return
 
@@ -423,10 +503,9 @@ class AdventureSelect(discord.ui.Select):
                 ))
 
             await db.commit()
-        try:
-            await interaction.delete_original_response()
-        except Exception:
-            pass
+
+            if job_type == "mining":
+                await add_adventure_daily_count(user_id, "mining")
 
         embed = discord.Embed(
             title=title,
@@ -434,7 +513,7 @@ class AdventureSelect(discord.ui.Select):
             color=discord.Color.green(),
         )
 
-        await interaction.followup.send(embed=embed)
+        await interaction.edit_original_response(embed=embed, view=None)
 
 
 class AdventureView(discord.ui.View):
@@ -640,7 +719,6 @@ class Adventure(commands.Cog):
                 "🪦 아직 부활 대기중입니다.\n"
                 "영혼은 접속했지만 몸이 로그아웃 상태입니다.\n"
                 f"부활 예정 : `{format_dead_until(dead_until)}`",
-                ephemeral=True,
             )
             return
 
@@ -684,7 +762,6 @@ class Adventure(commands.Cog):
                     f"⏳ 이미 진행 중인 모험이 있습니다.\n"
                     f"진행 중 : `{get_job_name(job_type)}`\n"
                     f"남은 시간 : `{remaining_minutes}분 {remaining_seconds}초`",
-                    ephemeral=True,
                 )
                 return
 
