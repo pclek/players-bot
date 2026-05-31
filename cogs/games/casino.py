@@ -690,6 +690,9 @@ class PokerGame:
         self.total_bet = bet
         self.stage = 0
         self.finished = False
+        # 플랍 이후 턴/리버로 넘어가기 전에는 현재 라운드에서 추가 배팅을 1회 이상 해야 합니다.
+        # 단, 총 배팅 한도에 도달한 경우에는 추가 배팅 없이 진행할 수 있습니다.
+        self.betted_stages = set()
 
         self.deck = make_deck()
         self.player_cards = [self.deck.pop(), self.deck.pop()]
@@ -844,8 +847,16 @@ class PokerGame:
             return False, f"❌ 포인트가 부족합니다.\n현재 포인트 : `{points}P`"
 
         self.total_bet += amount
+        self.betted_stages.add(self.stage)
 
         return True, f"💰 `{amount}P` 를 추가 배팅했습니다."
+
+    def needs_bet_before_next_card(self):
+        return (
+            self.stage in (1, 2)
+            and self.stage not in self.betted_stages
+            and self.total_bet < POKER_MAX_TOTAL_BET
+        )
 
     def reveal_next(self):
         if self.stage == 0:
@@ -955,8 +966,11 @@ class PokerGameView(discord.ui.View):
         if self.game.finished:
             return
 
+        must_bet = self.game.needs_bet_before_next_card()
+
         if self.game.stage < 3:
-            self.add_item(PokerActionButton("✅ 체크", "check"))
+            if not must_bet:
+                self.add_item(PokerActionButton("✅ 체크", "check"))
         else:
             self.add_item(PokerActionButton("🃏 쇼다운", "showdown"))
 
@@ -1056,7 +1070,7 @@ class PokerActionButton(discord.ui.Button):
 
         if view.table_message:
             await view.table_message.edit(
-                embed=game.make_table_embed(result_text if game.finished else None)
+                embed=game.make_table_embed()
             )
 
         await interaction.response.edit_message(
