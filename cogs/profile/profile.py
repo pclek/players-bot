@@ -245,7 +245,10 @@ class Profile(commands.Cog):
 
         embed, file = await make_profile_embed(interaction.user)
 
-        await interaction.followup.send(embed=embed, file=file)
+        if file:
+            await interaction.followup.send(embed=embed, file=file)
+        else:
+            await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="출석", description="하루 1회 출석체크를 합니다.")
     async def attendance(self, interaction: discord.Interaction):
@@ -303,16 +306,24 @@ class Profile(commands.Cog):
 
         embed, file = await make_profile_embed(interaction.user)
 
-        await interaction.followup.send(
-            content=(
-                f"✨ 출석 성공!\n"
-                f"포인트 {reward_points}, 경험치 {reward_xp}이 지급되었습니다.\n"
-                f"출석 완료로 익일 `06:00 KST` 전까지 "
-                f"채팅 및 음성통화 활동의 포인트/경험치가 집계됩니다."
-            ),
-            embed=embed,
-            file=file,
+        content = (
+            f"✨ 출석 성공!\n"
+            f"포인트 {reward_points}, 경험치 {reward_xp}이 지급되었습니다.\n"
+            f"출석 완료로 익일 `06:00 KST` 전까지 "
+            f"채팅 및 음성통화 활동의 포인트/경험치가 집계됩니다."
         )
+
+        if file:
+            await interaction.followup.send(
+                content=content,
+                embed=embed,
+                file=file,
+            )
+        else:
+            await interaction.followup.send(
+                content=content,
+                embed=embed,
+            )
 
 
 async def setup(bot: commands.Bot):
