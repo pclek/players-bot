@@ -18,11 +18,20 @@ MAX_BET = 1000
 CASINO_COOLDOWN_SECONDS = 60 * 60
 CASINO_DAILY_LIMIT = 5
 
-DEALER_BOOST_CHANCE = 0.30
+DEALER_BOOST_CHANCE = 0.35
 DEALER_BOOST_TRIES = 2
 
+POKER_MAX_TOTAL_BET = 1000
+POKER_WIN_MULTIPLIER = 2.2
+POKER_FOLD_REFUNDS = {
+    0: 0.70,
+    1: 0.50,
+    2: 0.30,
+    3: 0.10,
+}
 
-SUITS = ["♠", "♥", "♦", "♣"]
+
+SUITS = ["♣️", "♠️", "♥️", "♦️"]
 RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
 RANK_VALUE = {rank: index + 2 for index, rank in enumerate(RANKS)}
 
@@ -438,8 +447,8 @@ class CasinoMainSelect(discord.ui.Select):
                 description=(
                     "배팅금을 선택하세요.\n\n"
                     "내 카드 2장과 공용카드를 차례대로 공개합니다.\n"
-                    "`체크`로 다음 카드를 보고, 위험하면 `폴드`로 배팅금 50%를 회수할 수 있습니다.\n"
-                    "딜러는 약간 유리하게 세팅되어 장기적으로 포인트가 회수됩니다.\n\n"
+                    "`체크`로 다음 카드를 보고, 라운드별 환급률로 `폴드`할 수 있습니다.\n"
+                    "상대 3명과 겨루는 4인 포커이며, 장기적으로 포인트가 회수됩니다.\n\n"
                     f"최소 배팅 : `{MIN_BET}P`\n"
                     f"최대 배팅 : `{MAX_BET}P`\n"
                     f"{await make_usage_text(interaction.user.id, 'poker')}"
@@ -530,10 +539,7 @@ class PokerBetButton(discord.ui.Button):
         attendance_error = await check_casino_attendance(interaction.user.id)
 
         if attendance_error:
-            await interaction.response.send_message(
-                attendance_error,
-                ephemeral=True,
-            )
+            await interaction.response.send_message(attendance_error, ephemeral=True)
             return
 
         points = await get_points(interaction.user.id)
@@ -564,12 +570,7 @@ class PokerBetButton(discord.ui.Button):
 
         await record_casino_play(interaction.user.id, "poker")
 
-        game = PokerGame(interaction.user.id, self.bet)
-        embed = game.make_embed()
-        embed.description = (
-            f"{interaction.user.mention} 님의 포커 게임이 시작되었습니다.\n\n"
-            + embed.description
-        )
+        game = PokerGame(interaction.user.id, interaction.user.display_name, self.bet)
 
         await interaction.response.edit_message(
             content="✅ 포커 게임을 공개 채널에 시작했습니다.",
@@ -577,258 +578,394 @@ class PokerBetButton(discord.ui.Button):
             view=None,
         )
 
-        await interaction.channel.send(
-            embed=embed,
-            view=PokerGameView(game),
+        table_message = await interaction.channel.send(embed=game.make_table_embed())
+        reaction_message = await interaction.channel.send(
+            embed=game.make_reaction_embed(
+                f"{interaction.user.mention} 님의 포커 게임이 시작되었습니다.\n"
+                "프리플랍입니다. 체크하면 플랍 카드 3장이 공개됩니다."
+            ),
+            view=PokerGameView(game, None),
         )
+
+        view = PokerGameView(game, table_message)
+        await reaction_message.edit(view=view)
 
 
 class PokerBetView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=120)
 
-        for bet in [50, 100, 300, 500, 1000]:
+        for bet in [50, 100, 200, 300, 500]:
             self.add_item(PokerBetButton(bet))
 
         self.add_item(BackToCasinoButton())
 
 
+POKER_NPCS = [
+    ("🎩", "마담 로즈", "dealer"),
+    ("🦊", "도박여우", "normal"),
+    ("🐍", "스네이크 박", "normal"),
+    ("🧊", "아이스 김", "tight"),
+    ("🔥", "불곰 최", "loose"),
+    ("🃏", "조커 민", "loose"),
+    ("💼", "사채왕 한", "tight"),
+    ("🐺", "늑대 정", "normal"),
+    ("🎭", "마술사 진", "normal"),
+    ("🦅", "독수리 장", "tight"),
+]
+
+POKER_REACTIONS = {
+    "preflop": [
+        "{name}이 카드를 확인하고 조용히 칩을 정리합니다.",
+        "{name}이 표정 변화 없이 테이블을 바라봅니다.",
+        "{name}이 손끝으로 카드를 톡톡 두드립니다.",
+        "{name}이 살짝 웃으며 분위기를 살핍니다.",
+    ],
+    "flop": [
+        "{name}이 플랍을 보고 천천히 고개를 끄덕입니다.",
+        "{name}이 아무 말 없이 칩을 만지작거립니다.",
+        "{name}이 좋은 패인지 아닌지 알 수 없는 표정을 짓습니다.",
+        "{name}이 괜히 여유로운 척 웃습니다.",
+    ],
+    "turn": [
+        "{name}이 턴 카드를 보고 잠깐 생각에 잠깁니다.",
+        "{name}이 테이블을 두드리며 흐름을 지켜봅니다.",
+        "{name}이 카드를 다시 확인하고 조용히 숨을 고릅니다.",
+        "{name}이 의미심장하게 미소를 짓습니다.",
+    ],
+    "river": [
+        "{name}이 리버를 보고 칩을 가지런히 정리합니다.",
+        "{name}이 마지막 카드를 본 뒤 표정을 숨깁니다.",
+        "{name}이 테이블 위 카드를 천천히 훑어봅니다.",
+        "{name}이 승부를 기다리듯 몸을 뒤로 기댑니다.",
+    ],
+    "showdown": [
+        "{name}이 패를 공개할 준비를 합니다.",
+        "{name}이 조용히 카드를 앞으로 밀어냅니다.",
+        "{name}이 마지막까지 표정을 숨깁니다.",
+    ],
+}
+
+
+def get_visible_score(cards):
+    if len(cards) < 5:
+        values = sorted([card.value for card in cards], reverse=True)
+        counts = Counter(values)
+
+        if 2 in counts.values():
+            pair_values = sorted(
+                [value for value, count in counts.items() if count == 2],
+                reverse=True,
+            )
+            return (1, pair_values)
+
+        return (0, values)
+
+    return best_hand(cards)
+
+
+def make_stage_name(stage: int) -> str:
+    return {
+        0: "PRE-FLOP",
+        1: "FLOP",
+        2: "TURN",
+        3: "RIVER",
+    }.get(stage, "SHOWDOWN")
+
+
+def make_stage_korean(stage: int) -> str:
+    return {
+        0: "프리플랍",
+        1: "플랍",
+        2: "턴",
+        3: "리버",
+    }.get(stage, "쇼다운")
+
+
 class PokerGame:
-    def __init__(self, user_id: int, bet: int):
+    def __init__(self, user_id: int, display_name: str, bet: int):
         self.user_id = user_id
-        self.bet = bet
+        self.display_name = display_name
+        self.base_bet = bet
+        self.total_bet = bet
         self.stage = 0
         self.finished = False
 
         self.deck = make_deck()
         self.player_cards = [self.deck.pop(), self.deck.pop()]
+        self.community_deck = [self.deck.pop() for _ in range(5)]
         self.community_cards = []
 
-        self.dealer_cards = self.make_dealer_cards()
-        self.dealer_full_cards = self.dealer_cards
+        npc_pool = POKER_NPCS.copy()
+        dealer_info = npc_pool.pop(0)
+        bot_infos = random.sample(npc_pool, 2)
 
-    def make_dealer_cards(self):
-        base_cards = [self.deck.pop(), self.deck.pop()]
-        best_cards = base_cards
-        best_score = None
+        self.opponents = []
 
-        if random.random() >= DEALER_BOOST_CHANCE:
-            return base_cards
+        for emoji, name, personality in [dealer_info] + bot_infos:
+            self.opponents.append(
+                {
+                    "emoji": emoji,
+                    "name": name,
+                    "personality": personality,
+                    "cards": [self.deck.pop(), self.deck.pop()],
+                }
+            )
 
-        candidates = [base_cards]
+        self.apply_opponent_boosts()
 
-        for _ in range(DEALER_BOOST_TRIES):
-            temp_deck = make_deck()
-            used = {(card.rank, card.suit) for card in self.player_cards + self.community_cards}
-            temp_deck = [
-                card for card in temp_deck
-                if (card.rank, card.suit) not in used
-            ]
-            random.shuffle(temp_deck)
-            candidates.append([temp_deck.pop(), temp_deck.pop()])
+    def used_cards_except(self, target_index: int):
+        used = {
+            (card.rank, card.suit)
+            for card in self.player_cards + self.community_deck
+        }
 
-        for cards in candidates:
-            if len(self.community_cards) < 5:
-                score_cards = cards + self.community_cards
+        for index, opponent in enumerate(self.opponents):
+            if index == target_index:
+                continue
 
-                if len(score_cards) < 5:
-                    score = (0, [max(card.value for card in cards)])
-                else:
-                    score = best_hand(score_cards)
-            else:
-                score = best_hand(cards + self.community_cards)
+            used.update((card.rank, card.suit) for card in opponent["cards"])
 
-            if best_score is None or score > best_score:
-                best_score = score
-                best_cards = cards
+        return used
 
-        return best_cards
+    def apply_opponent_boosts(self):
+        # 딜러/상대 패 보정 제거
+        # 모든 참가자가 처음 받은 카드 그대로 진행합니다.
+        # 승률 밸런스는 POKER_WIN_MULTIPLIER와 POKER_FOLD_REFUNDS로 조절합니다.
+        return
 
     def visible_community(self):
-        shown = self.community_cards
-        hidden = 5 - len(shown)
-
-        return f"{cards_text(shown)} {hidden_cards(hidden)}".strip()
+        hidden = 5 - len(self.community_cards)
+        return f"{cards_text(self.community_cards)} {hidden_cards(hidden)}".strip()
 
     def current_player_hand_text(self):
         cards = self.player_cards + self.community_cards
 
         if len(cards) < 5:
+            score = get_visible_score(cards)
+
+            if score[0] == 1:
+                return "원페어"
+
             return "아직 족보 확인 전"
 
         score = best_hand(cards)
         return hand_name(score)
 
-    def make_embed(self, result_text: str | None = None):
-        stage_names = {
-            0: "PRE-FLOP",
-            1: "FLOP",
-            2: "TURN",
-            3: "RIVER",
-        }
+    def opponent_status_text(self, reveal=False):
+        lines = []
 
+        for opponent in self.opponents:
+            name = f"{opponent['emoji']} {opponent['name']}"
+
+            if reveal or self.finished:
+                card_text = cards_text(opponent["cards"])
+            else:
+                card_text = hidden_cards(2)
+
+            lines.append(f"{name}\n{card_text}")
+
+        return "\n\n".join(lines)
+
+    def make_table_embed(self, result_text: str | None = None):
         embed = discord.Embed(
             title="🃏 POKER ROOM",
             color=discord.Color.blurple(),
         )
 
-        dealer_text = hidden_cards(2)
-
-        if self.finished:
-            dealer_text = cards_text(self.dealer_cards)
-
         embed.description = (
-            "```text\n"
-            "┌──────────────────────┐\n"
-            "│       CASINO POKER    │\n"
-            "└──────────────────────┘\n"
-            "```\n"
-            f"라운드 : `{stage_names.get(self.stage, 'SHOWDOWN')}`\n"
-            f"배팅금 : `{self.bet}P`\n"
+            f"라운드 : `{make_stage_name(self.stage)}`\n"
+            f"기본 배팅 : `{self.base_bet}P`\n"
+            f"총 배팅 : `{self.total_bet}P / {POKER_MAX_TOTAL_BET}P`\n"
             f"현재 족보 : `{self.current_player_hand_text()}`\n\n"
-            f"👤 **플레이어**\n{cards_text(self.player_cards)}\n\n"
-            f"🤖 **딜러**\n{dealer_text}\n\n"
-            f"🃏 **테이블**\n{self.visible_community()}"
+            f"👤 **{self.display_name}**\n"
+            f"{cards_text(self.player_cards)}\n\n"
+            f"🃏 **테이블**\n"
+            f"{self.visible_community()}\n\n"
+            f"🤖 **상대**\n"
+            f"{self.opponent_status_text(reveal=self.finished)}"
         )
 
         if result_text:
             embed.add_field(
-                name="🎴 진행",
+                name="결과",
                 value=result_text,
                 inline=False,
             )
 
         return embed
 
+    def random_reactions(self, stage_key: str):
+        lines = []
+
+        for opponent in self.opponents:
+            name = f"{opponent['emoji']} {opponent['name']}"
+            template = random.choice(POKER_REACTIONS.get(stage_key, POKER_REACTIONS["flop"]))
+            lines.append(template.format(name=name))
+
+        return "\n".join(lines)
+
+    def make_reaction_embed(self, message: str | None = None):
+        stage_key = {
+            0: "preflop",
+            1: "flop",
+            2: "turn",
+            3: "river",
+        }.get(self.stage, "showdown")
+
+        if message is None:
+            message = self.random_reactions(stage_key)
+
+        refund_rate = POKER_FOLD_REFUNDS.get(self.stage, 0)
+
+        embed = discord.Embed(
+            title="🎭 테이블 분위기",
+            description=(
+                f"현재 라운드 : `{make_stage_korean(self.stage)}`\n"
+                f"폴드 환급률 : `{int(refund_rate * 100)}%`\n\n"
+                f"{message}"
+            ),
+            color=discord.Color.dark_gold(),
+        )
+
+        return embed
+
+    async def add_bet(self, amount: int):
+        if self.finished:
+            return False, "이미 종료된 게임입니다."
+
+        if self.total_bet + amount > POKER_MAX_TOTAL_BET:
+            return False, f"최대 총 배팅은 `{POKER_MAX_TOTAL_BET}P` 입니다."
+
+        success = await spend_points(self.user_id, amount)
+
+        if not success:
+            points = await get_points(self.user_id)
+            return False, f"❌ 포인트가 부족합니다.\n현재 포인트 : `{points}P`"
+
+        self.total_bet += amount
+
+        return True, f"💰 `{amount}P` 를 추가 배팅했습니다."
+
+    def reveal_next(self):
+        if self.stage == 0:
+            self.community_cards.extend(self.community_deck[:3])
+            self.stage = 1
+            return "🎴 **FLOP**\n공용 카드 3장이 공개되었습니다."
+
+        if self.stage == 1:
+            self.community_cards.append(self.community_deck[3])
+            self.stage = 2
+            return "🎴 **TURN**\n턴 카드가 공개되었습니다."
+
+        if self.stage == 2:
+            self.community_cards.append(self.community_deck[4])
+            self.stage = 3
+            return "🎴 **RIVER**\n마지막 공용 카드가 공개되었습니다."
+
+        return "이미 모든 카드가 공개되었습니다. 쇼다운을 진행하세요."
+
     async def fold(self):
         self.finished = True
 
-        refund = self.bet // 2
+        refund_rate = POKER_FOLD_REFUNDS.get(self.stage, 0)
+        refund = int(self.total_bet * refund_rate)
 
         if refund > 0:
             await add_points(self.user_id, refund)
 
-        loss = self.bet - refund
+        loss = self.total_bet - refund
 
         return (
             f"🏳️ **폴드**\n\n"
-            f"승부를 포기하고 배팅금 일부를 회수했습니다.\n"
+            f"라운드 : `{make_stage_korean(self.stage)}`\n"
+            f"환급률 : `{int(refund_rate * 100)}%`\n"
             f"환급 : `{refund}P`\n"
             f"손실 : `-{loss}P`"
         )
 
-    def reveal_flop(self):
-        if self.stage != 0:
-            return
-
-        self.community_cards.extend([self.deck.pop(), self.deck.pop(), self.deck.pop()])
-        self.stage = 1
-
-    def reveal_turn(self):
-        if self.stage != 1:
-            return
-
-        self.community_cards.append(self.deck.pop())
-        self.stage = 2
-
-    def reveal_river(self):
-        if self.stage != 2:
-            return
-
-        self.community_cards.append(self.deck.pop())
-        self.stage = 3
-
     async def finish(self):
         self.finished = True
 
+        if len(self.community_cards) < 5:
+            self.community_cards = self.community_deck.copy()
+
+        self.stage = 4
+
         player_score = best_hand(self.player_cards + self.community_cards)
 
-        # 리버까지 공개된 뒤 딜러 보정이 적용되도록 한 번 더 후보를 비교함
-        if random.random() < DEALER_BOOST_CHANCE:
-            used = {
-                (card.rank, card.suit)
-                for card in self.player_cards + self.community_cards + self.dealer_cards
-            }
-            best_dealer = self.dealer_cards
-            best_score = best_hand(best_dealer + self.community_cards)
+        opponent_results = []
+        for opponent in self.opponents:
+            score = best_hand(opponent["cards"] + self.community_cards)
+            opponent_results.append((score, opponent))
 
-            for _ in range(DEALER_BOOST_TRIES):
-                temp_deck = make_deck()
-                temp_deck = [
-                    card for card in temp_deck
-                    if (card.rank, card.suit) not in used
-                ]
-                random.shuffle(temp_deck)
+        best_opponent_score, best_opponent = max(
+            opponent_results,
+            key=lambda item: item[0],
+        )
 
-                candidate = [temp_deck.pop(), temp_deck.pop()]
-                candidate_score = best_hand(candidate + self.community_cards)
+        opponent_text = "\n".join(
+            [
+                f"{opponent['emoji']} {opponent['name']} : `{hand_name(score)}`"
+                for score, opponent in opponent_results
+            ]
+        )
 
-                if candidate_score > best_score:
-                    best_score = candidate_score
-                    best_dealer = candidate
-
-            self.dealer_cards = best_dealer
-
-        dealer_score = best_hand(self.dealer_cards + self.community_cards)
-
-        if player_score > dealer_score:
-            payout = int(self.bet * 1.8)
-            profit = payout - self.bet
+        if player_score > best_opponent_score:
+            payout = int(self.total_bet * POKER_WIN_MULTIPLIER)
+            profit = payout - self.total_bet
             await add_points(self.user_id, payout)
 
             return (
-                f"🎴 **SHOWDOWN**\n\n"
                 f"🏆 **승리!**\n"
                 f"내 족보 : `{hand_name(player_score)}`\n"
-                f"딜러 족보 : `{hand_name(dealer_score)}`\n\n"
+                f"{opponent_text}\n\n"
                 f"획득 : `{payout}P`\n"
                 f"순이익 : `+{profit}P`"
             )
 
-        if player_score == dealer_score:
-            await add_points(self.user_id, self.bet)
+        if player_score == best_opponent_score:
+            await add_points(self.user_id, self.total_bet)
 
             return (
-                f"🎴 **SHOWDOWN**\n\n"
                 f"🤝 **무승부**\n"
                 f"내 족보 : `{hand_name(player_score)}`\n"
-                f"딜러 족보 : `{hand_name(dealer_score)}`\n\n"
-                f"배팅금 `{self.bet}P` 를 돌려받았습니다."
+                f"{opponent_text}\n\n"
+                f"총 배팅금 `{self.total_bet}P` 를 돌려받았습니다."
             )
 
         return (
-            f"🎴 **SHOWDOWN**\n\n"
             f"💸 **패배**\n"
             f"내 족보 : `{hand_name(player_score)}`\n"
-            f"딜러 족보 : `{hand_name(dealer_score)}`\n\n"
-            f"배팅금 `{self.bet}P` 를 잃었습니다."
+            f"{opponent_text}\n\n"
+            f"총 배팅금 `{self.total_bet}P` 를 잃었습니다."
         )
 
 
 class PokerGameView(discord.ui.View):
-    def __init__(self, game: PokerGame):
-        super().__init__(timeout=180)
+    def __init__(self, game: PokerGame, table_message: discord.Message | None):
+        super().__init__(timeout=300)
         self.game = game
+        self.table_message = table_message
         self.refresh_buttons()
 
     def refresh_buttons(self):
         self.clear_items()
 
         if self.game.finished:
-            self.add_item(BackToCasinoButton())
             return
 
-        if self.game.stage == 0:
-            self.add_item(PokerActionButton("✅ 체크 - 플랍 공개", "flop"))
-            self.add_item(PokerActionButton("🏳️ 폴드", "fold", discord.ButtonStyle.red))
-        elif self.game.stage == 1:
-            self.add_item(PokerActionButton("✅ 체크 - 턴 공개", "turn"))
-            self.add_item(PokerActionButton("🏳️ 폴드", "fold", discord.ButtonStyle.red))
-        elif self.game.stage == 2:
-            self.add_item(PokerActionButton("✅ 체크 - 리버 공개", "river"))
-            self.add_item(PokerActionButton("🏳️ 폴드", "fold", discord.ButtonStyle.red))
+        if self.game.stage < 3:
+            self.add_item(PokerActionButton("✅ 체크", "check"))
         else:
-            self.add_item(PokerActionButton("🃏 쇼다운", "result"))
+            self.add_item(PokerActionButton("🃏 쇼다운", "showdown"))
+
+        if self.game.total_bet < POKER_MAX_TOTAL_BET and self.game.stage < 4:
+            self.add_item(PokerAddBetButton(100))
+            self.add_item(PokerAddBetButton(300))
+
+        if self.game.stage <= 3:
+            self.add_item(PokerActionButton("🏳️ 폴드", "fold", discord.ButtonStyle.red))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.game.user_id:
@@ -839,6 +976,47 @@ class PokerGameView(discord.ui.View):
             return False
 
         return True
+
+
+class PokerAddBetButton(discord.ui.Button):
+    def __init__(self, amount: int):
+        super().__init__(
+            label=f"+{amount}P",
+            style=discord.ButtonStyle.blurple,
+        )
+        self.amount = amount
+
+    async def callback(self, interaction: discord.Interaction):
+        view: PokerGameView = self.view
+        game = view.game
+
+        success, message = await game.add_bet(self.amount)
+
+        if not success:
+            await interaction.response.send_message(
+                message,
+                ephemeral=True,
+            )
+            return
+
+        view.refresh_buttons()
+
+        if view.table_message:
+            await view.table_message.edit(embed=game.make_table_embed())
+
+        stage_key = {
+            0: "preflop",
+            1: "flop",
+            2: "turn",
+            3: "river",
+        }.get(game.stage, "river")
+
+        await interaction.response.edit_message(
+            embed=game.make_reaction_embed(
+                message + "\n\n" + game.random_reactions(stage_key)
+            ),
+            view=view,
+        )
 
 
 class PokerActionButton(discord.ui.Button):
@@ -858,26 +1036,34 @@ class PokerActionButton(discord.ui.Button):
         view: PokerGameView = self.view
         game = view.game
 
-        if self.action == "flop":
-            game.reveal_flop()
-            result_text = "🎴 **FLOP**\n공용 카드 3장이 공개되었습니다.\n다음 카드를 보려면 `체크`하세요."
-        elif self.action == "turn":
-            game.reveal_turn()
-            result_text = "🎴 **TURN**\n턴 카드가 공개되었습니다.\n리버까지 갈지 선택하세요."
-        elif self.action == "river":
-            game.reveal_river()
-            result_text = "🎴 **RIVER**\n마지막 공용 카드가 공개되었습니다.\n이제 쇼다운으로 승부를 확인하세요."
+        if self.action == "check":
+            progress_text = game.reveal_next()
+            stage_key = {
+                1: "flop",
+                2: "turn",
+                3: "river",
+            }.get(game.stage, "river")
+
+            result_text = progress_text + "\n\n" + game.random_reactions(stage_key)
+
         elif self.action == "fold":
             result_text = await game.fold()
+
         else:
             result_text = await game.finish()
 
         view.refresh_buttons()
 
+        if view.table_message:
+            await view.table_message.edit(
+                embed=game.make_table_embed(result_text if game.finished else None)
+            )
+
         await interaction.response.edit_message(
-            embed=game.make_embed(result_text),
+            embed=game.make_reaction_embed(result_text),
             view=view,
         )
+
 
 
 SLOT_SYMBOLS = ["🍒", "🍋", "🔔", "⭐", "💎", "7️⃣"]

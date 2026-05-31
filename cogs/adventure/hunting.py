@@ -1,6 +1,7 @@
 import random
 import discord
 import aiosqlite
+from datetime import datetime, timedelta, timezone
 
 from discord import app_commands
 from discord.ext import commands
@@ -16,27 +17,138 @@ from cogs.adventure.adventure_utils import (
 
 DB_PATH = "database/bot.db"
 
+KST = timezone(timedelta(hours=9))
+DEATH_PENALTY_HOURS = 3
+DEATH_POINT_LOSS_RATE = 0.10
+DEATH_DURABILITY_LOSS_RATE = 0.10
+DEATH_MIN_DURABILITY_LOSS = 5
+
+EQUIPMENT_MAX_DURABILITY = {
+    "녹슨검": 999999,
+
+    "구리검": 80,
+    "철검": 100,
+    "은검": 120,
+    "금검": 140,
+    "다이아검": 180,
+    "비브라늄검": 250,
+
+    "철갑옷": 120,
+    "은갑옷": 150,
+    "금갑옷": 180,
+    "다이아갑옷": 220,
+    "비브라늄갑옷": 300,
+}
+
+
+async def apply_death_penalty(user_id: int, weapon_name: str, armor_name: str):
+    dead_until = datetime.now(KST) + timedelta(hours=DEATH_PENALTY_HOURS)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT points
+        FROM users
+        WHERE user_id = ?
+        """, (user_id,)) as cursor:
+            row = await cursor.fetchone()
+
+        points = row[0] if row else 0
+        point_loss = int(points * DEATH_POINT_LOSS_RATE)
+
+        await db.execute("""
+        UPDATE users
+        SET points = MAX(points - ?, 0)
+        WHERE user_id = ?
+        """, (
+            point_loss,
+            user_id,
+        ))
+
+        await db.execute("""
+        UPDATE adventure_profiles
+        SET current_hp = 0,
+            dead_until = ?
+        WHERE user_id = ?
+        """, (
+            dead_until.isoformat(),
+            user_id,
+        ))
+
+        await db.commit()
+
+    penalty_lines = [
+        f"🪦 사망 패널티 : `{DEATH_PENALTY_HOURS}시간` 동안 모험/모험상점 이용 불가",
+        f"💸 포인트 손실 : `{point_loss}P`",
+    ]
+
+    equipment_lines = []
+
+    if weapon_name and weapon_name != "녹슨검":
+        max_durability = EQUIPMENT_MAX_DURABILITY.get(weapon_name, 0)
+        durability_loss = max(
+            DEATH_MIN_DURABILITY_LOSS,
+            int(max_durability * DEATH_DURABILITY_LOSS_RATE),
+        )
+
+        durability_text = await decrease_equipped_durability(
+            user_id,
+            weapon_name,
+            durability_loss,
+        )
+
+        if durability_text:
+            equipment_lines.append(durability_text)
+
+    if armor_name and armor_name != "없음":
+        max_durability = EQUIPMENT_MAX_DURABILITY.get(armor_name, 0)
+        durability_loss = max(
+            DEATH_MIN_DURABILITY_LOSS,
+            int(max_durability * DEATH_DURABILITY_LOSS_RATE),
+        )
+
+        durability_text = await decrease_equipped_durability(
+            user_id,
+            armor_name,
+            durability_loss,
+        )
+
+        if durability_text:
+            equipment_lines.append(durability_text)
+
+    if equipment_lines:
+        penalty_lines.append(
+            "🛠 장비 내구도 패널티\n" + "\n".join(equipment_lines)
+        )
+
+    penalty_lines.append(
+        f"⏰ 부활 예정 : `{dead_until.strftime('%Y-%m-%d %H:%M')}`"
+    )
+
+    return "\n".join(penalty_lines)
+
+
 
 WEAPON_STATS = {
-    # 기본 스탯이 너무 약해서 초반 사냥이 지나치게 답답하지 않도록 상향
-    "녹슨검": (4, 7),
-    "구리검": (8, 12),
-    "철검": (12, 18),
-    "은검": (16, 23),
-    "금검": (20, 30),
-    "다이아검": (28, 42),
-    "비브라늄검": (40, 60),
+    # 기본 공격력 평균을 약 8~9로 올려 초반 사냥이 너무 답답하지 않게 조정
+    "녹슨검": (7, 10),
+    "구리검": (11, 16),
+    "철검": (16, 23),
+    "은검": (22, 31),
+    "금검": (30, 42),
+    "다이아검": (42, 60),
+    "비브라늄검": (60, 85),
 }
 
 
 ARMOR_SHIELDS = {
     "": 0,
     "없음": 0,
-    "철갑옷": 50,
-    "은갑옷": 70,
-    "금갑옷": 100,
-    "다이아갑옷": 150,
-    "비브라늄갑옷": 250,
+    # 방어구는 초반 사망 방지용, 후반은 고위 몬스터 2~3턴 버티는 용도
+    "철갑옷": 35,
+    "은갑옷": 55,
+    "금갑옷": 80,
+    "다이아갑옷": 120,
+    "비브라늄갑옷": 180,
 }
 
 WEAPON_BREAK_RATES = {
@@ -79,232 +191,231 @@ FOOD_HEALS = {
 }
 
 MONSTERS = {
-    # 초급: 약한 장비로도 가능. 미끼/씨앗/초반 음식 비용 회수용
+    # 초급: 녹슨검 + HP 100 기준. 승률은 높지만 피해를 조금씩 받는 구간
     "슬라임": {
-        "hp": (15, 30),
+        "hp": (18, 32),
         "atk": (2, 5),
-        "point": (20, 35),
+        "point": (22, 36),
         "weight": 90,
         "emoji": "🟢",
     },
     "들쥐떼": {
-        "hp": (20, 35),
+        "hp": (22, 38),
         "atk": (3, 6),
-        "point": (25, 40),
-        "weight": 80,
+        "point": (26, 42),
+        "weight": 82,
         "emoji": "🐀",
     },
     "성난 닭": {
-        "hp": (25, 45),
-        "atk": (4, 8),
-        "point": (28, 45),
-        "weight": 75,
+        "hp": (26, 44),
+        "atk": (4, 7),
+        "point": (30, 48),
+        "weight": 76,
         "emoji": "🐔",
     },
     "멧돼지": {
-        "hp": (35, 65),
-        "atk": (6, 12),
-        "point": (40, 70),
-        "weight": 70,
+        "hp": (38, 62),
+        "atk": (6, 11),
+        "point": (45, 72),
+        "weight": 68,
         "emoji": "🐗",
     },
     "숲 늑대": {
-        "hp": (45, 75),
+        "hp": (44, 72),
         "atk": (7, 13),
-        "point": (45, 75),
-        "weight": 65,
+        "point": (52, 82),
+        "weight": 62,
         "emoji": "🐺",
     },
     "거대 거미": {
-        "hp": (55, 90),
-        "atk": (8, 16),
-        "point": (50, 85),
-        "weight": 60,
+        "hp": (52, 84),
+        "atk": (8, 15),
+        "point": (60, 92),
+        "weight": 56,
         "emoji": "🕷️",
     },
     "독버섯 군락": {
-        "hp": (60, 95),
-        "atk": (9, 17),
-        "point": (55, 90),
-        "weight": 55,
+        "hp": (58, 92),
+        "atk": (9, 16),
+        "point": (68, 105),
+        "weight": 52,
         "emoji": "🍄",
     },
     "오리너구리": {
-        "hp": (40, 300),
-        "atk": (4, 40),
-        "point": (65, 400),
-        "weight": 50,
+        "hp": (70, 120),
+        "atk": (10, 20),
+        "point": (90, 150),
+        "weight": 48,
         "emoji": "🦫",
     },
     "고블린": {
-        "hp": (70, 110),
-        "atk": (11, 20),
-        "point": (75, 120),
-        "weight": 50,
+        "hp": (76, 118),
+        "atk": (11, 21),
+        "point": (95, 155),
+        "weight": 46,
         "emoji": "👺",
     },
     "도적 정찰병": {
-        "hp": (80, 120),
-        "atk": (12, 22),
-        "point": (85, 135),
-        "weight": 45,
+        "hp": (88, 132),
+        "atk": (13, 24),
+        "point": (110, 180),
+        "weight": 42,
         "emoji": "🗡️",
     },
 
-    # 중급: 철~은 장비부터 안정권. 수리/제련 비용을 감당하기 시작하는 구간
+    # 중급: 구리~철 장비부터 안정권. 녹슨검으로는 음식 없이 연전이 어려운 구간
     "스켈레톤": {
-        "hp": (90, 140),
-        "atk": (14, 24),
-        "point": (110, 170),
-        "weight": 42,
+        "hp": (105, 155),
+        "atk": (15, 27),
+        "point": (145, 220),
+        "weight": 36,
         "emoji": "💀",
     },
     "좀비 병사": {
-        "hp": (105, 160),
-        "atk": (15, 27),
-        "point": (130, 200),
-        "weight": 38,
+        "hp": (120, 175),
+        "atk": (17, 30),
+        "point": (170, 250),
+        "weight": 33,
         "emoji": "🧟",
     },
     "하이에나 무리": {
-        "hp": (115, 175),
-        "atk": (17, 30),
-        "point": (150, 230),
-        "weight": 35,
+        "hp": (135, 195),
+        "atk": (19, 33),
+        "point": (200, 300),
+        "weight": 30,
         "emoji": "🐾",
     },
     "오크": {
-        "hp": (130, 200),
-        "atk": (19, 33),
-        "point": (180, 270),
-        "weight": 32,
+        "hp": (155, 225),
+        "atk": (22, 38),
+        "point": (240, 360),
+        "weight": 27,
         "emoji": "🧌",
     },
     "늪지 악어": {
-        "hp": (150, 230),
-        "atk": (21, 36),
-        "point": (220, 320),
-        "weight": 30,
+        "hp": (180, 260),
+        "atk": (25, 42),
+        "point": (290, 430),
+        "weight": 24,
         "emoji": "🐊",
     },
     "광산 박쥐왕": {
-        "hp": (160, 240),
-        "atk": (22, 38),
-        "point": (240, 350),
-        "weight": 28,
+        "hp": (195, 280),
+        "atk": (27, 45),
+        "point": (330, 480),
+        "weight": 22,
         "emoji": "🦇",
     },
     "트롤": {
-        "hp": (190, 290),
-        "atk": (25, 43),
-        "point": (300, 430),
-        "weight": 25,
+        "hp": (230, 330),
+        "atk": (31, 52),
+        "point": (420, 600),
+        "weight": 19,
         "emoji": "👹",
     },
     "사이클롭스": {
-        "hp": (230, 340),
-        "atk": (27, 48),
-        "point": (380, 520),
-        "weight": 22,
+        "hp": (270, 380),
+        "atk": (35, 58),
+        "point": (520, 720),
+        "weight": 16,
         "emoji": "👁️",
     },
     "갑옷 골렘": {
-        "hp": (270, 390),
-        "atk": (30, 52),
-        "point": (460, 620),
-        "weight": 20,
+        "hp": (320, 450),
+        "atk": (38, 64),
+        "point": (640, 860),
+        "weight": 14,
         "emoji": "🗿",
     },
     "저주받은 나무정령": {
-        "hp": (300, 430),
-        "atk": (32, 55),
-        "point": (540, 700),
-        "weight": 18,
+        "hp": (360, 500),
+        "atk": (42, 70),
+        "point": (760, 980),
+        "weight": 12,
         "emoji": "🌲",
     },
 
-    # 상급: 전체 약 5% 전후. 다이아~비브라늄 장비와 음식 소모를 전제로 한 구간
+    # 상급: 다이아~비브라늄 장비와 음식 소모를 전제로 한 구간
     "암흑 기사": {
-        "hp": (400, 550),
-        "atk": (42, 68),
-        "point": (850, 1100),
-        "weight": 16,
+        "hp": (460, 640),
+        "atk": (52, 84),
+        "point": (1050, 1400),
+        "weight": 7,
         "emoji": "🛡️",
     },
     "저주받은 기사단장": {
-        "hp": (460, 620),
-        "atk": (45, 72),
-        "point": (1000, 1300),
-        "weight": 13,
+        "hp": (540, 740),
+        "atk": (58, 92),
+        "point": (1250, 1650),
+        "weight": 6,
         "emoji": "⚔️",
     },
     "미믹": {
-        "hp": (360, 520),
-        "atk": (38, 78),
-        "point": (1050, 1350),
-        "weight": 12,
+        "hp": (420, 620),
+        "atk": (48, 96),
+        "point": (1300, 1750),
+        "weight": 5,
         "emoji": "🎁",
     },
     "와이번": {
-        "hp": (540, 760),
-        "atk": (52, 82),
-        "point": (1250, 1600),
-        "weight": 10,
+        "hp": (640, 900),
+        "atk": (68, 108),
+        "point": (1650, 2200),
+        "weight": 4,
         "emoji": "🐉",
     },
     "만티코어": {
-        "hp": (600, 850),
-        "atk": (58, 90),
-        "point": (1500, 1900),
-        "weight": 8,
+        "hp": (720, 1000),
+        "atk": (74, 118),
+        "point": (1950, 2600),
+        "weight": 3,
         "emoji": "🦂",
     },
     "심연의 사제": {
-        "hp": (650, 900),
-        "atk": (62, 95),
-        "point": (1750, 2200),
-        "weight": 7,
+        "hp": (780, 1100),
+        "atk": (80, 130),
+        "point": (2300, 3000),
+        "weight": 3,
         "emoji": "🔮",
     },
 
-    # 희귀: 전체 약 1% 이하. 큰 보상, 큰 소모
+    # 희귀: 큰 보상, 큰 소모. 후반 장비/음식 없으면 위험
     "황금 슬라임": {
-        "hp": (100, 180),
-        "atk": (18, 35),
-        "point": (1800, 2300),
+        "hp": (120, 220),
+        "atk": (22, 42),
+        "point": (1800, 2400),
         "weight": 1,
         "emoji": "✨",
     },
     "보물 고블린": {
-        "hp": (220, 340),
-        "atk": (28, 48),
-        "point": (2400, 3000),
+        "hp": (260, 420),
+        "atk": (34, 58),
+        "point": (2500, 3300),
         "weight": 1,
         "emoji": "💰",
     },
     "리치": {
-        "hp": (750, 1050),
-        "atk": (72, 112),
-        "point": (3600, 4500),
-        "weight": 3,
+        "hp": (900, 1250),
+        "atk": (92, 145),
+        "point": (4200, 5200),
+        "weight": 2,
         "emoji": "🧙",
     },
     "고대 드래곤": {
-        "hp": (1000, 1500),
-        "atk": (90, 140),
-        "point": (5500, 7000),
-        "weight": 2,
+        "hp": (1250, 1700),
+        "atk": (115, 175),
+        "point": (6200, 7800),
+        "weight": 1,
         "emoji": "🐲",
     },
     "심연의 군주": {
-        "hp": (1500, 1700),
-        "atk": (100, 155),
-        "point": (7500, 9000),
-        "weight": 2,
+        "hp": (1700, 2200),
+        "atk": (135, 200),
+        "point": (8200, 10000),
+        "weight": 1,
         "emoji": "👑",
     },
 }
-
 
 def roll_monster():
     total_weight = sum(monster["weight"] for monster in MONSTERS.values())
@@ -607,13 +718,20 @@ class HuntView(discord.ui.View):
             log += "\n\n" + "\n".join(durability_messages)
 
         if self.player_hp <= 0:
-            self.player_hp = 1
+            self.player_hp = 0
+
+            death_penalty_text = await apply_death_penalty(
+                self.user_id,
+                self.weapon_name,
+                self.armor_name,
+            )
 
             result_text = (
                 f"☠ **전투 패배**\n\n"
                 f"{self.monster['emoji']} `{self.monster['name']}` 에게 패배했습니다.\n"
-                f"간신히 도망쳐 체력이 `1` 남았습니다.\n"
-                f"획득 보상은 없습니다."
+                f"체력이 `0` 이 되어 사망 상태가 되었습니다.\n"
+                f"획득 보상은 없습니다.\n\n"
+                f"{death_penalty_text}"
             )
 
             if durability_messages:
@@ -713,12 +831,19 @@ class HuntView(discord.ui.View):
         self.player_hp -= monster_damage
 
         if self.player_hp <= 0:
-            self.player_hp = 1
+            self.player_hp = 0
+
+            death_penalty_text = await apply_death_penalty(
+                self.user_id,
+                self.weapon_name,
+                self.armor_name,
+            )
 
             result_text = (
                 f"☠ **도망 실패**\n\n"
                 f"도망치다 `{self.monster['name']}` 에게 당했습니다.\n"
-                f"체력이 `1` 남았습니다."
+                f"체력이 `0` 이 되어 사망 상태가 되었습니다.\n\n"
+                f"{death_penalty_text}"
             )
 
             if durability_messages:
