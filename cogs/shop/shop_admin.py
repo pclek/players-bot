@@ -8,6 +8,139 @@ from utils.checks import is_bot_admin
 
 DB_PATH = "database/bot.db"
 
+ADVENTURE_ITEM_SEED_ROWS = [
+    # 낚시 재료
+    ("붕어", "낚시"),
+    ("고등어", "낚시"),
+    ("연어", "낚시"),
+    ("참치", "낚시"),
+    ("장어", "낚시"),
+    ("문어", "낚시"),
+    ("복어", "낚시"),
+    ("황금잉어", "낚시"),
+    ("심해어", "낚시"),
+    ("전설의심해어", "낚시"),
+
+    # 농사 재료
+    ("감자", "농사"),
+    ("옥수수", "농사"),
+    ("양파", "농사"),
+    ("마늘", "농사"),
+    ("허브", "농사"),
+    ("고추", "농사"),
+    ("당근", "농사"),
+    ("버섯", "농사"),
+    ("쌀", "농사"),
+    ("황금호박", "농사"),
+
+    # 광석/제련 재료
+    ("석탄", "광산"),
+    ("구리광석", "광산"),
+    ("철광석", "광산"),
+    ("은광석", "광산"),
+    ("금광석", "광산"),
+    ("미스릴광석", "광산"),
+    ("다이아원석", "광산"),
+    ("흑철광석", "광산"),
+    ("비브라늄원석", "광산"),
+    ("오리하르콘광석", "광산"),
+
+    ("구리주괴", "제련"),
+    ("철주괴", "제련"),
+    ("은주괴", "제련"),
+    ("금주괴", "제련"),
+    ("미스릴주괴", "제련"),
+    ("다이아결정", "제련"),
+    ("흑철주괴", "제련"),
+    ("비브라늄주괴", "제련"),
+    ("오리하르콘주괴", "제련"),
+
+    # 요리
+    ("구운감자", "요리"),
+    ("옥수수구이", "요리"),
+    ("버섯구이", "요리"),
+    ("붕어구이", "요리"),
+    ("고등어구이", "요리"),
+    ("허브감자", "요리"),
+    ("매운붕어찜", "요리"),
+    ("매운버섯볶음", "요리"),
+    ("당근스튜", "요리"),
+    ("장어구이", "요리"),
+    ("옥수수수프", "요리"),
+    ("야채볶음밥", "요리"),
+    ("모둠채소볶음", "요리"),
+    ("연어구이", "요리"),
+    ("참치구이", "요리"),
+    ("고등어스테이크", "요리"),
+    ("연어스테이크", "요리"),
+    ("문어숙회", "요리"),
+    ("문어볶음", "요리"),
+    ("참치스테이크", "요리"),
+    ("장어덮밥", "요리"),
+    ("참치피쉬앤칩스", "요리"),
+    ("복어탕", "요리"),
+    ("복어회정식", "요리"),
+    ("황금잉어찜", "요리"),
+    ("황금호박죽", "요리"),
+    ("심해어스튜", "요리"),
+    ("심해어만찬", "요리"),
+    ("전설의심해어만찬", "요리"),
+    ("황금정식", "요리"),
+
+    # 장비
+    ("녹슨검", "무기"),
+    ("구리검", "무기"),
+    ("철검", "무기"),
+    ("은검", "무기"),
+    ("금검", "무기"),
+    ("미스릴검", "무기"),
+    ("다이아검", "무기"),
+    ("흑철검", "무기"),
+    ("비브라늄검", "무기"),
+    ("오리하르콘검", "무기"),
+
+    ("철갑옷", "방어구"),
+    ("은갑옷", "방어구"),
+    ("금갑옷", "방어구"),
+    ("미스릴갑옷", "방어구"),
+    ("다이아갑옷", "방어구"),
+    ("흑철갑옷", "방어구"),
+    ("비브라늄갑옷", "방어구"),
+    ("오리하르콘갑옷", "방어구"),
+
+    # 기타 모험상품
+    ("랜덤미끼", "기타"),
+    ("랜덤씨앗", "기타"),
+]
+
+
+async def ensure_adventure_item_catalog():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS adventure_items (
+            name TEXT PRIMARY KEY,
+            category TEXT
+        )
+        """)
+
+        for name, category in ADVENTURE_ITEM_SEED_ROWS:
+            await db.execute("""
+            INSERT INTO adventure_items (
+                name,
+                category
+            )
+            VALUES (?, ?)
+            ON CONFLICT(name)
+            DO UPDATE SET category = excluded.category
+            """, (
+                name,
+                category,
+            ))
+
+        await db.commit()
+
+
+
 
 def make_shop_admin_embed():
     return discord.Embed(
@@ -252,6 +385,8 @@ class AdventureShopCategorySelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         category = self.values[0]
+
+        await ensure_adventure_item_catalog()
 
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute(
@@ -864,6 +999,8 @@ class ShopAdminMenuSelect(discord.ui.Select):
             return
 
         if selected == "adventure_add":
+            await ensure_adventure_item_catalog()
+
             async with aiosqlite.connect(DB_PATH) as db:
                 async with db.execute("""
                 SELECT DISTINCT category
