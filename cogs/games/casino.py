@@ -579,12 +579,13 @@ class PokerBetButton(discord.ui.Button):
         )
 
         table_message = await interaction.channel.send(embed=game.make_table_embed())
+        game.table_message = table_message
+
         reaction_message = await interaction.channel.send(
             embed=game.make_reaction_embed(
                 f"{interaction.user.mention} 님의 포커 게임이 시작되었습니다.\n"
                 "프리플랍입니다. 체크하면 플랍 카드 3장이 공개됩니다."
-            ),
-            view=PokerGameView(game, None),
+            )
         )
 
         view = PokerGameView(game, table_message)
@@ -957,7 +958,7 @@ class PokerGameView(discord.ui.View):
     def __init__(self, game: PokerGame, table_message: discord.Message | None):
         super().__init__(timeout=300)
         self.game = game
-        self.table_message = table_message
+        self.table_message = table_message or getattr(game, "table_message", None)
         self.refresh_buttons()
 
     def refresh_buttons(self):
@@ -1031,8 +1032,9 @@ class PokerBetAndRevealButton(discord.ui.Button):
 
         view.refresh_buttons()
 
-        if view.table_message:
-            await view.table_message.edit(embed=game.make_table_embed())
+        table_message = view.table_message or getattr(game, "table_message", None)
+        if table_message:
+            await table_message.edit(embed=game.make_table_embed())
 
         await interaction.response.edit_message(
             embed=game.make_reaction_embed(result_text),
@@ -1063,8 +1065,9 @@ class PokerAddBetButton(discord.ui.Button):
 
         view.refresh_buttons()
 
-        if view.table_message:
-            await view.table_message.edit(embed=game.make_table_embed())
+        table_message = view.table_message or getattr(game, "table_message", None)
+        if table_message:
+            await table_message.edit(embed=game.make_table_embed())
 
         stage_key = {
             0: "preflop",
@@ -1116,8 +1119,9 @@ class PokerActionButton(discord.ui.Button):
 
         view.refresh_buttons()
 
-        if view.table_message:
-            await view.table_message.edit(
+        table_message = view.table_message or getattr(game, "table_message", None)
+        if table_message:
+            await table_message.edit(
                 embed=game.make_table_embed()
             )
 
