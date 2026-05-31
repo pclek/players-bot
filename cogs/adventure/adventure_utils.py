@@ -4,42 +4,46 @@ from datetime import datetime, timedelta, timezone
 DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
 
-WEAPON_NAMES = [
-    "녹슨검",
-    "구리검",
-    "철검",
-    "은검",
-    "금검",
-    "다이아검",
-    "비브라늄검",
-]
+WEAPON_NAMES = ['녹슨검', '구리검', '철검', '은검', '금검', '미스릴검', '다이아검', '흑철검', '비브라늄검', '오리하르콘검']
 
-ARMOR_NAMES = [
-    "철갑옷",
-    "은갑옷",
-    "금갑옷",
-    "다이아갑옷",
-    "비브라늄갑옷",
-]
+ARMOR_NAMES = ['철갑옷', '은갑옷', '금갑옷', '미스릴갑옷', '다이아갑옷', '흑철갑옷', '비브라늄갑옷', '오리하르콘갑옷']
 
 EQUIPMENT_NAMES = WEAPON_NAMES + ARMOR_NAMES
 
-EQUIPMENT_MAX_DURABILITY = {
-    "녹슨검": 999999,
+EQUIPMENT_MAX_DURABILITY = {'녹슨검': 999999, '구리검': 90, '철검': 110, '은검': 130, '금검': 155, '미스릴검': 185, '다이아검': 220, '흑철검': 260, '비브라늄검': 310, '오리하르콘검': 380, '철갑옷': 130, '은갑옷': 155, '금갑옷': 185, '미스릴갑옷': 225, '다이아갑옷': 270, '흑철갑옷': 320, '비브라늄갑옷': 380, '오리하르콘갑옷': 460}
 
-    "구리검": 80,
-    "철검": 100,
-    "은검": 120,
-    "금검": 140,
-    "다이아검": 180,
-    "비브라늄검": 250,
 
-    "철갑옷": 120,
-    "은갑옷": 150,
-    "금갑옷": 180,
-    "다이아갑옷": 220,
-    "비브라늄갑옷": 300,
-}
+LEVEL_HP_BONUS = 5
+LEVEL_ATTACK_BONUS = 1
+BASE_MAX_HP = 100
+
+
+async def get_user_level(user_id: int) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            async with db.execute("""
+            SELECT level
+            FROM users
+            WHERE user_id = ?
+            """, (user_id,)) as cursor:
+                row = await cursor.fetchone()
+        except aiosqlite.OperationalError:
+            return 1
+
+    if not row or row[0] is None:
+        return 1
+
+    return max(1, int(row[0]))
+
+
+async def get_user_max_hp(user_id: int) -> int:
+    level = await get_user_level(user_id)
+    return BASE_MAX_HP + ((level - 1) * LEVEL_HP_BONUS)
+
+
+async def get_user_attack_bonus(user_id: int) -> int:
+    level = await get_user_level(user_id)
+    return (level - 1) * LEVEL_ATTACK_BONUS
 
 
 async def ensure_equipment_schema():
@@ -345,7 +349,8 @@ async def get_adventure_profile(user_id: int):
 async def set_user_hp(user_id: int, hp: int):
     await ensure_adventure_profile(user_id)
 
-    hp = max(0, min(100, hp))
+    max_hp = await get_user_max_hp(user_id)
+    hp = max(0, min(max_hp, hp))
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
@@ -641,6 +646,9 @@ async def get_user_dead_until(user_id: int):
 async def clear_user_death_if_expired(user_id: int):
     await ensure_adventure_profile(user_id)
 
+    max_hp = await get_user_max_hp(user_id)
+    revive_hp = max(30, int(max_hp * 0.3))
+
     dead_until = await get_user_dead_until(user_id)
 
     if not dead_until:
@@ -661,11 +669,11 @@ async def clear_user_death_if_expired(user_id: int):
         UPDATE adventure_profiles
         SET dead_until = NULL,
             current_hp = CASE
-                WHEN current_hp <= 0 THEN 30
+                WHEN current_hp <= 0 THEN ?
                 ELSE current_hp
             END
         WHERE user_id = ?
-        """, (user_id,))
+        """, (revive_hp, user_id))
 
         await db.commit()
 

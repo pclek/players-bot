@@ -20,6 +20,10 @@ from cogs.adventure.adventure_utils import (
     is_user_dead,
     format_dead_until,
     get_equipped_equipment,
+    get_user_level,
+    get_user_max_hp,
+    get_user_attack_bonus,
+    EQUIPMENT_NAMES,
 )
 
 from cogs.adventure.hunting import HuntView, ARMOR_SHIELDS
@@ -110,10 +114,13 @@ async def settle_adventure_result(user_id: int, job_type: str, member=None):
 
     profile = await get_adventure_profile(user_id)
     current_hp = profile[0] if profile else 100
+    user_level = await get_user_level(user_id)
+    max_hp = await get_user_max_hp(user_id)
 
     result_type, result_message, item_name, amount, weight = roll_adventure_result(
         job_type,
         current_hp,
+        user_level,
     )
 
     async with aiosqlite.connect(DB_PATH) as db:
@@ -133,7 +140,7 @@ async def settle_adventure_result(user_id: int, job_type: str, member=None):
     elif result_type == "hp":
         new_hp = max(1, current_hp - amount)
         await set_user_hp(user_id, new_hp)
-        reward_text = f"\n\n현재 체력 : `{new_hp}/100`"
+        reward_text = f"\n\n현재 체력 : `{new_hp}/{max_hp}`"
 
     user_text = member.mention if member else f"<@{user_id}>"
 
@@ -288,12 +295,19 @@ class AdventureSelect(discord.ui.Select):
                     if durability <= 0:
                         shield = shield // 2
 
+            max_hp = await get_user_max_hp(user_id)
+            attack_bonus = await get_user_attack_bonus(user_id)
+            user_level = await get_user_level(user_id)
+
             view = HuntView(
                 user_id=user_id,
                 player_hp=current_hp,
                 shield=shield,
                 weapon_name=weapon_name,
                 armor_name=armor_name,
+                max_hp=max_hp,
+                attack_bonus=attack_bonus,
+                player_level=user_level,
             )
 
             await interaction.edit_original_response(
@@ -325,20 +339,7 @@ class AdventureSelect(discord.ui.Select):
 
             equip_rows = [
                 row for row in rows
-                if row[0] in [
-                    "녹슨검",
-                    "구리검",
-                    "철검",
-                    "은검",
-                    "금검",
-                    "다이아검",
-                    "비브라늄검",
-                    "철갑옷",
-                    "은갑옷",
-                    "금갑옷",
-                    "다이아갑옷",
-                    "비브라늄갑옷",
-                ]
+                if row[0] in EQUIPMENT_NAMES
             ]
 
             if not equip_rows:
@@ -506,58 +507,132 @@ def get_job_name(job_type: str) -> str:
         return "장착"
     return "알 수 없음"
 
-def roll_adventure_result(job_type: str, current_hp: int):
+def roll_adventure_result(job_type: str, current_hp: int, user_level: int = 1):
     if job_type == "fishing":
         results = [
-            ("none", "🎣 빈 캔을 건졌습니다.\n환경보호에 기여했습니다. 보상은 없습니다.", None, 0, 10),
-            ("none", "🎣 미끼만 사라졌습니다.\n물고기들도 간식은 좋아하나 봅니다.", None, 0, 8),
-            ("none", "🫧 물방울만 올라왔습니다.\n기대감만 낚았습니다.", None, 0, 7),
-            ("none", "🐟 물고기가 찌만 톡 치고 도망갔습니다.\n상대가 한 수 위였습니다.", None, 0, 6),
-            ("none", "🪱 미끼가 너무 맛있었는지 미끼만 털렸습니다.", None, 0, 5),
-            ("none", "🪨 바닥에 걸렸습니다.\n낚싯줄만 고생했습니다.", None, 0, 4),
+            ("none", "🎣 빈 캔을 건졌습니다.\n환경보호에 기여했습니다. 보상은 없습니다.", None, 0, 45),
+            ("none", "🎣 미끼만 사라졌습니다.\n물고기들도 간식은 좋아하나 봅니다.", None, 0, 45),
+            ("none", "🫧 물방울만 올라왔습니다.\n기대감만 낚았습니다.", None, 0, 40),
+            ("none", "🐟 물고기가 찌만 톡 치고 도망갔습니다.\n상대가 한 수 위였습니다.", None, 0, 35),
+            ("none", "🪱 미끼가 너무 맛있었는지 미끼만 털렸습니다.", None, 0, 30),
+            ("none", "🪨 바닥에 걸렸습니다.\n낚싯줄만 고생했습니다.", None, 0, 30),
+            ("none", "🌊 파도만 실컷 구경했습니다.\n오늘 바다는 협조적이지 않습니다.", None, 0, 25),
 
-            ("item", "🐟 고등어를 낚았습니다!", "고등어", 1, 32),
-            ("item", "🐟 연어를 낚았습니다!", "연어", 1, 16),
-            ("item", "🐟 참치를 낚았습니다!", "참치", 1, 8),
-            ("item", "✨ 황금잉어를 낚았습니다!", "황금잉어", 1, 3),
-            ("item", "🌊 전설의심해어를 낚았습니다!", "전설의심해어", 1, 1),
+            ("item", "🐟 붕어를 낚았습니다!", "붕어", random.randint(1, 2), 180),
+            ("item", "🐟 고등어를 낚았습니다!", "고등어", random.randint(1, 2), 150),
+            ("item", "🐟 연어를 낚았습니다!", "연어", random.randint(1, 2), 120),
+            ("item", "🐟 참치를 낚았습니다!", "참치", random.randint(1, 2), 90),
+            ("item", "🐍 장어를 낚았습니다!", "장어", random.randint(1, 2), 70),
+            ("item", "🐙 문어를 낚았습니다!", "문어", random.randint(1, 2), 50),
+            ("item", "🐡 복어를 낚았습니다!", "복어", random.randint(1, 2), 40),
+            ("item", "✨ 황금잉어를 낚았습니다!", "황금잉어", 1, 20),
+            ("item", "🌊 심해어를 낚았습니다!", "심해어", 1, 10),
+            ("item", "🌌 전설의심해어를 낚았습니다!", "전설의심해어", 1, 5),
         ]
 
     elif job_type == "mining":
-        results = [
-            ("none", "💥 광산이 살짝 무너졌습니다.\n아무것도 얻지 못했습니다.", None, 0, 10),
-            ("none", "💥 크리퍼와 만나 도망쳤습니다.\n아무것도 얻지 못했습니다.", None, 0, 7),
-            ("none", "🪨 하루 종일 돌만 캤습니다.\n돌도 자원이라지만 오늘은 아닙니다.", None, 0, 7),
-            ("none", "🦇 박쥐 떼가 지나가 작업을 중단했습니다.", None, 0, 5),
-            ("none", "💨 먼지만 잔뜩 마셨습니다.\n성과는 없고 기침만 남았습니다.", None, 0, 4),
-            ("none", "💎 반짝이는 걸 발견했지만 그냥 유리 조각이었습니다.", None, 0, 4),
-            ("hp", "🤕 곡괭이질을 하다 허리를 삐끗했습니다.\nHP가 `2` 감소했습니다.", None, 2, 7),
-
-            ("item", "🪨 석탄을 캤습니다!", "석탄", 1, 24),
-            ("item", "🟤 구리광석을 캤습니다!", "구리광석", 1, 16),
-            ("item", "⚙️ 철광석을 캤습니다!", "철광석", 1, 9),
-            ("item", "🥈 은광석을 캤습니다!", "은광석", 1, 4),
-            ("item", "🥇 금광석을 캤습니다!", "금광석", 1, 2),
-            ("item", "💎 다이아원석을 발견했습니다!", "다이아원석", 1, 1),
+        fail_results_15 = [
+            ("none", "💥 광산이 살짝 무너졌습니다.\n아무것도 얻지 못했습니다.", None, 0, 4),
+            ("none", "💥 크리퍼와 만나 도망쳤습니다.\n아무것도 얻지 못했습니다.", None, 0, 3),
+            ("none", "🪨 하루 종일 돌만 캤습니다.\n돌도 자원이라지만 오늘은 아닙니다.", None, 0, 3),
+            ("none", "🦇 박쥐 떼가 지나가 작업을 중단했습니다.", None, 0, 2),
+            ("none", "💨 먼지만 잔뜩 마셨습니다.\n성과는 없고 기침만 남았습니다.", None, 0, 1),
+            ("none", "💎 반짝이는 걸 발견했지만 그냥 유리 조각이었습니다.", None, 0, 1),
         ]
 
-        if current_hp <= 5:
-            results = [r for r in results if r[0] != "hp"]
+        fail_results_10 = [
+            ("none", "💥 광산이 살짝 무너졌습니다.\n아무것도 얻지 못했습니다.", None, 0, 2),
+            ("none", "💥 크리퍼와 만나 도망쳤습니다.\n아무것도 얻지 못했습니다.", None, 0, 2),
+            ("none", "🪨 하루 종일 돌만 캤습니다.\n돌도 자원이라지만 오늘은 아닙니다.", None, 0, 2),
+            ("none", "🦇 박쥐 떼가 지나가 작업을 중단했습니다.", None, 0, 1),
+            ("none", "💨 먼지만 잔뜩 마셨습니다.\n성과는 없고 기침만 남았습니다.", None, 0, 1),
+            ("none", "💎 반짝이는 걸 발견했지만 그냥 유리 조각이었습니다.", None, 0, 1),
+        ]
+
+        # HP가 2 이하일 때는 HP 감소 이벤트 제외
+        if current_hp > 2:
+            fail_results_15.append(
+                ("hp", "🤕 곡괭이질을 하다 허리를 삐끗했습니다.\nHP가 `2` 감소했습니다.", None, 2, 1)
+            )
+            fail_results_10.append(
+                ("hp", "🤕 곡괭이질을 하다 허리를 삐끗했습니다.\nHP가 `2` 감소했습니다.", None, 2, 1)
+            )
+
+        if user_level >= 38:
+            results = fail_results_10 + [
+                ("item", "🪨 석탄을 캤습니다!", "석탄", random.randint(1, 3), 10),
+                ("item", "🟤 구리광석을 캤습니다!", "구리광석", random.randint(1, 2), 3),
+                ("item", "⚙️ 철광석을 캤습니다!", "철광석", random.randint(1, 2), 4),
+                ("item", "🥈 은광석을 캤습니다!", "은광석", random.randint(1, 2), 6),
+                ("item", "🥇 금광석을 캤습니다!", "금광석", random.randint(1, 2), 10),
+                ("item", "🔷 미스릴광석을 캤습니다!", "미스릴광석", 1, 14),
+                ("item", "💎 다이아원석을 발견했습니다!", "다이아원석", 1, 15),
+                ("item", "⚫ 흑철광석을 발견했습니다!", "흑철광석", 1, 18),
+                ("item", "🌈 오리하르콘광석을 발견했습니다!", "오리하르콘광석", 1, 10),
+            ]
+
+        elif user_level >= 28:
+            results = fail_results_15 + [
+                ("item", "🪨 석탄을 캤습니다!", "석탄", random.randint(1, 3), 18),
+                ("item", "🟤 구리광석을 캤습니다!", "구리광석", random.randint(1, 2), 6),
+                ("item", "⚙️ 철광석을 캤습니다!", "철광석", random.randint(1, 2), 10),
+                ("item", "🥈 은광석을 캤습니다!", "은광석", random.randint(1, 2), 14),
+                ("item", "🥇 금광석을 캤습니다!", "금광석", random.randint(1, 2), 18),
+                ("item", "🔷 미스릴광석을 캤습니다!", "미스릴광석", 1, 14),
+                ("item", "💎 다이아원석을 발견했습니다!", "다이아원석", 1, 4),
+                ("item", "⚫ 흑철광석을 발견했습니다!", "흑철광석", 1, 1),
+            ]
+
+        elif user_level >= 18:
+            results = fail_results_15 + [
+                ("item", "🪨 석탄을 캤습니다!", "석탄", random.randint(1, 3), 20),
+                ("item", "🟤 구리광석을 캤습니다!", "구리광석", random.randint(1, 2), 15),
+                ("item", "⚙️ 철광석을 캤습니다!", "철광석", random.randint(1, 2), 18),
+                ("item", "🥈 은광석을 캤습니다!", "은광석", random.randint(1, 2), 17),
+                ("item", "🥇 금광석을 캤습니다!", "금광석", random.randint(1, 2), 10),
+                ("item", "🔷 미스릴광석을 캤습니다!", "미스릴광석", 1, 4),
+                ("item", "💎 다이아원석을 발견했습니다!", "다이아원석", 1, 1),
+            ]
+
+        elif user_level >= 10:
+            results = fail_results_15 + [
+                ("item", "🪨 석탄을 캤습니다!", "석탄", random.randint(1, 3), 22),
+                ("item", "🟤 구리광석을 캤습니다!", "구리광석", random.randint(1, 2), 25),
+                ("item", "⚙️ 철광석을 캤습니다!", "철광석", random.randint(1, 2), 22),
+                ("item", "🥈 은광석을 캤습니다!", "은광석", random.randint(1, 2), 11),
+                ("item", "🥇 금광석을 캤습니다!", "금광석", random.randint(1, 2), 4),
+                ("item", "🔷 미스릴광석을 캤습니다!", "미스릴광석", 1, 1),
+            ]
+
+        else:
+            results = fail_results_15 + [
+                ("item", "🪨 석탄을 캤습니다!", "석탄", random.randint(1, 3), 25),
+                ("item", "🟤 구리광석을 캤습니다!", "구리광석", random.randint(1, 2), 35),
+                ("item", "⚙️ 철광석을 캤습니다!", "철광석", random.randint(1, 2), 18),
+                ("item", "🥈 은광석을 캤습니다!", "은광석", random.randint(1, 2), 5),
+                ("item", "🥇 금광석을 캤습니다!", "금광석", random.randint(1, 2), 2),
+            ]
 
     else:
         results = [
-            ("none", "🐗 멧돼지가 작물을 야무지게 먹고 떠났습니다.\n수확에 실패했습니다.", None, 0, 9),
-            ("none", "🥀 흉작이 들었습니다.\n아무것도 얻지 못했습니다.", None, 0, 7),
-            ("none", "🐛 벌레들이 작물을 먼저 시식했습니다.\n후기는 남기지 않았습니다.", None, 0, 7),
-            ("none", "🌧 갑작스러운 비로 밭이 엉망이 되었습니다.", None, 0, 6),
-            ("none", "☀️ 햇빛이 너무 강했습니다.\n작물이 말라버렸습니다.", None, 0, 5),
-            ("none", "🐦 새들이 씨앗을 전부 물고 갔습니다.", None, 0, 4),
-            ("none", "🥕 뭔가 자랐지만 너무 작아서 다시 묻어줬습니다.", None, 0, 2),
+            ("none", "🐗 멧돼지가 작물을 야무지게 먹고 떠났습니다.\n수확에 실패했습니다.", None, 0, 45),
+            ("none", "🥀 흉작이 들었습니다.\n아무것도 얻지 못했습니다.", None, 0, 40),
+            ("none", "🐛 벌레들이 작물을 먼저 시식했습니다.\n후기는 남기지 않았습니다.", None, 0, 40),
+            ("none", "🌧 갑작스러운 비로 밭이 엉망이 되었습니다.", None, 0, 35),
+            ("none", "☀️ 햇빛이 너무 강했습니다.\n작물이 말라버렸습니다.", None, 0, 35),
+            ("none", "🐦 새들이 씨앗을 전부 물고 갔습니다.", None, 0, 30),
+            ("none", "🥕 뭔가 자랐지만 너무 작아서 다시 묻어줬습니다.", None, 0, 25),
 
-            ("item", "🥔 감자를 수확했습니다!", "감자", 2, 27),
-            ("item", "🌾 밀을 수확했습니다!", "밀", 2, 23),
-            ("item", "🌿 허브를 수확했습니다!", "허브", 1, 8),
-            ("item", "✨ 황금감자를 수확했습니다!", "황금감자", 1, 2),
+            ("item", "🥔 감자를 수확했습니다!", "감자", random.randint(2, 4), 180),
+            ("item", "🌽 옥수수를 수확했습니다!", "옥수수", random.randint(2, 4), 160),
+            ("item", "🧅 양파를 수확했습니다!", "양파", random.randint(2, 4), 140),
+            ("item", "🧄 마늘을 수확했습니다!", "마늘", random.randint(2, 4), 120),
+            ("item", "🌿 허브를 수확했습니다!", "허브", random.randint(2, 4), 100),
+            ("item", "🌶 고추를 수확했습니다!", "고추", random.randint(2, 4), 80),
+            ("item", "🥕 당근을 수확했습니다!", "당근", random.randint(2, 4), 70),
+            ("item", "🍄 버섯을 수확했습니다!", "버섯", random.randint(2, 4), 60),
+            ("item", "🍚 쌀을 수확했습니다!", "쌀", random.randint(2, 4), 40),
+            ("item", "✨ 황금호박을 수확했습니다!", "황금호박", random.randint(1, 2), 10),
         ]
 
     total_weight = sum(result[4] for result in results)
@@ -569,8 +644,7 @@ def roll_adventure_result(job_type: str, current_hp: int):
         if pick <= current:
             return result
 
-    return results[0]
-
+    return results[-1]
 
 class Adventure(commands.Cog):
     def __init__(self, bot: commands.Bot):

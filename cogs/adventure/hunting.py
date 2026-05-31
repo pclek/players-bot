@@ -13,6 +13,9 @@ from cogs.adventure.adventure_utils import (
     get_adventure_item_count,
     remove_adventure_item,
     decrease_equipped_durability,
+    get_user_attack_bonus,
+    get_user_max_hp,
+    get_user_level,
 )
 
 DB_PATH = "database/bot.db"
@@ -23,22 +26,7 @@ DEATH_POINT_LOSS_RATE = 0.10
 DEATH_DURABILITY_LOSS_RATE = 0.10
 DEATH_MIN_DURABILITY_LOSS = 5
 
-EQUIPMENT_MAX_DURABILITY = {
-    "녹슨검": 999999,
-
-    "구리검": 80,
-    "철검": 100,
-    "은검": 120,
-    "금검": 140,
-    "다이아검": 180,
-    "비브라늄검": 250,
-
-    "철갑옷": 120,
-    "은갑옷": 150,
-    "금갑옷": 180,
-    "다이아갑옷": 220,
-    "비브라늄갑옷": 300,
-}
+EQUIPMENT_MAX_DURABILITY = {'녹슨검': 999999, '구리검': 90, '철검': 110, '은검': 130, '금검': 155, '미스릴검': 185, '다이아검': 220, '흑철검': 260, '비브라늄검': 310, '오리하르콘검': 380, '철갑옷': 130, '은갑옷': 155, '금갑옷': 185, '미스릴갑옷': 225, '다이아갑옷': 270, '흑철갑옷': 320, '비브라늄갑옷': 380, '오리하르콘갑옷': 460}
 
 
 async def apply_death_penalty(user_id: int, weapon_name: str, armor_name: str):
@@ -129,26 +117,30 @@ async def apply_death_penalty(user_id: int, weapon_name: str, armor_name: str):
 
 
 WEAPON_STATS = {
-    # 기본 공격력 평균을 약 8~9로 올려 초반 사냥이 너무 답답하지 않게 조정
-    "녹슨검": (7, 10),
-    "구리검": (11, 16),
-    "철검": (16, 23),
-    "은검": (22, 31),
-    "금검": (30, 42),
-    "다이아검": (42, 60),
-    "비브라늄검": (60, 85),
+    "녹슨검": (8, 12),
+    "구리검": (14, 20),
+    "철검": (22, 30),
+    "은검": (32, 42),
+    "금검": (45, 60),
+    "미스릴검": (55, 75),
+    "다이아검": (68, 92),
+    "흑철검": (82, 112),
+    "비브라늄검": (98, 135),
+    "오리하르콘검": (120, 165),
 }
 
 
 ARMOR_SHIELDS = {
     "": 0,
     "없음": 0,
-    # 방어구는 초반 사망 방지용, 후반은 고위 몬스터 2~3턴 버티는 용도
-    "철갑옷": 35,
-    "은갑옷": 55,
-    "금갑옷": 80,
-    "다이아갑옷": 120,
-    "비브라늄갑옷": 180,
+    "철갑옷": 25,
+    "은갑옷": 40,
+    "금갑옷": 60,
+    "미스릴갑옷": 78,
+    "다이아갑옷": 95,
+    "흑철갑옷": 115,
+    "비브라늄갑옷": 140,
+    "오리하르콘갑옷": 180,
 }
 
 WEAPON_BREAK_RATES = {
@@ -170,24 +162,36 @@ ARMOR_DAMAGE_RATES = {
 }
 
 FOOD_HEALS = {
-    "고등어구이": 3,
-    "연어구이": 5,
-    "참치구이": 10,
-
-    "빵": 8,
-    "허브감자": 13,
-
-    "고등어스테이크": 10,
-    "연어스테이크": 15,
-    "참치스테이크": 25,
-
-    "고등어피쉬앤칩스": 15,
-    "연어피쉬앤칩스": 22,
-    "참치피쉬앤칩스": 35,
-
-    "황금잉어찜": 45,
-    "전설의심해어만찬": 80,
-    "황금정식": 999,
+    '구운감자': 25,
+    '옥수수구이': 25,
+    '버섯구이': 35,
+    '붕어구이': 30,
+    '고등어구이': 35,
+    '허브감자': 40,
+    '매운붕어찜': 70,
+    '매운버섯볶음': 70,
+    '당근스튜': 80,
+    '장어구이': 80,
+    '옥수수수프': 85,
+    '야채볶음밥': 85,
+    '모둠채소볶음': 95,
+    '연어구이': 50,
+    '참치구이': 65,
+    '고등어스테이크': 75,
+    '연어스테이크': 110,
+    '문어숙회': 120,
+    '문어볶음': 130,
+    '참치스테이크': 140,
+    '장어덮밥': 150,
+    '참치피쉬앤칩스': 160,
+    '복어탕': 170,
+    '복어회정식': 220,
+    '황금잉어찜': 240,
+    '황금호박죽': 250,
+    '심해어스튜': 280,
+    '심해어만찬': 350,
+    '전설의심해어만찬': 500,
+    '황금정식': 999999
 }
 
 MONSTERS = {
@@ -450,6 +454,42 @@ def roll_monster():
         "point_max": data["point"][1],
     }
 
+
+def get_monster_risk(monster: dict) -> str:
+    avg_hp = monster["max_hp"]
+    avg_atk = (monster["atk_min"] + monster["atk_max"]) / 2
+    danger_score = avg_hp * 0.12 + avg_atk
+
+    if monster["name"] in ["심연의 군주", "고대 드래곤"]:
+        return "재앙"
+    if monster["name"] in ["리치", "심연의 사제", "만티코어", "와이번"]:
+        return "매우위험"
+    if danger_score >= 95:
+        return "매우위험"
+    if danger_score >= 55:
+        return "위험"
+    if danger_score >= 25:
+        return "보통"
+    return "낮음"
+
+
+def get_monster_hp_bar(current_hp: int, max_hp: int) -> str:
+    if max_hp <= 0:
+        return "알 수 없음"
+
+    ratio = current_hp / max_hp
+
+    if ratio <= 0:
+        return "처치 직전"
+    if ratio <= 0.25:
+        return "빈사"
+    if ratio <= 0.5:
+        return "부상"
+    if ratio <= 0.75:
+        return "건재"
+    return "건강"
+
+
 class FoodSelect(discord.ui.Select):
     def __init__(self, hunt_view, food_rows):
         self.hunt_view = hunt_view
@@ -515,9 +555,9 @@ class FoodSelect(discord.ui.Select):
         before_hp = view.player_hp
 
         if heal_amount >= 999:
-            view.player_hp = 100
+            view.player_hp = view.max_hp
         else:
-            view.player_hp = min(100, view.player_hp + heal_amount)
+            view.player_hp = min(view.max_hp, view.player_hp + heal_amount)
 
         healed = view.player_hp - before_hp
 
@@ -545,6 +585,9 @@ class HuntView(discord.ui.View):
         shield: int,
         weapon_name: str,
         armor_name: str,
+        max_hp: int = 100,
+        attack_bonus: int = 0,
+        player_level: int = 1,
     ):
         super().__init__(timeout=180)
 
@@ -553,6 +596,9 @@ class HuntView(discord.ui.View):
         self.shield = shield
         self.weapon_name = weapon_name
         self.armor_name = armor_name
+        self.max_hp = max_hp
+        self.attack_bonus = attack_bonus
+        self.player_level = player_level
         self.battle_turns = 0
 
         self.monster = roll_monster()
@@ -567,15 +613,16 @@ class HuntView(discord.ui.View):
 
         desc = (
             f"{monster['emoji']} **{monster['name']}** 을(를) 만났습니다.\n\n"
-            f"❤️ 내 체력 : `{self.player_hp}`"
+            f"❤️ 내 체력 : `{self.player_hp}/{self.max_hp}`"
         )
 
         if self.shield > 0:
             desc += f"  🛡 실드 : `{self.shield}`"
 
         desc += (
-            f"\n⚔ 장착 무기 : `{self.weapon_name}`\n\n"
-            f"👹 몬스터 체력 : `{self.monster_hp} / {monster['max_hp']}`\n"
+            f"\n⚔ 장착 무기 : `{self.weapon_name}`  /  Lv.`{self.player_level}`\n\n"
+            f"👹 위험도 : `{get_monster_risk(monster)}`\n"
+            f"👹 몬스터 상태 : `{get_monster_hp_bar(self.monster_hp, monster['max_hp'])}`\n"
         )
 
         if message:
@@ -646,7 +693,10 @@ class HuntView(discord.ui.View):
         self.battle_turns += 1
 
         attack_min, attack_max = WEAPON_STATS.get(self.weapon_name, (1, 3))
-        player_damage = random.randint(attack_min, attack_max)
+        player_damage = random.randint(
+            attack_min + self.attack_bonus,
+            attack_max + self.attack_bonus,
+        )
 
         self.monster_hp -= player_damage
 

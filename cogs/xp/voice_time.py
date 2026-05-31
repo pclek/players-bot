@@ -10,12 +10,17 @@ DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
 
 VOICE_REWARD_SECONDS = 600
-VOICE_REWARD_POINTS = 5
+VOICE_REWARD_POINTS = 3
 VOICE_REWARD_XP = 10
 DAILY_VOICE_POINT_LIMIT = 500
+DAILY_VOICE_XP_LIMIT = 200
 
 def required_xp(level: int) -> int:
-    return int((level ** 2) * 4 + (level * 180))
+    return int(
+        80 +
+        (level * 35) +
+        ((level ** 2) * 6)
+    )
 
 def get_today_key() -> str:
     now = datetime.now(KST)
@@ -88,10 +93,16 @@ class VoiceTime(commands.Cog):
                 user_id INTEGER,
                 point_day TEXT,
                 earned_points INTEGER DEFAULT 0,
+                earned_xp INTEGER DEFAULT 0,
                 accumulated_seconds INTEGER DEFAULT 0,
                 PRIMARY KEY (user_id, point_day)
             )
             """)
+
+            try:
+                await db.execute("ALTER TABLE daily_voice_point_logs ADD COLUMN earned_xp INTEGER DEFAULT 0")
+            except aiosqlite.OperationalError:
+                pass
 
             await db.execute("""
             INSERT OR IGNORE INTO users (
@@ -105,9 +116,10 @@ class VoiceTime(commands.Cog):
                 user_id,
                 point_day,
                 earned_points,
+                earned_xp,
                 accumulated_seconds
             )
-            VALUES (?, ?, 0, 0)
+            VALUES (?, ?, 0, 0, 0)
             """, (
                 user_id,
                 today_key,
@@ -118,7 +130,7 @@ class VoiceTime(commands.Cog):
             new_accumulated_seconds = 0
 
             async with db.execute("""
-            SELECT earned_points, accumulated_seconds
+            SELECT earned_points, earned_xp, accumulated_seconds
             FROM daily_voice_point_logs
             WHERE user_id = ?
             AND point_day = ?
@@ -129,26 +141,30 @@ class VoiceTime(commands.Cog):
                 row = await cursor.fetchone()
 
             earned_points = row[0]
-            accumulated_seconds = row[1]
+            earned_xp = row[1]
+            accumulated_seconds = row[2]
 
             total_accumulated_seconds = accumulated_seconds + seconds
 
             if attended:
                 reward_units = total_accumulated_seconds // VOICE_REWARD_SECONDS
-                remaining_point_limit = DAILY_VOICE_POINT_LIMIT - earned_points
 
-                if remaining_point_limit > 0:
-                    payable_units = remaining_point_limit // VOICE_REWARD_POINTS
-                    actual_units = min(reward_units, payable_units)
+                remaining_point_limit = max(0, DAILY_VOICE_POINT_LIMIT - earned_points)
+                remaining_xp_limit = max(0, DAILY_VOICE_XP_LIMIT - earned_xp)
 
-                    reward_points = actual_units * VOICE_REWARD_POINTS
-                    reward_xp = actual_units * VOICE_REWARD_XP
+                point_units = remaining_point_limit // VOICE_REWARD_POINTS
+                xp_units = remaining_xp_limit // VOICE_REWARD_XP
 
-                    used_seconds = actual_units * VOICE_REWARD_SECONDS
+                actual_point_units = min(reward_units, point_units)
+                actual_xp_units = min(reward_units, xp_units)
 
-                    new_accumulated_seconds = total_accumulated_seconds - used_seconds
-                else:
-                    new_accumulated_seconds = total_accumulated_seconds
+                reward_points = actual_point_units * VOICE_REWARD_POINTS
+                reward_xp = actual_xp_units * VOICE_REWARD_XP
+
+                used_units = max(actual_point_units, actual_xp_units)
+                used_seconds = used_units * VOICE_REWARD_SECONDS
+
+                new_accumulated_seconds = total_accumulated_seconds - used_seconds
             else:
                 new_accumulated_seconds = total_accumulated_seconds
 
@@ -187,11 +203,13 @@ class VoiceTime(commands.Cog):
             await db.execute("""
             UPDATE daily_voice_point_logs
             SET earned_points = earned_points + ?,
+                earned_xp = earned_xp + ?,
                 accumulated_seconds = ?
             WHERE user_id = ?
             AND point_day = ?
             """, (
                 reward_points,
+                reward_xp,
                 new_accumulated_seconds,
                 user_id,
                 today_key,

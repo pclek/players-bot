@@ -4,7 +4,7 @@ from discord.ext import commands
 import aiosqlite
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from cogs.adventure.adventure_utils import get_adventure_profile, is_user_dead, format_dead_until
+from cogs.adventure.adventure_utils import get_adventure_profile, is_user_dead, format_dead_until, get_user_max_hp, get_user_attack_bonus
 
 DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
@@ -52,7 +52,11 @@ async def get_or_create_user(user_id: int):
 
 
 def required_xp(level: int) -> int:
-    return int((level ** 2) * 4 + (level * 180))
+    return int(
+        80 +
+        (level * 35) +
+        ((level ** 2) * 6)
+    )
 
 
 def progress_bar(current: int, required: int, size: int = 10) -> str:
@@ -67,44 +71,62 @@ def format_voice_time(seconds: int) -> str:
     return f"{hours}시간 {minutes}분"
 
 WEAPON_STATS = {
-    "녹슨검": (1, 3),
-    "구리검": (5, 8),
-    "철검": (8, 12),
-    "은검": (10, 15),
-    "금검": (12, 18),
-    "다이아검": (18, 26),
-    "비브라늄검": (25, 40),
+    "녹슨검": (8, 12),
+    "구리검": (14, 20),
+    "철검": (22, 30),
+    "은검": (32, 42),
+    "금검": (45, 60),
+    "미스릴검": (55, 75),
+    "다이아검": (68, 92),
+    "흑철검": (82, 112),
+    "비브라늄검": (98, 135),
+    "오리하르콘검": (120, 165),
 }
 
 ARMOR_SHIELDS = {
     "": 0,
     "없음": 0,
-    "철갑옷": 50,
-    "은갑옷": 70,
-    "금갑옷": 100,
-    "다이아갑옷": 150,
-    "비브라늄갑옷": 250,
+    "철갑옷": 25,
+    "은갑옷": 40,
+    "금갑옷": 60,
+    "미스릴갑옷": 78,
+    "다이아갑옷": 95,
+    "흑철갑옷": 115,
+    "비브라늄갑옷": 140,
+    "오리하르콘갑옷": 180,
 }
 
 FOOD_HEALS = {
-    "고등어구이": 3,
-    "연어구이": 5,
-    "참치구이": 10,
-
-    "빵": 8,
-    "허브감자": 13,
-
-    "고등어스테이크": 10,
-    "연어스테이크": 15,
-    "참치스테이크": 25,
-
-    "고등어피쉬앤칩스": 15,
-    "연어피쉬앤칩스": 22,
-    "참치피쉬앤칩스": 35,
-
-    "황금잉어찜": 45,
-    "전설의심해어만찬": 80,
-    "황금정식": 999,
+    "구운감자": 25,
+    "옥수수구이": 25,
+    "버섯구이": 35,
+    "붕어구이": 30,
+    "고등어구이": 35,
+    "허브감자": 40,
+    "매운붕어찜": 70,
+    "매운버섯볶음": 70,
+    "당근스튜": 80,
+    "장어구이": 80,
+    "옥수수수프": 85,
+    "야채볶음밥": 85,
+    "모둠채소볶음": 95,
+    "연어구이": 50,
+    "참치구이": 65,
+    "고등어스테이크": 75,
+    "연어스테이크": 110,
+    "문어숙회": 120,
+    "문어볶음": 130,
+    "참치스테이크": 140,
+    "장어덮밥": 150,
+    "참치피쉬앤칩스": 160,
+    "복어탕": 170,
+    "복어회정식": 220,
+    "황금잉어찜": 240,
+    "황금호박죽": 250,
+    "심해어스튜": 280,
+    "심해어만찬": 350,
+    "전설의심해어만찬": 500,
+    "황금정식": 999999,
 }
 
 async def get_level_rank(guild: discord.Guild, user_id: int):
@@ -132,7 +154,10 @@ async def make_profile_embed(member: discord.Member):
     adventure_profile = await get_adventure_profile(member.id)
     is_dead, dead_until = await is_user_dead(member.id)
 
-    current_hp = 100
+    max_hp = await get_user_max_hp(member.id)
+    attack_bonus = await get_user_attack_bonus(member.id)
+
+    current_hp = max_hp
     equipped_weapon = "녹슨검"
     equipped_armor = "없음"
 
@@ -142,6 +167,8 @@ async def make_profile_embed(member: discord.Member):
         equipped_armor = adventure_profile[2] or "없음"
 
     attack_min, attack_max = WEAPON_STATS.get(equipped_weapon, (1, 3))
+    attack_min += attack_bonus
+    attack_max += attack_bonus
     shield = ARMOR_SHIELDS.get(equipped_armor, 0)
 
     need_xp = required_xp(level)
@@ -212,7 +239,7 @@ async def make_profile_embed(member: discord.Member):
 
     embed.add_field(
         name="❤️ 체력",
-        value=f"`{current_hp}(+{shield})`",
+        value=f"`{current_hp}/{max_hp}`  🛡 `+{shield}`",
         inline=True,
     )
 
