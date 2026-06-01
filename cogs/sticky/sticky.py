@@ -925,6 +925,7 @@ class Sticky(commands.Cog):
                     view=view,
                 )
 
+
                 async with aiosqlite.connect(DB_PATH) as db:
                     await db.execute("""
                     UPDATE sticky_messages
