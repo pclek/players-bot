@@ -214,7 +214,7 @@ class RecruitPostView(discord.ui.View):
             color=discord.Color.blue(),
         )
 
-        await interaction.message.edit(embed=embed, view=None)
+        await interaction.message.edit(embed=embed, content="", view=None)
 
         await interaction.response.send_message(
             "✅ 모집을 시작 처리했습니다.", ephemeral=True
@@ -266,7 +266,7 @@ class RecruitPostView(discord.ui.View):
         embed.title = "🔒 모집 종료"
         embed.description = "이 모집은 종료되었습니다."
 
-        await interaction.message.edit(embed=embed, view=None)
+        await interaction.message.edit(embed=embed, content="", view=None)
         await interaction.response.send_message(
             "✅ 모집을 종료했습니다.", ephemeral=True
         )

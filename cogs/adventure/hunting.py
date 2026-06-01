@@ -434,6 +434,8 @@ def roll_monster():
             return {
                 "name": name,
                 "emoji": data["emoji"],
+                "hp_min": data["hp"][0],
+                "hp_max": data["hp"][1],
                 "max_hp": random.randint(*data["hp"]),
                 "atk_min": data["atk"][0],
                 "atk_max": data["atk"][1],
@@ -447,6 +449,8 @@ def roll_monster():
     return {
         "name": name,
         "emoji": data["emoji"],
+        "hp_min": data["hp"][0],
+        "hp_max": data["hp"][1],
         "max_hp": random.randint(*data["hp"]),
         "atk_min": data["atk"][0],
         "atk_max": data["atk"][1],
@@ -603,6 +607,7 @@ class HuntView(discord.ui.View):
 
         self.monster = roll_monster()
         self.monster_hp = self.monster["max_hp"]
+        self.monster_revealed = False
 
         self.search_count = 0
         self.escaped = False
@@ -622,8 +627,18 @@ class HuntView(discord.ui.View):
         desc += (
             f"\n⚔ 장착 무기 : `{self.weapon_name}`  /  Lv.`{self.player_level}`\n\n"
             f"👹 위험도 : `{get_monster_risk(monster)}`\n"
-            f"👹 몬스터 상태 : `{get_monster_hp_bar(self.monster_hp, monster['max_hp'])}`\n"
+            f"❤️ 몬스터 체력 예상 : `{monster['hp_min']} ~ {monster['hp_max']}`\n"
+            f"⚔ 몬스터 공격력 예상 : `{monster['atk_min']} ~ {monster['atk_max']}`\n"
         )
+
+        if self.monster_revealed:
+            desc += (
+                f"👹 실제 체력 : `{max(self.monster_hp, 0)}/{monster['max_hp']}`\n"
+            )
+        else:
+            desc += (
+                f"👹 몬스터 상태 : `{get_monster_hp_bar(self.monster_hp, monster['max_hp'])}`\n"
+            )
 
         if message:
             desc += f"\n{message}"
@@ -699,6 +714,7 @@ class HuntView(discord.ui.View):
         )
 
         self.monster_hp -= player_damage
+        self.monster_revealed = True
 
         durability_messages = []
 
@@ -928,6 +944,7 @@ class HuntView(discord.ui.View):
         self.search_count += 1
         self.monster = roll_monster()
         self.monster_hp = self.monster["max_hp"]
+        self.monster_revealed = False
 
         escape_chance = max(100 - (self.search_count * 30), 0)
 
