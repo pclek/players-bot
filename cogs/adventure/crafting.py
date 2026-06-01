@@ -9,6 +9,8 @@ from cogs.adventure.adventure_utils import (
     get_adventure_inventory,
 )
 
+from cogs.casino.casino import get_points, spend_points
+
 RECIPES = {
     "baked_potato": ("구운감자", {"감자": 2}, "체력 25 회복"),
     "grilled_corn": ("옥수수구이", {"옥수수": 2}, "체력 25 회복"),
@@ -45,6 +47,51 @@ RECIPES = {
     "golden_meal": ("황금정식", {"황금호박": 1, "황금잉어": 1, "전설의심해어": 1}, "전체 회복"),
 }
 
+COOKING_COSTS = {
+    # 초급 5P
+    "구운감자": 10,
+    "옥수수구이": 10,
+    "버섯구이": 10,
+    "붕어구이": 10,
+    "고등어구이": 10,
+    "허브감자": 10,
+
+    # 중급 10P
+    "매운붕어찜": 15,
+    "매운버섯볶음": 15,
+    "당근스튜": 15,
+    "장어구이": 15,
+    "옥수수수프": 15,
+    "야채볶음밥": 15,
+    "모둠채소볶음": 15,
+
+    # 고급 20P
+    "연어구이": 20,
+    "참치구이": 20,
+    "고등어스테이크": 20,
+    "연어스테이크": 20,
+    "문어숙회": 20,
+    "문어볶음": 20,
+    "참치스테이크": 20,
+    "장어덮밥": 20,
+    "참치피쉬앤칩스": 20,
+    "복어탕": 20,
+
+    # 희귀 40P
+    "복어회정식": 40,
+    "황금잉어찜": 40,
+    "황금호박죽": 40,
+    "심해어스튜": 40,
+    "심해어만찬": 40,
+
+    # 전설 100P
+    "전설의심해어만찬": 100,
+    "황금정식": 100,
+}
+
+
+def get_cooking_cost(food_name: str) -> int:
+    return COOKING_COSTS.get(food_name, 0)
 
 COOKING_MATERIALS = [
     "감자",
@@ -114,9 +161,11 @@ async def make_cooking_embed(user_id: int):
 
     for key in craftable_keys:
         result_name, materials, heal_text = RECIPES[key]
+        cooking_cost = get_cooking_cost(result_name)
+
         craftable_lines.append(
             f"🍽 **{result_name}**\n"
-            f"└ {material_text(materials)} / {heal_text}"
+            f"└ {material_text(materials)} / {heal_text} / 조리비 {cooking_cost}P"
         )
 
     embed = discord.Embed(
@@ -148,11 +197,12 @@ class CraftSelect(discord.ui.Select):
         for key in recipe_keys:
             result_name, materials, heal_text = RECIPES[key]
             material_info = material_text(materials)
+            cooking_cost = get_cooking_cost(result_name)
 
             options.append(
                 discord.SelectOption(
                     label=result_name[:100],
-                    description=f"{material_info} / {heal_text}"[:100],
+                    description=f"{material_info} / {heal_text} / {cooking_cost}P"[:100],
                     value=key,
                 )
             )
@@ -194,6 +244,18 @@ class CraftSelect(discord.ui.Select):
             return
 
         result_name, materials, heal_text = RECIPES[recipe_key]
+        cooking_cost = get_cooking_cost(result_name)
+
+        points = await get_points(user_id)
+
+        if points < cooking_cost:
+            await interaction.response.send_message(
+                f"❌ 포인트가 부족합니다.\n"
+                f"필요 포인트 : `{cooking_cost}P`\n"
+                f"현재 포인트 : `{points}P`",
+                ephemeral=True,
+            )
+            return
 
         missing = []
 
@@ -211,6 +273,19 @@ class CraftSelect(discord.ui.Select):
             )
             return
 
+        success = await spend_points(user_id, cooking_cost)
+
+        if not success:
+            points = await get_points(user_id)
+
+            await interaction.response.send_message(
+                f"❌ 포인트가 부족합니다.\n"
+                f"필요 포인트 : `{cooking_cost}P`\n"
+                f"현재 포인트 : `{points}P`",
+                ephemeral=True,
+            )
+            return
+
         for item_name, needed in materials.items():
             await remove_adventure_item(user_id, item_name, needed)
 
@@ -221,18 +296,25 @@ class CraftSelect(discord.ui.Select):
         embed = discord.Embed(
             title="🍳 요리 완료",
             description=(
+                f"👨‍🍳 {interaction.user.mention}\n\n"
                 f"제작 결과 : `{result_name} x1`\n"
                 f"사용 재료 : `{used_text}`\n"
+                f"조리비 : `{cooking_cost}P`\n"
                 f"효과 : `{heal_text}`"
             ),
             color=discord.Color.green(),
         )
 
         await interaction.response.edit_message(
-            embed=embed,
+            content="✅ 요리 완료",
+            embed=None,
             view=None,
         )
 
+        await interaction.channel.send(
+            embed=embed
+        )
+ 
 
 class CraftView(discord.ui.View):
     def __init__(self, recipe_keys):

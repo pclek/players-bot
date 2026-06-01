@@ -75,8 +75,8 @@ async def spend_points(user_id: int, amount: int) -> bool:
 
 
 SMELT_RECIPES = {
-    "copper_ingot": {"name": "구리주괴", "materials": {"구리광석": 3, "석탄": 1}, "cost": 5},
-    "iron_ingot": {"name": "철주괴", "materials": {"철광석": 3, "석탄": 1}, "cost": 10},
+    "copper_ingot": {"name": "구리주괴", "materials": {"구리광석": 3, "석탄": 1}, "cost": 10},
+    "iron_ingot": {"name": "철주괴", "materials": {"철광석": 3, "석탄": 1}, "cost": 15},
     "silver_ingot": {"name": "은주괴", "materials": {"은광석": 3, "석탄": 2}, "cost": 20},
     "gold_ingot": {"name": "금주괴", "materials": {"금광석": 3, "석탄": 2}, "cost": 35},
     "mithril_ingot": {"name": "미스릴주괴", "materials": {"미스릴광석": 3, "은주괴": 1, "석탄": 3}, "cost": 75},
@@ -338,7 +338,10 @@ class SmeltSelect(discord.ui.Select):
             color=discord.Color.orange(),
         )
 
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.edit_message(
+            embed=embed,
+            view=None,
+        )
 
 
 class EquipmentCraftSelect(discord.ui.Select):
@@ -416,7 +419,10 @@ class EquipmentCraftSelect(discord.ui.Select):
             color=discord.Color.green(),
         )
 
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.edit_message(
+            embed=embed,
+            view=None,
+        )
 
 
 class RepairSelect(discord.ui.Select):
@@ -556,7 +562,10 @@ class RepairSelect(discord.ui.Select):
                 inline=False,
             )
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.edit_message(
+            embed=embed,
+            view=None,
+        )
 
 
 class BlacksmithMenuSelect(discord.ui.Select):

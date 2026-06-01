@@ -105,7 +105,10 @@ class EquipSelect(discord.ui.Select):
             color=discord.Color.green(),
         )
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.edit_message(
+            embed=embed,
+            view=None,
+        )
 
 
 class EquipView(discord.ui.View):
