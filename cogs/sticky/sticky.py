@@ -22,6 +22,8 @@ BUTTON_ALIASES = {
     "attendance": "attendance",
     "모집": "recruit",
     "recruit": "recruit",
+    "매칭": "matching",
+    "matching": "matching"
 }
 
 BUTTON_LABELS = {
@@ -31,6 +33,7 @@ BUTTON_LABELS = {
     "shop": ("🏪 상점", discord.ButtonStyle.gray),
     "attendance": ("📅 출석", discord.ButtonStyle.green),
     "recruit": ("🎮 모집하기", discord.ButtonStyle.green),
+    "matching": ("⚔️ 매칭", discord.ButtonStyle.blurple),
 }
 
 COMMAND_NAME_BY_ACTION = {
@@ -39,6 +42,7 @@ COMMAND_NAME_BY_ACTION = {
     "inventory": "인벤토리",
     "shop": "상점",
     "attendance": "출석",
+    "matching": "매칭",
 }
 
 
