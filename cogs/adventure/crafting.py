@@ -9,7 +9,66 @@ from cogs.adventure.adventure_utils import (
     get_adventure_inventory,
 )
 
-from cogs.casino.casino import get_points, spend_points
+import aiosqlite
+
+DB_PATH = "database/bot.db"
+
+
+async def ensure_user_points(user_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        INSERT OR IGNORE INTO users (user_id)
+        VALUES (?)
+        """, (user_id,))
+        await db.commit()
+
+
+async def get_user_points(user_id: int) -> int:
+    await ensure_user_points(user_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT points
+        FROM users
+        WHERE user_id = ?
+        """, (user_id,)) as cursor:
+            row = await cursor.fetchone()
+
+    return row[0] if row else 0
+
+
+async def spend_user_points(user_id: int, amount: int) -> bool:
+    if amount <= 0:
+        return True
+
+    await ensure_user_points(user_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT points
+        FROM users
+        WHERE user_id = ?
+        """, (user_id,)) as cursor:
+            row = await cursor.fetchone()
+
+        points = row[0] if row else 0
+
+        if points < amount:
+            return False
+
+        await db.execute("""
+        UPDATE users
+        SET points = points - ?
+        WHERE user_id = ?
+        """, (
+            amount,
+            user_id,
+        ))
+
+        await db.commit()
+
+    return True
+
 
 RECIPES = {
     "baked_potato": ("구운감자", {"감자": 2}, "체력 25 회복"),
@@ -246,7 +305,7 @@ class CraftSelect(discord.ui.Select):
         result_name, materials, heal_text = RECIPES[recipe_key]
         cooking_cost = get_cooking_cost(result_name)
 
-        points = await get_points(user_id)
+        points = await get_user_points(user_id)
 
         if points < cooking_cost:
             await interaction.response.send_message(
@@ -273,10 +332,10 @@ class CraftSelect(discord.ui.Select):
             )
             return
 
-        success = await spend_points(user_id, cooking_cost)
+        success = await spend_user_points(user_id, cooking_cost)
 
         if not success:
-            points = await get_points(user_id)
+            points = await get_user_points(user_id)
 
             await interaction.response.send_message(
                 f"❌ 포인트가 부족합니다.\n"
