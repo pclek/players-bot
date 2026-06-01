@@ -57,17 +57,34 @@ def normalize_button_actions(raw_text: str | None, recruit_button: int = 0) -> s
         )
 
         for part in parts:
-            key = part.strip().lower()
+            value = part.strip()
 
-            if not key:
+            if not value:
                 continue
 
-            action = BUTTON_ALIASES.get(key)
+            lower_value = value.lower()
+
+            if ":" in value:
+                prefix, game_name = value.split(":", 1)
+                prefix = prefix.strip().lower()
+                game_name = game_name.strip()
+
+                if prefix in ["모집", "recruit"] and game_name:
+                    action = f"recruit:{game_name}"
+
+                    if action not in actions:
+                        actions.append(action)
+
+                    continue
+
+            action = BUTTON_ALIASES.get(lower_value)
 
             if action and action not in actions:
                 actions.append(action)
 
-    if recruit_button and "recruit" not in actions:
+    if recruit_button and "recruit" not in actions and not any(
+        action.startswith("recruit:") for action in actions
+    ):
         actions.append("recruit")
 
     return ",".join(actions[:5])
@@ -77,6 +94,17 @@ def parse_button_actions(raw_text: str | None, recruit_button: int = 0):
     normalized = normalize_button_actions(raw_text, recruit_button)
     return [action for action in normalized.split(",") if action]
 
+
+def get_button_label_and_style(action: str):
+    if action.startswith("recruit:"):
+        game_name = action.split(":", 1)[1].strip() or "모집"
+        return f"🎮 {game_name} 모집", discord.ButtonStyle.green
+
+    return BUTTON_LABELS.get(action, ("❓ 알 수 없음", discord.ButtonStyle.gray))
+
+
+def is_supported_action(action: str) -> bool:
+    return action in BUTTON_LABELS or action.startswith("recruit:")
 
 def make_sticky_embed(title: str, message: str):
     embed = discord.Embed(
@@ -142,7 +170,10 @@ async def invoke_app_command(interaction: discord.Interaction, command_name: str
             )
 
 
-async def create_recruit_from_sticky(interaction: discord.Interaction):
+async def create_recruit_from_sticky(
+    interaction: discord.Interaction,
+    selected_game_name: str | None = None,
+):
     await interaction.response.defer(ephemeral=True)
 
     try:
@@ -156,16 +187,31 @@ async def create_recruit_from_sticky(interaction: discord.Interaction):
         voice_channel = interaction.user.voice.channel
 
         async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute("""
-            SELECT game_name, role_id
-            FROM game_settings
-            WHERE recruit_channel_id = ?
-            """, (interaction.channel.id,)) as cursor:
-                game = await cursor.fetchone()
+            if selected_game_name:
+                async with db.execute("""
+                SELECT game_name, role_id, recruit_channel_id
+                FROM game_settings
+                WHERE game_name = ?
+                """, (selected_game_name,)) as cursor:
+                    game = await cursor.fetchone()
+            else:
+                # 기존 '모집' 버튼 호환용: 현재 채널을 모집채널로 쓰는 게임을 찾는다.
+                async with db.execute("""
+                SELECT game_name, role_id, recruit_channel_id
+                FROM game_settings
+                WHERE recruit_channel_id = ?
+                LIMIT 1
+                """, (interaction.channel.id,)) as cursor:
+                    game = await cursor.fetchone()
 
             if not game:
+                if selected_game_name:
+                    message = f"❌ `{selected_game_name}` 게임 설정을 찾을 수 없습니다."
+                else:
+                    message = "❌ 이 채널은 모집채널로 설정되지 않았습니다."
+
                 await interaction.followup.send(
-                    "❌ 이 채널은 모집채널로 설정되지 않았습니다.",
+                    message,
                     ephemeral=True,
                 )
                 return
@@ -184,8 +230,16 @@ async def create_recruit_from_sticky(interaction: discord.Interaction):
             )
             return
 
-        game_name, role_id = game
+        game_name, role_id, recruit_channel_id = game
         role = interaction.guild.get_role(role_id)
+        recruit_channel = interaction.guild.get_channel(recruit_channel_id)
+
+        if recruit_channel is None:
+            await interaction.followup.send(
+                "❌ 모집글을 올릴 채널을 찾을 수 없습니다. 게임관리 설정을 확인해주세요.",
+                ephemeral=True,
+            )
+            return
 
         embed = discord.Embed(
             title=f"🎮 {game_name} 모집",
@@ -201,7 +255,7 @@ async def create_recruit_from_sticky(interaction: discord.Interaction):
 
         content = role.mention if role else ""
 
-        message = await interaction.channel.send(
+        message = await recruit_channel.send(
             content=content,
             embed=embed,
             view=RecruitPostView(is_full=False),
@@ -221,7 +275,7 @@ async def create_recruit_from_sticky(interaction: discord.Interaction):
                 message.id,
                 game_name,
                 interaction.user.id,
-                interaction.channel.id,
+                recruit_channel.id,
                 voice_channel.id,
             ))
 
@@ -239,7 +293,7 @@ async def create_recruit_from_sticky(interaction: discord.Interaction):
             await db.commit()
 
         await interaction.followup.send(
-            "✅ 모집글을 생성했습니다.",
+            f"✅ `{game_name}` 모집글을 {recruit_channel.mention}에 생성했습니다.",
             ephemeral=True,
         )
 
@@ -254,7 +308,7 @@ async def create_recruit_from_sticky(interaction: discord.Interaction):
 
 class StickyActionButton(discord.ui.Button):
     def __init__(self, action: str):
-        label, style = BUTTON_LABELS[action]
+        label, style = get_button_label_and_style(action)
 
         super().__init__(
             label=label,
@@ -266,6 +320,11 @@ class StickyActionButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         if self.action == "recruit":
             await create_recruit_from_sticky(interaction)
+            return
+
+        if self.action.startswith("recruit:"):
+            game_name = self.action.split(":", 1)[1].strip()
+            await create_recruit_from_sticky(interaction, game_name)
             return
 
         command_name = COMMAND_NAME_BY_ACTION.get(self.action)
@@ -288,7 +347,7 @@ class StickyButtonView(discord.ui.View):
             button_actions = list(BUTTON_LABELS.keys())
 
         for action in button_actions[:5]:
-            if action in BUTTON_LABELS:
+            if is_supported_action(action):
                 self.add_item(StickyActionButton(action))
 
 
@@ -323,7 +382,7 @@ class StickyMessageModal(discord.ui.Modal):
 
         self.button_actions = discord.ui.TextInput(
             label="버튼 명령어",
-            placeholder="예: 모험,카지노,인벤토리 / 비우면 버튼 없음",
+            placeholder="예: 모험,카지노,인벤토리,모집:에이펙스 / 비우면 버튼 없음",
             required=False,
             max_length=100,
         )
@@ -418,7 +477,7 @@ class StickyEditModal(discord.ui.Modal):
 
         self.button_actions = discord.ui.TextInput(
             label="버튼 명령어",
-            placeholder="예: 모험,카지노,인벤토리 / 비우면 버튼 없음",
+            placeholder="예: 모험,카지노,인벤토리,모집:에이펙스 / 비우면 버튼 없음",
             required=False,
             max_length=100,
             default=default_actions,
@@ -791,7 +850,7 @@ async def edit_sticky_list(interaction: discord.Interaction):
             preview = preview[:80] + "..."
 
         actions = parse_button_actions(button_actions, recruit_button)
-        action_text = ", ".join(BUTTON_LABELS[action][0] for action in actions) if actions else "없음"
+        action_text = ", ".join(get_button_label_and_style(action)[0] for action in actions) if actions else "없음"
 
         lines.append(
             f"ㆍ{channel_text}\n"
@@ -924,7 +983,6 @@ class Sticky(commands.Cog):
                     embed=embed,
                     view=view,
                 )
-
 
                 async with aiosqlite.connect(DB_PATH) as db:
                     await db.execute("""

@@ -373,6 +373,8 @@ class GameMenuSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
+        await ensure_game_settings_schema()
+
         selected = self.values[0]
 
         if selected == "add":
@@ -457,12 +459,33 @@ class GameMenuView(discord.ui.View):
 
 
 async def send_game_list(interaction: discord.Interaction):
+    await ensure_game_settings_schema()
+
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("""
-        SELECT game_name, role_id, recruit_channel_id, tempvoice_creator_id, match_size, recruit_description
-        FROM game_settings
-        """) as cursor:
-            rows = await cursor.fetchall()
+        try:
+            async with db.execute("""
+            SELECT game_name, role_id, recruit_channel_id, tempvoice_creator_id, match_size, recruit_description
+            FROM game_settings
+            """) as cursor:
+                rows = await cursor.fetchall()
+        except aiosqlite.OperationalError:
+            async with db.execute("""
+            SELECT game_name, role_id, recruit_channel_id, tempvoice_creator_id, match_size
+            FROM game_settings
+            """) as cursor:
+                old_rows = await cursor.fetchall()
+
+            rows = [
+                (
+                    game_name,
+                    role_id,
+                    recruit_channel_id,
+                    tempvoice_creator_id,
+                    match_size,
+                    f"{game_name} 모집글을 생성합니다.",
+                )
+                for game_name, role_id, recruit_channel_id, tempvoice_creator_id, match_size in old_rows
+            ]
 
     if not rows:
         view = discord.ui.View(timeout=60)
@@ -484,13 +507,16 @@ async def send_game_list(interaction: discord.Interaction):
         recruit_channel = interaction.guild.get_channel(recruit_channel_id)
         tempvoice_channel = interaction.guild.get_channel(tempvoice_creator_id)
 
+        if not recruit_description:
+            recruit_description = f"{game_name} 모집글을 생성합니다."
+
         lines.append(
             f"🎮 **{game_name}**\n"
             f"역할: {role.mention if role else '삭제됨'}\n"
             f"모집채널: {recruit_channel.mention if recruit_channel else '삭제됨'}\n"
             f"생성기: {tempvoice_channel.mention if tempvoice_channel else '삭제됨'}\n"
             f"매칭 인원: `{match_size}명`\n"
-            f"모집 설명: `{recruit_description or f'{game_name} 모집글을 생성합니다.'}`"
+            f"모집 설명: `{recruit_description}`"
         )
 
     embed = discord.Embed(
