@@ -8,6 +8,19 @@ from utils.checks import is_bot_admin
 DB_PATH = "database/bot.db"
 
 
+async def ensure_game_settings_schema():
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            await db.execute("""
+            ALTER TABLE game_settings
+            ADD COLUMN recruit_description TEXT
+            """)
+        except aiosqlite.OperationalError:
+            pass
+
+        await db.commit()
+
+
 def make_game_settings_embed():
     return discord.Embed(
         title="🎮 게임 관리",
@@ -40,6 +53,7 @@ class GameNameModal(discord.ui.Modal):
         tempvoice_channel: discord.VoiceChannel,
         default_game_name: str = "",
         default_match_size: str = "",
+        default_recruit_description: str = "",
     ):
         super().__init__(title="게임 추가/수정")
 
@@ -63,11 +77,26 @@ class GameNameModal(discord.ui.Modal):
             default=default_match_size,
         )
 
+        self.recruit_description = discord.ui.TextInput(
+            label="모집 버튼 설명",
+            placeholder="예: 마블 라이벌즈 파티 모집글을 생성합니다.",
+            required=False,
+            max_length=100,
+            default=default_recruit_description,
+        )
+
         self.add_item(self.game_name)
         self.add_item(self.match_size)
+        self.add_item(self.recruit_description)
 
     async def on_submit(self, interaction: discord.Interaction):
+        await ensure_game_settings_schema()
+
         game_name = str(self.game_name.value).strip()
+        recruit_description = str(self.recruit_description.value).strip()
+
+        if not recruit_description:
+            recruit_description = f"{game_name} 모집글을 생성합니다."
 
         if not game_name:
             await interaction.response.send_message(
@@ -99,15 +128,17 @@ class GameNameModal(discord.ui.Modal):
                 role_id,
                 recruit_channel_id,
                 tempvoice_creator_id,
-                match_size
+                match_size,
+                recruit_description
             )
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?)
             """, (
                 game_name,
                 self.role.id,
                 self.recruit_channel.id,
                 self.tempvoice_channel.id,
                 match_size,
+                recruit_description,
             ))
 
             await db.commit()
@@ -116,7 +147,8 @@ class GameNameModal(discord.ui.Modal):
     역할: {self.role.mention}
     모집채널: {self.recruit_channel.mention}
     생성기: {self.tempvoice_channel.mention}
-    매칭 인원: `{match_size}명`"""
+    매칭 인원: `{match_size}명`
+    모집 설명: `{recruit_description}`"""
 
         await interaction.response.send_message(
             message,
@@ -138,14 +170,6 @@ class GameTempVoiceSelect(discord.ui.ChannelSelect):
 
     async def callback(self, interaction: discord.Interaction):
         tempvoice_channel = self.values[0]
-
-        try:
-            await interaction.message.delete()
-        except Exception:
-            try:
-                await interaction.delete_original_response()
-            except Exception:
-                pass
 
         await interaction.response.send_modal(
             GameNameModal(
@@ -279,7 +303,7 @@ class GameEditSelect(discord.ui.Select):
 
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("""
-            SELECT role_id, recruit_channel_id, tempvoice_creator_id, match_size
+            SELECT role_id, recruit_channel_id, tempvoice_creator_id, match_size, recruit_description
             FROM game_settings
             WHERE game_name = ?
             """, (game_name,)) as cursor:
@@ -292,7 +316,7 @@ class GameEditSelect(discord.ui.Select):
             )
             return
 
-        role_id, recruit_channel_id, tempvoice_creator_id, match_size = row
+        role_id, recruit_channel_id, tempvoice_creator_id, match_size, recruit_description = row
 
         role = interaction.guild.get_role(role_id)
         recruit_channel = interaction.guild.get_channel(recruit_channel_id)
@@ -305,14 +329,6 @@ class GameEditSelect(discord.ui.Select):
             )
             return
 
-        try:
-            await interaction.message.delete()
-        except Exception:
-            try:
-                await interaction.delete_original_response()
-            except Exception:
-                pass
-
         await interaction.response.send_modal(
             GameNameModal(
                 role,
@@ -320,6 +336,7 @@ class GameEditSelect(discord.ui.Select):
                 tempvoice_channel,
                 default_game_name=game_name,
                 default_match_size=str(match_size),
+                default_recruit_description=recruit_description or "",
             )
         )
 
@@ -442,7 +459,7 @@ class GameMenuView(discord.ui.View):
 async def send_game_list(interaction: discord.Interaction):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("""
-        SELECT game_name, role_id, recruit_channel_id, tempvoice_creator_id, match_size
+        SELECT game_name, role_id, recruit_channel_id, tempvoice_creator_id, match_size, recruit_description
         FROM game_settings
         """) as cursor:
             rows = await cursor.fetchall()
@@ -461,7 +478,7 @@ async def send_game_list(interaction: discord.Interaction):
     lines = []
 
     for row in rows:
-        game_name, role_id, recruit_channel_id, tempvoice_creator_id, match_size = row
+        game_name, role_id, recruit_channel_id, tempvoice_creator_id, match_size, recruit_description = row
 
         role = interaction.guild.get_role(role_id)
         recruit_channel = interaction.guild.get_channel(recruit_channel_id)
@@ -472,7 +489,8 @@ async def send_game_list(interaction: discord.Interaction):
             f"역할: {role.mention if role else '삭제됨'}\n"
             f"모집채널: {recruit_channel.mention if recruit_channel else '삭제됨'}\n"
             f"생성기: {tempvoice_channel.mention if tempvoice_channel else '삭제됨'}\n"
-            f"매칭 인원: `{match_size}명`"
+            f"매칭 인원: `{match_size}명`\n"
+            f"모집 설명: `{recruit_description or f'{game_name} 모집글을 생성합니다.'}`"
         )
 
     embed = discord.Embed(
@@ -495,10 +513,15 @@ class GameSettings(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    async def cog_load(self):
+        await ensure_game_settings_schema()
+
     @app_commands.command(
         name="게임관리", description="게임 모집/매칭 설정을 관리합니다."
     )
     async def game_settings(self, interaction: discord.Interaction):
+        await ensure_game_settings_schema()
+
         if not await is_bot_admin(interaction):
             await interaction.response.send_message(
                 "❌ 권한이 없습니다.",

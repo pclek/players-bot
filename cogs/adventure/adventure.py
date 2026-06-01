@@ -310,11 +310,18 @@ class AdventureSelect(discord.ui.Select):
                 player_level=user_level,
             )
 
-            await interaction.edit_original_response(
+            try:
+                await interaction.delete_original_response()
+            except:
+                pass
+
+            await interaction.channel.send(
                 embed=view.make_embed("전투를 시작합니다."),
                 view=view,
             )
+
             return
+
         
         if job_type == "crafting":
             embed, recipe_keys = await make_cooking_embed(user_id)
