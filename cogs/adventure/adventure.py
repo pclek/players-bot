@@ -1092,6 +1092,7 @@ class Adventure(commands.Cog):
         await interaction.response.send_message(
             embed=embed,
             view=AdventureView(),
+            ephemeral=True,
         )
 
 async def setup(bot: commands.Bot):

@@ -92,7 +92,7 @@ class EquipSelect(discord.ui.Select):
 
         if row:
             _, _, durability, max_durability, break_count, _ = row
-            durability_text = f"\n강화 수치 : `+{enhance_level}`\n내구도 : `{durability}/{max_durability}`"
+            durability_text = f"\n강화 : `+{enhance_level}`\n내구도 : `{durability}/{max_durability}`"
 
             if break_count > 0:
                 durability_text += "\n⚠️ 이 장비는 한 번 내구도 0을 겪었습니다."
