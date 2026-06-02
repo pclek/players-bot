@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from discord import app_commands
 from discord.ext import commands
 
+from cogs.profile.profile import required_xp
 from cogs.adventure.adventure_utils import (
     ensure_adventure_profile,
     get_adventure_profile,
@@ -25,6 +26,10 @@ DEATH_PENALTY_HOURS = 3
 DEATH_POINT_LOSS_RATE = 0.10
 DEATH_DURABILITY_LOSS_RATE = 0.10
 DEATH_MIN_DURABILITY_LOSS = 5
+MAX_SEARCH_COUNT = 3
+BASE_ESCAPE_CHANCE = 60
+ESCAPE_CHANCE_LOSS_PER_SEARCH = 20
+BATTLE_XP_RATE = 0.10
 
 EQUIPMENT_MAX_DURABILITY = {'녹슨검': 999999, '구리검': 90, '철검': 110, '은검': 130, '금검': 155, '미스릴검': 185, '다이아검': 220, '흑철검': 260, '비브라늄검': 310, '오리하르콘검': 380, '철갑옷': 130, '은갑옷': 155, '금갑옷': 185, '미스릴갑옷': 225, '다이아갑옷': 270, '흑철갑옷': 320, '비브라늄갑옷': 380, '오리하르콘갑옷': 460}
 
@@ -195,230 +200,53 @@ FOOD_HEALS = {
 }
 
 MONSTERS = {
-    # 초급: 녹슨검 + HP 100 기준. 승률은 높지만 피해를 조금씩 받는 구간
-    "슬라임": {
-        "hp": (18, 32),
-        "atk": (2, 5),
-        "point": (22, 36),
-        "weight": 90,
-        "emoji": "🟢",
-    },
-    "들쥐떼": {
-        "hp": (22, 38),
-        "atk": (3, 6),
-        "point": (26, 42),
-        "weight": 82,
-        "emoji": "🐀",
-    },
-    "성난 닭": {
-        "hp": (26, 44),
-        "atk": (4, 7),
-        "point": (30, 48),
-        "weight": 76,
-        "emoji": "🐔",
-    },
-    "멧돼지": {
-        "hp": (38, 62),
-        "atk": (6, 11),
-        "point": (45, 72),
-        "weight": 68,
-        "emoji": "🐗",
-    },
-    "숲 늑대": {
-        "hp": (44, 72),
-        "atk": (7, 13),
-        "point": (52, 82),
-        "weight": 62,
-        "emoji": "🐺",
-    },
-    "거대 거미": {
-        "hp": (52, 84),
-        "atk": (8, 15),
-        "point": (60, 92),
-        "weight": 56,
-        "emoji": "🕷️",
-    },
-    "독버섯 군락": {
-        "hp": (58, 92),
-        "atk": (9, 16),
-        "point": (68, 105),
-        "weight": 52,
-        "emoji": "🍄",
-    },
-    "오리너구리": {
-        "hp": (70, 120),
-        "atk": (10, 20),
-        "point": (90, 150),
-        "weight": 48,
-        "emoji": "🦫",
-    },
-    "고블린": {
-        "hp": (76, 118),
-        "atk": (11, 21),
-        "point": (95, 155),
-        "weight": 46,
-        "emoji": "👺",
-    },
-    "도적 정찰병": {
-        "hp": (88, 132),
-        "atk": (13, 24),
-        "point": (110, 180),
-        "weight": 42,
-        "emoji": "🗡️",
-    },
+    # 녹슨검 구간
+    "슬라임": {"hp": (18, 28), "atk": (2, 4), "point": (6, 12), "xp": (5, 8), "weight": 90, "emoji": "🟢"},
+    "들쥐떼": {"hp": (22, 34), "atk": (3, 5), "point": (8, 16), "xp": (6, 10), "weight": 82, "emoji": "🐀"},
+    "성난 닭": {"hp": (28, 42), "atk": (4, 7), "point": (10, 20), "xp": (8, 13), "weight": 76, "emoji": "🐔"},
+    "멧돼지": {"hp": (42, 62), "atk": (6, 10), "point": (16, 30), "xp": (12, 20), "weight": 68, "emoji": "🐗"},
+    "숲 늑대": {"hp": (52, 76), "atk": (8, 13), "point": (22, 40), "xp": (16, 26), "weight": 62, "emoji": "🐺"},
+    "거대 거미": {"hp": (66, 92), "atk": (10, 16), "point": (30, 52), "xp": (22, 34), "weight": 56, "emoji": "🕷️"},
 
-    # 중급: 구리~철 장비부터 안정권. 녹슨검으로는 음식 없이 연전이 어려운 구간
-    "스켈레톤": {
-        "hp": (105, 155),
-        "atk": (15, 27),
-        "point": (145, 220),
-        "weight": 36,
-        "emoji": "💀",
-    },
-    "좀비 병사": {
-        "hp": (120, 175),
-        "atk": (17, 30),
-        "point": (170, 250),
-        "weight": 33,
-        "emoji": "🧟",
-    },
-    "하이에나 무리": {
-        "hp": (135, 195),
-        "atk": (19, 33),
-        "point": (200, 300),
-        "weight": 30,
-        "emoji": "🐾",
-    },
-    "오크": {
-        "hp": (155, 225),
-        "atk": (22, 38),
-        "point": (240, 360),
-        "weight": 27,
-        "emoji": "🧌",
-    },
-    "늪지 악어": {
-        "hp": (180, 260),
-        "atk": (25, 42),
-        "point": (290, 430),
-        "weight": 24,
-        "emoji": "🐊",
-    },
-    "광산 박쥐왕": {
-        "hp": (195, 280),
-        "atk": (27, 45),
-        "point": (330, 480),
-        "weight": 22,
-        "emoji": "🦇",
-    },
-    "트롤": {
-        "hp": (230, 330),
-        "atk": (31, 52),
-        "point": (420, 600),
-        "weight": 19,
-        "emoji": "👹",
-    },
-    "사이클롭스": {
-        "hp": (270, 380),
-        "atk": (35, 58),
-        "point": (520, 720),
-        "weight": 16,
-        "emoji": "👁️",
-    },
-    "갑옷 골렘": {
-        "hp": (320, 450),
-        "atk": (38, 64),
-        "point": (640, 860),
-        "weight": 14,
-        "emoji": "🗿",
-    },
-    "저주받은 나무정령": {
-        "hp": (360, 500),
-        "atk": (42, 70),
-        "point": (760, 980),
-        "weight": 12,
-        "emoji": "🌲",
-    },
+    # 구리검 권장
+    "독버섯 군락": {"hp": (96, 132), "atk": (17, 24), "point": (45, 75), "xp": (34, 52), "weight": 52, "emoji": "🍄"},
+    "오리너구리": {"hp": (110, 150), "atk": (19, 27), "point": (58, 92), "xp": (42, 64), "weight": 48, "emoji": "🦫"},
+    "고블린": {"hp": (120, 165), "atk": (21, 30), "point": (70, 110), "xp": (50, 76), "weight": 46, "emoji": "👺"},
+    "도적 정찰병": {"hp": (135, 185), "atk": (24, 34), "point": (88, 135), "xp": (62, 92), "weight": 42, "emoji": "🗡️"},
 
-    # 상급: 다이아~비브라늄 장비와 음식 소모를 전제로 한 구간
-    "암흑 기사": {
-        "hp": (460, 640),
-        "atk": (52, 84),
-        "point": (1050, 1400),
-        "weight": 7,
-        "emoji": "🛡️",
-    },
-    "저주받은 기사단장": {
-        "hp": (540, 740),
-        "atk": (58, 92),
-        "point": (1250, 1650),
-        "weight": 6,
-        "emoji": "⚔️",
-    },
-    "미믹": {
-        "hp": (420, 620),
-        "atk": (48, 96),
-        "point": (1300, 1750),
-        "weight": 5,
-        "emoji": "🎁",
-    },
-    "와이번": {
-        "hp": (640, 900),
-        "atk": (68, 108),
-        "point": (1650, 2200),
-        "weight": 4,
-        "emoji": "🐉",
-    },
-    "만티코어": {
-        "hp": (720, 1000),
-        "atk": (74, 118),
-        "point": (1950, 2600),
-        "weight": 3,
-        "emoji": "🦂",
-    },
-    "심연의 사제": {
-        "hp": (780, 1100),
-        "atk": (80, 130),
-        "point": (2300, 3000),
-        "weight": 3,
-        "emoji": "🔮",
-    },
+    # 철검 + 철갑옷 권장
+    "스켈레톤": {"hp": (145, 200), "atk": (25, 36), "point": (105, 155), "xp": (72, 105), "weight": 36, "emoji": "💀"},
+    "좀비 병사": {"hp": (155, 215), "atk": (26, 38), "point": (125, 180), "xp": (84, 120), "weight": 33, "emoji": "🧟"},
+    "하이에나 무리": {"hp": (165, 230), "atk": (27, 40), "point": (145, 210), "xp": (96, 138), "weight": 30, "emoji": "🐾"},
+    "오크": {"hp": (180, 250), "atk": (30, 44), "point": (190, 280), "xp": (120, 170), "weight": 27, "emoji": "🧌"},
 
-    # 희귀: 큰 보상, 큰 소모. 후반 장비/음식 없으면 위험
-    "황금 슬라임": {
-        "hp": (120, 220),
-        "atk": (22, 42),
-        "point": (1800, 2400),
-        "weight": 1,
-        "emoji": "✨",
-    },
-    "보물 고블린": {
-        "hp": (260, 420),
-        "atk": (34, 58),
-        "point": (2500, 3300),
-        "weight": 1,
-        "emoji": "💰",
-    },
-    "리치": {
-        "hp": (900, 1250),
-        "atk": (92, 145),
-        "point": (4200, 5200),
-        "weight": 2,
-        "emoji": "🧙",
-    },
-    "고대 드래곤": {
-        "hp": (1250, 1700),
-        "atk": (115, 175),
-        "point": (6200, 7800),
-        "weight": 1,
-        "emoji": "🐲",
-    },
-    "심연의 군주": {
-        "hp": (1700, 2200),
-        "atk": (135, 200),
-        "point": (8200, 10000),
-        "weight": 1,
-        "emoji": "👑",
-    },
+    # 은검 + 은갑옷 권장
+    "늪지 악어": {"hp": (220, 300), "atk": (34, 48), "point": (240, 350), "xp": (145, 205), "weight": 24, "emoji": "🐊"},
+    "광산 박쥐왕": {"hp": (240, 330), "atk": (36, 52), "point": (290, 420), "xp": (170, 240), "weight": 22, "emoji": "🦇"},
+    "트롤": {"hp": (280, 380), "atk": (40, 58), "point": (360, 520), "xp": (210, 295), "weight": 19, "emoji": "👹"},
+    "사이클롭스": {"hp": (330, 450), "atk": (45, 65), "point": (460, 660), "xp": (255, 360), "weight": 16, "emoji": "👁️"},
+
+    # 금검 + 금갑옷 권장
+    "갑옷 골렘": {"hp": (420, 560), "atk": (55, 78), "point": (600, 850), "xp": (320, 450), "weight": 14, "emoji": "🗿"},
+    "저주받은 나무정령": {"hp": (500, 650), "atk": (62, 88), "point": (760, 1050), "xp": (390, 540), "weight": 12, "emoji": "🌲"},
+    "암흑 기사": {"hp": (620, 800), "atk": (72, 100), "point": (980, 1350), "xp": (480, 660), "weight": 7, "emoji": "🛡️"},
+    "저주받은 기사단장": {"hp": (720, 920), "atk": (82, 112), "point": (1200, 1650), "xp": (570, 780), "weight": 6, "emoji": "⚔️"},
+
+    # 미스릴~다이아 권장
+    "미믹": {"hp": (620, 860), "atk": (75, 120), "point": (1350, 1850), "xp": (520, 740), "weight": 5, "emoji": "🎁"},
+    "와이번": {"hp": (850, 1100), "atk": (95, 135), "point": (1700, 2300), "xp": (700, 980), "weight": 4, "emoji": "🐉"},
+    "만티코어": {"hp": (1000, 1300), "atk": (110, 150), "point": (2100, 2800), "xp": (850, 1150), "weight": 3, "emoji": "🦂"},
+    "심연의 사제": {"hp": (1150, 1500), "atk": (125, 170), "point": (2500, 3300), "xp": (1050, 1400), "weight": 3, "emoji": "🔮"},
+
+    # 희귀 / 보너스형
+    "황금 슬라임": {"hp": (180, 260), "atk": (28, 44), "point": (1200, 1800), "xp": (180, 300), "weight": 1, "emoji": "✨"},
+    "보물 고블린": {"hp": (350, 500), "atk": (45, 70), "point": (2000, 2800), "xp": (300, 460), "weight": 1, "emoji": "💰"},
+
+    # 비브라늄~오리하르콘 권장
+    "리치": {"hp": (1400, 1800), "atk": (150, 210), "point": (4200, 5600), "xp": (1400, 1900), "weight": 2, "emoji": "🧙"},
+    "고대 드래곤": {"hp": (1900, 2500), "atk": (190, 260), "point": (6500, 8500), "xp": (2000, 2700), "weight": 1, "emoji": "🐲"},
+    "심연의 군주": {"hp": (2600, 3400), "atk": (230, 320), "point": (8500, 11000), "xp": (2800, 3800), "weight": 1, "emoji": "👑"},
+
 }
 
 def roll_monster():
@@ -441,6 +269,8 @@ def roll_monster():
                 "atk_max": data["atk"][1],
                 "point_min": data["point"][0],
                 "point_max": data["point"][1],
+                "xp_min": data["xp"][0],
+                "xp_max": data["xp"][1],
             }
 
     name = "슬라임"
@@ -644,7 +474,7 @@ class HuntView(discord.ui.View):
             desc += f"\n{message}"
 
         embed = discord.Embed(
-            title="⚔ 사냥",
+            title="⚔️ 전투",
             description=desc,
             color=discord.Color.red(),
         )
@@ -678,7 +508,7 @@ class HuntView(discord.ui.View):
             result_text += f"\n\n{durability_text}"
 
         embed = discord.Embed(
-            title="⚔ 사냥 종료",
+            title="⚔️ 전투 종료",
             description=result_text,
             color=color,
         )
@@ -686,19 +516,67 @@ class HuntView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
     async def check_equipment_after_battle(self) -> str:
         return ""
+    
+    def get_escape_chance(self) -> int:
+        return max(
+            BASE_ESCAPE_CHANCE - (self.search_count * ESCAPE_CHANCE_LOSS_PER_SEARCH),
+            0,
+        )
 
-    async def give_points(self, amount: int):
+    def update_search_button_state(self):
+        for item in self.children:
+            if isinstance(item, discord.ui.Button) and item.label == "🔍 다른 상대 찾기":
+                item.disabled = (
+                    self.search_count >= MAX_SEARCH_COUNT
+                    or self.get_escape_chance() <= 0
+                    or self.finished
+                )
+
+    async def give_rewards(self, point_amount: int, xp_amount: int):
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("""
+            INSERT OR IGNORE INTO users (user_id)
+            VALUES (?)
+            """, (self.user_id,))
+
+            async with db.execute("""
+            SELECT xp, level
+            FROM users
+            WHERE user_id = ?
+            """, (self.user_id,)) as cursor:
+                row = await cursor.fetchone()
+
+            current_xp = row[0] if row else 0
+            current_level = row[1] if row else 1
+
+            new_xp = current_xp + xp_amount
+            new_level = current_level
+            need_xp = required_xp(new_level)
+
+            while new_xp >= need_xp:
+                new_xp -= need_xp
+                new_level += 1
+                need_xp = required_xp(new_level)
+
+            await db.execute("""
             UPDATE users
-            SET points = points + ?
+            SET points = points + ?,
+                xp = ?,
+                level = ?
             WHERE user_id = ?
             """, (
-                amount,
+                point_amount,
+                new_xp,
+                new_level,
                 self.user_id,
             ))
 
             await db.commit()
+
+        if new_level > current_level:
+            return f"\n🎉 레벨업! Lv.`{current_level}` → Lv.`{new_level}`"
+
+        return ""
 
     @discord.ui.button(label="⚔ 공격", style=discord.ButtonStyle.red)
     async def attack(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -735,12 +613,14 @@ class HuntView(discord.ui.View):
                 self.monster["point_max"],
             )
 
-            await self.give_points(reward_points)
+            reward_xp = max(1, int(reward_points * BATTLE_XP_RATE))
+            levelup_text = await self.give_rewards(reward_points, reward_xp)
 
             result_text = (
                 f"🏆 **전투 승리!**\n\n"
                 f"{self.monster['emoji']} `{self.monster['name']}` 을(를) 처치했습니다.\n"
-                f"사냥 부산물을 정리해 `{reward_points}P` 를 획득했습니다."
+                f"전투 보상으로 `{reward_points}P` 와 경험치 `{reward_xp}` 를 획득했습니다."
+                f"{levelup_text}"
             )
 
             if durability_messages:
@@ -856,9 +736,8 @@ class HuntView(discord.ui.View):
         if self.finished:
             return
 
-        escape_chance = max(100 - (self.search_count * 30), 0)
+        escape_chance = self.get_escape_chance()
         roll = random.randint(1, 100)
-        durability_messages = []
 
         if roll <= escape_chance:
             result_text = (
@@ -884,16 +763,6 @@ class HuntView(discord.ui.View):
             self.shield -= blocked
             monster_damage -= blocked
 
-        if self.armor_name and self.armor_name != "없음":
-            armor_durability_text = await decrease_equipped_durability(
-                self.user_id,
-                self.armor_name,
-                1,
-            )
-
-            if armor_durability_text:
-                durability_messages.append(armor_durability_text)
-
         self.player_hp -= monster_damage
 
         if self.player_hp <= 0:
@@ -908,12 +777,10 @@ class HuntView(discord.ui.View):
             result_text = (
                 f"☠ **도망 실패**\n\n"
                 f"도망치다 `{self.monster['name']}` 에게 당했습니다.\n"
+                f"HP -`{monster_damage}`\n"
                 f"체력이 `0` 이 되어 사망 상태가 되었습니다.\n\n"
                 f"{death_penalty_text}"
             )
-
-            if durability_messages:
-                result_text += "\n\n" + "\n".join(durability_messages)
 
             await self.finish_battle(
                 interaction,
@@ -923,13 +790,13 @@ class HuntView(discord.ui.View):
             return
 
         message = (
-            f"❌ 도망 실패!\n"
-            f"도망 확률 : `{escape_chance}%`\n"
-            f"피해 : `{monster_damage}`"
+            f"❌ 도망 실패!\n\n"
+            f"{self.monster['emoji']} `{self.monster['name']}` 이(가) 공격했습니다.\n"
+            f"HP -`{monster_damage}`\n"
+            f"도망 확률 : `{escape_chance}%`"
         )
 
-        if durability_messages:
-            message += "\n\n" + "\n".join(durability_messages)
+        self.update_search_button_state()
 
         await interaction.response.edit_message(
             embed=self.make_embed(message),
@@ -941,16 +808,30 @@ class HuntView(discord.ui.View):
         if self.finished:
             return
 
+        if self.search_count >= MAX_SEARCH_COUNT:
+            button.disabled = True
+
+            await interaction.response.edit_message(
+                embed=self.make_embed(
+                    "❌ 더 이상 다른 상대를 찾을 수 없습니다.\n"
+                    f"전투당 최대 `{MAX_SEARCH_COUNT}회` 까지만 가능합니다."
+                ),
+                view=self,
+            )
+            return
+
         self.search_count += 1
         self.monster = roll_monster()
         self.monster_hp = self.monster["max_hp"]
         self.monster_revealed = False
 
-        escape_chance = max(100 - (self.search_count * 30), 0)
+        escape_chance = self.get_escape_chance()
+        self.update_search_button_state()
 
         await interaction.response.edit_message(
             embed=self.make_embed(
                 f"🔍 다른 상대를 찾았습니다.\n"
+                f"탐색 횟수 : `{self.search_count}/{MAX_SEARCH_COUNT}`\n"
                 f"이제 도망 확률이 `{escape_chance}%` 입니다."
             ),
             view=self,

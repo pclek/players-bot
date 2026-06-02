@@ -30,6 +30,7 @@ from cogs.adventure.hunting import HuntView, ARMOR_SHIELDS
 from cogs.adventure.hunting import WEAPON_STATS
 
 DB_PATH = "database/bot.db"
+HUNTING_DAILY_LIMIT = 5
 
 async def ensure_adventure_daily_limit_schema():
     async with aiosqlite.connect(DB_PATH) as db:
@@ -229,7 +230,7 @@ class AdventureSelect(discord.ui.Select):
                 value="farming",
             ),
             discord.SelectOption(
-                label="사냥",
+                label="전투",
                 description="몬스터를 찾아 전투를 시작합니다.",
                 emoji="⚔️",
                 value="hunting",
@@ -270,6 +271,20 @@ class AdventureSelect(discord.ui.Select):
         await ensure_adventure_profile(user_id)
 
         if job_type == "hunting":
+            hunting_count = await get_adventure_daily_count(user_id, "hunting")
+
+            if hunting_count >= HUNTING_DAILY_LIMIT:
+                await interaction.edit_original_response(
+                    content=(
+                        "❌ 오늘 사냥 횟수를 모두 사용했습니다.\n"
+                        f"하루 제한 : `{HUNTING_DAILY_LIMIT}회`\n"
+                        "초기화 시간 : `매일 오전 6시`"
+                    ),
+                    embed=None,
+                    view=None,
+                )
+                return
+
             profile = await get_adventure_profile(user_id)
 
             current_hp = profile[0]
@@ -278,7 +293,7 @@ class AdventureSelect(discord.ui.Select):
 
             if current_hp <= 1:
                 await interaction.edit_original_response(
-                    content="❌ 체력이 너무 낮아 사냥을 시작할 수 없습니다.",
+                    content="❌ 체력이 너무 낮아 전투을 시작할 수 없습니다.",
                     embed=None,
                     view=None,
                 )
@@ -315,11 +330,15 @@ class AdventureSelect(discord.ui.Select):
             except:
                 pass
 
+            await add_adventure_daily_count(user_id, "hunting")
+
             await interaction.channel.send(
-                embed=view.make_embed("전투를 시작합니다."),
+                embed=view.make_embed(
+                    f"전투를 시작합니다.\n"
+                    f"오늘 사냥 횟수 : `{hunting_count + 1}/{HUNTING_DAILY_LIMIT}`"
+                ),
                 view=view,
             )
-
             return
 
         
@@ -505,7 +524,7 @@ def get_job_name(job_type: str) -> str:
     if job_type == "farming":
         return "농장"
     if job_type == "hunting":
-        return "사냥"
+        return "전투"
     if job_type == "crafting":
         return "요리"
     if job_type == "blacksmith":
@@ -762,7 +781,7 @@ class Adventure(commands.Cog):
     async def before_adventure_notify_loop(self):
         await self.bot.wait_until_ready()
 
-    @app_commands.command(name="모험", description="낚시, 광산, 농장, 사냥을 시작합니다.")
+    @app_commands.command(name="모험", description="낚시, 광산, 농장, 전투을 시작합니다.")
     async def adventure(self, interaction: discord.Interaction):
         await ensure_adventure_profile(interaction.user.id)
 
@@ -844,8 +863,8 @@ class Adventure(commands.Cog):
         )
 
         embed.add_field(
-            name="⚔️ 사냥",
-            value="전투 시스템 추가 후 사용 가능합니다.",
+            name="⚔️ 전투",
+            value="몬스터를 찾아 전투를 시작합니다.",
             inline=False,
         )
 
