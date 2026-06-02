@@ -133,12 +133,31 @@ REPAIR_RECIPES = {
 }
 
 
-
 ENHANCE_MAX_LEVEL = 5
 
-ENHANCE_COST_RATES = {1: 0.10, 2: 0.20, 3: 0.35, 4: 0.55, 5: 0.80}
-ENHANCE_COAL_COSTS = {1: 2, 2: 4, 3: 8, 4: 12, 5: 20}
-ENHANCE_ORE_COSTS = {1: 1, 2: 2, 3: 4, 4: 6, 5: 10}
+ENHANCE_COST_RATES = {
+    1: 0.10,
+    2: 0.20,
+    3: 0.35,
+    4: 0.55,
+    5: 0.80,
+}
+
+ENHANCE_COAL_COSTS = {
+    1: 2,
+    2: 4,
+    3: 8,
+    4: 12,
+    5: 20,
+}
+
+ENHANCE_ORE_COSTS = {
+    1: 1,
+    2: 2,
+    3: 4,
+    4: 6,
+    5: 10,
+}
 
 EQUIPMENT_ORES = {
     "구리검": "구리광석",
@@ -165,14 +184,20 @@ def get_equipment_craft_cost(item_name: str) -> int:
     for recipe in EQUIPMENT_RECIPES.values():
         if recipe["name"] == item_name:
             return int(recipe["cost"])
+
     return 0
 
 
 def get_enhance_materials(item_name: str, next_level: int):
     ore_name = EQUIPMENT_ORES.get(item_name)
+
     if not ore_name:
         return None
-    return {"석탄": ENHANCE_COAL_COSTS[next_level], ore_name: ENHANCE_ORE_COSTS[next_level]}
+
+    return {
+        "석탄": ENHANCE_COAL_COSTS[next_level],
+        ore_name: ENHANCE_ORE_COSTS[next_level],
+    }
 
 
 def get_enhance_point_cost(item_name: str, next_level: int) -> int:
@@ -630,62 +655,98 @@ class RepairSelect(discord.ui.Select):
         )
 
 
-
 class EnhanceSelect(discord.ui.Select):
     def __init__(self, rows):
         options = []
 
-        for equipment_id, item_name, durability, max_durability, enhance_level, is_equipped in rows:
+        for equipment_id, item_name, durability, max_durability, enhance_level, is_equipped in rows[:25]:
             next_level = enhance_level + 1
             materials = get_enhance_materials(item_name, next_level)
+
             if not materials:
                 continue
+
             point_cost = get_enhance_point_cost(item_name, next_level)
             equipped_text = " / 장착중" if is_equipped else ""
+
             options.append(
                 discord.SelectOption(
-                    label=f"{item_name} #{equipment_id} +{enhance_level} → +{next_level}"[:100],
-                    description=(f"{material_text(materials)} / {point_cost}P" f"{equipped_text}")[:100],
+                    label=f"✨ {item_name} #{equipment_id} +{enhance_level} → +{next_level}"[:100],
                     value=str(equipment_id),
+                    description=(
+                        f"{material_text(materials)} / {point_cost}P"
+                        f"{equipped_text}"
+                    )[:100],
                 )
             )
 
         if not options:
-            options.append(discord.SelectOption(label="강화할 장비 없음", description="현재 강화 가능한 장비가 없습니다.", value="none"))
+            options.append(
+                discord.SelectOption(
+                    label="강화할 장비 없음",
+                    value="none",
+                    description="현재 강화 가능한 장비가 없습니다.",
+                )
+            )
 
-        super().__init__(placeholder="강화할 장비를 선택하세요.", min_values=1, max_values=1, options=options[:25])
+        super().__init__(
+            placeholder="강화할 장비를 선택하세요.",
+            min_values=1,
+            max_values=1,
+            options=options[:25],
+        )
 
     async def callback(self, interaction: discord.Interaction):
+        if self.values[0] == "none":
+            await interaction.response.send_message(
+                "✅ 현재 강화할 장비가 없습니다.",
+                ephemeral=True,
+            )
+            return
+
         user_id = interaction.user.id
-        selected = self.values[0]
+        equipment_id = int(self.values[0])
 
-        if selected == "none":
-            await interaction.response.send_message("❌ 현재 강화 가능한 장비가 없습니다.", ephemeral=True)
-            return
+        await ensure_adventure_profile(user_id)
 
-        equipment_id = int(selected)
         rows = await get_enhanceable_equipment(user_id)
-        target = next((row for row in rows if row[0] == equipment_id), None)
+        selected = None
 
-        if not target:
-            await interaction.response.send_message("❌ 강화할 장비를 찾을 수 없거나 이미 최대 강화입니다.", ephemeral=True)
+        for row in rows:
+            if row[0] == equipment_id:
+                selected = row
+                break
+
+        if not selected:
+            await interaction.response.send_message(
+                "❌ 강화할 장비를 찾을 수 없거나 이미 최대 강화입니다.",
+                ephemeral=True,
+            )
             return
 
-        equipment_id, item_name, durability, max_durability, enhance_level, is_equipped = target
+        equipment_id, item_name, durability, max_durability, enhance_level, is_equipped = selected
         next_level = enhance_level + 1
 
         if next_level > ENHANCE_MAX_LEVEL:
-            await interaction.response.send_message("❌ 이미 최대 강화입니다.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ 이미 최대 강화입니다.",
+                ephemeral=True,
+            )
             return
 
         materials = get_enhance_materials(item_name, next_level)
+
         if not materials:
-            await interaction.response.send_message("❌ 이 장비는 강화할 수 없습니다.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ 이 장비는 강화할 수 없습니다.",
+                ephemeral=True,
+            )
             return
 
         point_cost = get_enhance_point_cost(item_name, next_level)
         missing = await get_missing_materials(user_id, materials)
         points = await get_user_points(user_id)
+
         if points < point_cost:
             missing.append(f"포인트 `{points}/{point_cost}P`")
 
@@ -699,14 +760,20 @@ class EnhanceSelect(discord.ui.Select):
 
         for material_name, needed in materials.items():
             await remove_adventure_item(user_id, material_name, needed)
+
         await spend_points(user_id, point_cost)
 
         result = await enhance_equipment_instance(user_id, equipment_id)
+
         if not result:
-            await interaction.response.send_message("❌ 강화 처리 중 장비 정보를 찾을 수 없습니다.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ 강화 처리 중 장비 정보를 찾을 수 없습니다.",
+                ephemeral=True,
+            )
             return
 
         item_name, before_level, after_level = result
+
         embed = discord.Embed(
             title="✨ 장비 강화 완료",
             description=(
@@ -719,7 +786,12 @@ class EnhanceSelect(discord.ui.Select):
             ),
             color=discord.Color.gold(),
         )
-        await interaction.response.edit_message(embed=embed, view=None)
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=None,
+        )
+
 
 class BlacksmithMenuSelect(discord.ui.Select):
     def __init__(self, user_id: int):
@@ -860,26 +932,33 @@ class BlacksmithMenuSelect(discord.ui.Select):
             )
             return
 
+
         if selected == "enhance":
             rows = await get_enhanceable_equipment(interaction.user.id)
+
             if not rows:
                 await interaction.response.edit_message(
                     content=None,
-                    embed=discord.Embed(title="✨ 장비 강화", description="✅ 현재 강화할 장비가 없습니다.", color=discord.Color.gold()),
+                    embed=discord.Embed(
+                        title="✨ 장비 강화",
+                        description="✅ 현재 강화할 장비가 없습니다.",
+                        color=discord.Color.gold(),
+                    ),
                     view=None,
                 )
                 return
 
             view = discord.ui.View(timeout=60)
             view.add_item(EnhanceSelect(rows))
+
             lines = []
+
             for equipment_id, item_name, durability, max_durability, enhance_level, is_equipped in rows[:15]:
                 next_level = enhance_level + 1
                 materials = get_enhance_materials(item_name, next_level)
-                if not materials:
-                    continue
                 point_cost = get_enhance_point_cost(item_name, next_level)
                 equipped_text = " / 장착중" if is_equipped else ""
+
                 lines.append(
                     f"`{item_name} #{equipment_id}` +{enhance_level} → +{next_level}{equipped_text}\n"
                     f"└ {material_text(materials)} + {point_cost}P"
@@ -895,7 +974,11 @@ class BlacksmithMenuSelect(discord.ui.Select):
                 ),
                 color=discord.Color.gold(),
             )
-            await interaction.response.edit_message(embed=embed, view=view)
+
+            await interaction.response.edit_message(
+                embed=embed,
+                view=view,
+            )
             return
 
 

@@ -598,7 +598,6 @@ class HuntView(discord.ui.View):
         self.battle_turns += 1
 
         attack_min, attack_max = WEAPON_STATS.get(self.weapon_name, (1, 3))
-
         enhance_multiplier = 1 + (self.weapon_enhance_level * 0.05)
         attack_min = int(attack_min * enhance_multiplier)
         attack_max = int(attack_max * enhance_multiplier)
