@@ -210,7 +210,7 @@ MONSTERS = {
 
     # 구리검 권장
     "독버섯 군락": {"hp": (96, 132), "atk": (17, 24), "point": (45, 75), "xp": (34, 52), "weight": 52, "emoji": "🍄"},
-    "오리너구리": {"hp": (110, 150), "atk": (19, 27), "point": (58, 92), "xp": (42, 64), "weight": 48, "emoji": "🦫"},
+    "오리너구리": {"hp": (80, 650), "atk": (15, 88), "point": (150, 220), "xp": (100, 150), "weight": 48, "emoji": "🦫"},
     "고블린": {"hp": (120, 165), "atk": (21, 30), "point": (70, 110), "xp": (50, 76), "weight": 46, "emoji": "👺"},
     "도적 정찰병": {"hp": (135, 185), "atk": (24, 34), "point": (88, 135), "xp": (62, 92), "weight": 42, "emoji": "🗡️"},
 
@@ -286,8 +286,8 @@ def roll_monster():
         "atk_max": data["atk"][1],
         "point_min": data["point"][0],
         "point_max": data["point"][1],
-        "xp_min": data["xp"][0],
-        "xp_max": data["xp"][1],
+        "point_min": data["point"][0],
+        "point_max": data["point"][1],
     }
 
 

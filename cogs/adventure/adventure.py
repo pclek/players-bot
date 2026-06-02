@@ -452,7 +452,7 @@ class AdventureSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer()
 
         user_id = interaction.user.id
         job_type = self.values[0]
@@ -489,7 +489,7 @@ class AdventureSelect(discord.ui.Select):
 
             if current_hp <= 1:
                 await interaction.edit_original_response(
-                    content="❌ 체력이 너무 낮아 전투를 시작할 수 없습니다.",
+                    content="❌ 체력이 너무 낮아 전투을 시작할 수 없습니다.",
                     embed=None,
                     view=None,
                 )
@@ -1026,6 +1026,7 @@ class Adventure(commands.Cog):
 
                     await interaction.response.send_message(
                         embed=embed,
+                        ephemeral=True,
                     )
                     return
 
@@ -1037,7 +1038,6 @@ class Adventure(commands.Cog):
                     f"⏳ 이미 진행 중인 모험이 있습니다.\n"
                     f"진행 중 : `{get_job_name(job_type)}`\n"
                     f"남은 시간 : `{remaining_minutes}분 {remaining_seconds}초`",
-                    ephemeral=True,
                 )
                 return
 
@@ -1092,7 +1092,6 @@ class Adventure(commands.Cog):
         await interaction.response.send_message(
             embed=embed,
             view=AdventureView(),
-            ephemeral=True,
         )
 
 async def setup(bot: commands.Bot):
