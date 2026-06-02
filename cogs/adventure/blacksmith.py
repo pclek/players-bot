@@ -331,6 +331,7 @@ class SmeltSelect(discord.ui.Select):
         embed = discord.Embed(
             title="🔥 제련 완료",
             description=(
+                f"👤 작업자 : {interaction.user.mention}\n\n"
                 f"제련 결과 : `{recipe['name']} x1`\n"
                 f"사용 재료 : `{material_text(recipe['materials'])}`\n"
                 f"사용 포인트 : `{recipe['cost']}P`"
@@ -412,6 +413,7 @@ class EquipmentCraftSelect(discord.ui.Select):
         embed = discord.Embed(
             title="⚒️ 장비 제작 완료",
             description=(
+                f"👤 작업자 : {interaction.user.mention}\n\n"
                 f"제작 결과 : `{recipe['name']} x1`\n"
                 f"사용 재료 : `{material_text(recipe['materials'])}`\n"
                 f"사용 포인트 : `{recipe['cost']}P`"
@@ -547,6 +549,7 @@ class RepairSelect(discord.ui.Select):
         embed = discord.Embed(
             title="🛠 수리 완료",
             description=(
+                f"👤 작업자 : {interaction.user.mention}\n\n"
                 f"`{item_name} #{equipment_id}` 수리가 완료되었습니다.\n"
                 f"내구도 : `{old_durability}/{max_durability}` → `{max_durability}/{max_durability}`\n"
                 f"사용 재료 : `{material_text(recipe['materials'])}`\n"

@@ -4,8 +4,21 @@ from discord.ext import commands, tasks
 import aiosqlite
 import random
 from datetime import datetime, timedelta
-from cogs.adventure.crafting import CraftView, make_cooking_embed
-from cogs.adventure.blacksmith import BlacksmithMenuView, make_blacksmith_embed
+from cogs.adventure.crafting import (
+    CraftView,
+    make_cooking_embed,
+    RECIPES as COOKING_RECIPES,
+    get_cooking_cost,
+    material_text as cooking_material_text,
+)
+
+from cogs.adventure.blacksmith import (
+    BlacksmithMenuView,
+    make_blacksmith_embed,
+    SMELT_RECIPES,
+    EQUIPMENT_RECIPES,
+    material_text as blacksmith_material_text,
+)
 from cogs.adventure.equipment import EquipView
 from cogs.profile.profile import get_attendance_day_key
 
@@ -208,6 +221,175 @@ class AdventureResultButton(discord.ui.Button):
 
         await interaction.response.edit_message(embed=embed, view=self.view)
 
+def split_recipe_lines(lines, limit=1000):
+    chunks = []
+    current = ""
+
+    for line in lines:
+        if len(current) + len(line) + 1 > limit:
+            chunks.append(current)
+            current = line
+        else:
+            current += ("\n" if current else "") + line
+
+    if current:
+        chunks.append(current)
+
+    return chunks
+
+
+async def make_recipebook_embed(user_id: int, category: str):
+    rows = await get_adventure_inventory(user_id)
+    inventory = {
+        item_name: quantity
+        for item_name, quantity, item_category in rows
+    }
+
+    if category == "cooking":
+        title = "📖 레시피북 - 요리"
+        lines = []
+
+        for key, recipe in COOKING_RECIPES.items():
+            result_name, materials, heal_text = recipe
+            cooking_cost = get_cooking_cost(result_name)
+
+            can_make = True
+
+            for item_name, needed in materials.items():
+                if inventory.get(item_name, 0) < needed:
+                    can_make = False
+                    break
+
+            mark = "✅" if can_make else "❌"
+
+            lines.append(
+                f"{mark} **{result_name}**\n"
+                f"└ 재료 : {cooking_material_text(materials)}\n"
+                f"└ 효과 : {heal_text} / 조리비 `{cooking_cost}P`"
+            )
+
+        color = discord.Color.orange()
+
+    elif category == "smelt":
+        title = "📖 레시피북 - 제련"
+        lines = []
+
+        for key, recipe in SMELT_RECIPES.items():
+            can_make = True
+
+            for item_name, needed in recipe["materials"].items():
+                if inventory.get(item_name, 0) < needed:
+                    can_make = False
+                    break
+
+            mark = "✅" if can_make else "❌"
+
+            lines.append(
+                f"{mark} **{recipe['name']}**\n"
+                f"└ 재료 : {blacksmith_material_text(recipe['materials'])}\n"
+                f"└ 비용 : `{recipe['cost']}P`"
+            )
+
+        color = discord.Color.dark_orange()
+
+    else:
+        title = "📖 레시피북 - 장비 제작"
+        lines = []
+
+        for key, recipe in EQUIPMENT_RECIPES.items():
+            can_make = True
+
+            for item_name, needed in recipe["materials"].items():
+                if inventory.get(item_name, 0) < needed:
+                    can_make = False
+                    break
+
+            mark = "✅" if can_make else "❌"
+
+            lines.append(
+                f"{mark} **{recipe['name']}**\n"
+                f"└ 재료 : {blacksmith_material_text(recipe['materials'])}\n"
+                f"└ 비용 : `{recipe['cost']}P`"
+            )
+
+        color = discord.Color.green()
+
+    embed = discord.Embed(
+        title=title,
+        description=(
+            f"<@{user_id}> 님의 보유 재료 기준입니다.\n"
+            "✅ 제작 가능 / ❌ 재료 부족\n\n"
+            "아래 드롭다운에서 다른 레시피 종류를 볼 수 있습니다."
+        ),
+        color=color,
+    )
+
+    chunks = split_recipe_lines(lines)
+
+    for index, chunk in enumerate(chunks, start=1):
+        embed.add_field(
+            name=f"목록 {index}",
+            value=chunk,
+            inline=False,
+        )
+
+    return embed
+
+
+class RecipeBookSelect(discord.ui.Select):
+    def __init__(self, user_id: int):
+        self.user_id = user_id
+
+        options = [
+            discord.SelectOption(
+                label="요리",
+                description="요리 재료, 효과, 조리비를 확인합니다.",
+                emoji="🍳",
+                value="cooking",
+            ),
+            discord.SelectOption(
+                label="제련",
+                description="광석/주괴 제련 재료와 비용을 확인합니다.",
+                emoji="🔥",
+                value="smelt",
+            ),
+            discord.SelectOption(
+                label="장비 제작",
+                description="무기/방어구 제작 재료와 비용을 확인합니다.",
+                emoji="⚒️",
+                value="equipment",
+            ),
+        ]
+
+        super().__init__(
+            placeholder="확인할 레시피 종류를 선택하세요.",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "❌ 본인의 레시피북만 조작할 수 있습니다.",
+                ephemeral=True,
+            )
+            return
+
+        category = self.values[0]
+        embed = await make_recipebook_embed(self.user_id, category)
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=RecipeBookView(self.user_id),
+        )
+
+
+class RecipeBookView(discord.ui.View):
+    def __init__(self, user_id: int):
+        super().__init__(timeout=120)
+        self.add_item(RecipeBookSelect(user_id))
+
 class AdventureSelect(discord.ui.Select):
     def __init__(self):
         options = [
@@ -253,6 +435,12 @@ class AdventureSelect(discord.ui.Select):
                 emoji="🧰",
                 value="equipment",
             ),
+            discord.SelectOption(
+                label="레시피북",
+                description="요리, 제련, 장비 제작법을 확인합니다.",
+                emoji="📖",
+                value="recipebook",
+            ),
         ]
 
         super().__init__(
@@ -269,7 +457,14 @@ class AdventureSelect(discord.ui.Select):
         job_type = self.values[0]
 
         await ensure_adventure_profile(user_id)
+        if job_type == "recipebook":
+            embed = await make_recipebook_embed(user_id, "cooking")
 
+            await interaction.edit_original_response(
+                embed=embed,
+                view=RecipeBookView(user_id),
+            )
+            return
         if job_type == "hunting":
             hunting_count = await get_adventure_daily_count(user_id, "hunting")
 

@@ -779,7 +779,7 @@ class PokerGame:
             f"기본 배팅 : `{self.base_bet}P`\n"
             f"총 배팅 : `{self.total_bet}P / {POKER_MAX_TOTAL_BET}P`\n"
             f"현재 족보 : `{self.current_player_hand_text()}`\n\n"
-            f"👤 **{self.display_name}**\n"
+            f"👤 **{self.display_name}** (<@{self.user_id}>)\n"
             f"{cards_text(self.player_cards)}\n\n"
             f"🃏 **테이블**\n"
             f"{self.visible_community()}\n\n"

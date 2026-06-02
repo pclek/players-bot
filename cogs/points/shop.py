@@ -1506,9 +1506,18 @@ class Shop(commands.Cog):
         for item_name, quantity, category in adventure_rows:
 
             category_text = category if category else "기타"
-            adventure_lines.append(
-                f"`{category_text}` {item_name} x{quantity}"
-            )
+
+            heal_amount = FOOD_HEALS.get(item_name)
+
+            if heal_amount:
+                heal_text = "전체 회복" if heal_amount >= 999 else f"HP {heal_amount} 회복"
+                adventure_lines.append(
+                    f"`{category_text}` {item_name} x{quantity} · ❤️ {heal_text}"
+                )
+            else:
+                adventure_lines.append(
+                    f"`{category_text}` {item_name} x{quantity}"
+                )
 
         description = ""
 

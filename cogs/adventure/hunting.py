@@ -401,7 +401,7 @@ class FoodSelect(discord.ui.Select):
 
         await interaction.response.edit_message(
             embed=view.make_embed(
-                f"🎒 `{food_name}` 을(를) 사용했습니다.\n"
+                f"🎒 <@{view.user_id}> 님이 `{food_name}` 을(를) 사용했습니다.\n"
                 f"❤️ 체력 `{healed}` 회복!"
             ),
             view=view,
@@ -449,6 +449,7 @@ class HuntView(discord.ui.View):
         monster = self.monster
 
         desc = (
+            f"👤 전투 중 : <@{self.user_id}>\n\n"
             f"{monster['emoji']} **{monster['name']}** 을(를) 만났습니다.\n\n"
             f"❤️ 내 체력 : `{self.player_hp}/{self.max_hp}`"
         )
@@ -511,7 +512,10 @@ class HuntView(discord.ui.View):
 
         embed = discord.Embed(
             title="⚔️ 전투 종료",
-            description=result_text,
+            description=(
+                f"👤 전투자 : <@{self.user_id}>\n\n"
+                f"{result_text}"
+            ),
             color=color,
         )
 

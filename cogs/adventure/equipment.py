@@ -98,6 +98,7 @@ class EquipSelect(discord.ui.Select):
         embed = discord.Embed(
             title="✅ 장착 완료",
             description=(
+                f"👤 장착자 : {interaction.user.mention}\n\n"
                 f"{equip_type} `{item_name}` 을(를) 장착했습니다.\n"
                 f"장비 ID : `#{equipment_id}`"
                 f"{durability_text}"
