@@ -210,7 +210,7 @@ MONSTERS = {
 
     # 구리검 권장
     "독버섯 군락": {"hp": (96, 132), "atk": (17, 24), "point": (45, 75), "xp": (34, 52), "weight": 52, "emoji": "🍄"},
-    "오리너구리": {"hp": (110, 150), "atk": (19, 27), "point": (58, 92), "xp": (42, 64), "weight": 48, "emoji": "🦫"},
+    "오리너구리": {"hp": (80, 650), "atk": (15, 88), "point": (150, 220), "xp": (100, 150), "weight": 48, "emoji": "🦫"},
     "고블린": {"hp": (120, 165), "atk": (21, 30), "point": (70, 110), "xp": (50, 76), "weight": 46, "emoji": "👺"},
     "도적 정찰병": {"hp": (135, 185), "atk": (24, 34), "point": (88, 135), "xp": (62, 92), "weight": 42, "emoji": "🗡️"},
 
@@ -239,8 +239,8 @@ MONSTERS = {
     "심연의 사제": {"hp": (1150, 1500), "atk": (125, 170), "point": (2500, 3300), "xp": (1050, 1400), "weight": 3, "emoji": "🔮"},
 
     # 희귀 / 보너스형
-    "황금 슬라임": {"hp": (180, 260), "atk": (28, 44), "point": (1200, 1800), "xp": (180, 300), "weight": 1, "emoji": "✨"},
-    "보물 고블린": {"hp": (350, 500), "atk": (45, 70), "point": (2000, 2800), "xp": (300, 460), "weight": 1, "emoji": "💰"},
+    "황금 슬라임": {"hp": (180, 260), "atk": (55, 85), "point": (1200, 1800), "xp": (240, 300), "weight": 1, "emoji": "✨"},
+    "보물 고블린": {"hp": (350, 500), "atk": (60, 95), "point": (2000, 2800), "xp": (300, 460), "weight": 1, "emoji": "💰"},
 
     # 비브라늄~오리하르콘 권장
     "리치": {"hp": (1400, 1800), "atk": (150, 210), "point": (4200, 5600), "xp": (1400, 1900), "weight": 2, "emoji": "🧙"},
@@ -284,6 +284,8 @@ def roll_monster():
         "max_hp": random.randint(*data["hp"]),
         "atk_min": data["atk"][0],
         "atk_max": data["atk"][1],
+        "point_min": data["point"][0],
+        "point_max": data["point"][1],
         "point_min": data["point"][0],
         "point_max": data["point"][1],
     }
@@ -613,7 +615,10 @@ class HuntView(discord.ui.View):
                 self.monster["point_max"],
             )
 
-            reward_xp = max(1, int(reward_points * BATTLE_XP_RATE))
+            reward_xp = random.randint(
+                self.monster["xp_min"],
+                self.monster["xp_max"],
+            )
             levelup_text = await self.give_rewards(reward_points, reward_xp)
 
             result_text = (
