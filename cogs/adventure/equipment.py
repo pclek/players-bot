@@ -6,6 +6,7 @@ from cogs.adventure.adventure_utils import (
     get_adventure_inventory,
     equip_equipment_instance,
     get_best_equipment_instance,
+    get_equipment_enhance_level_by_id,
     WEAPON_NAMES,
     ARMOR_NAMES,
 )
@@ -85,12 +86,14 @@ class EquipSelect(discord.ui.Select):
             return
 
         row = await get_best_equipment_instance(user_id, item_name)
+        enhance_level = await get_equipment_enhance_level_by_id(user_id, equipment_id)
 
         durability_text = ""
 
         if row:
             _, _, durability, max_durability, break_count, _ = row
-            durability_text = f"\n내구도 : `{durability}/{max_durability}`"
+            durability_text = f"\n강화 : `+{enhance_level}`"
+            durability_text += f"\n내구도 : `{durability}/{max_durability}`"
 
             if break_count > 0:
                 durability_text += "\n⚠️ 이 장비는 한 번 내구도 0을 겪었습니다."
@@ -99,7 +102,7 @@ class EquipSelect(discord.ui.Select):
             title="✅ 장착 완료",
             description=(
                 f"👤 장착자 : {interaction.user.mention}\n\n"
-                f"{equip_type} `{item_name}` 을(를) 장착했습니다.\n"
+                f"{equip_type} `{item_name} +{enhance_level}` 을(를) 장착했습니다.\n"
                 f"장비 ID : `#{equipment_id}`"
                 f"{durability_text}"
             ),

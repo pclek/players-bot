@@ -210,7 +210,7 @@ MONSTERS = {
 
     # 구리검 권장
     "독버섯 군락": {"hp": (96, 132), "atk": (17, 24), "point": (45, 75), "xp": (34, 52), "weight": 52, "emoji": "🍄"},
-    "오리너구리": {"hp": (80, 650), "atk": (15, 88), "point": (150, 220), "xp": (100, 150), "weight": 48, "emoji": "🦫"},
+    "오리너구리": {"hp": (110, 150), "atk": (19, 27), "point": (58, 92), "xp": (42, 64), "weight": 48, "emoji": "🦫"},
     "고블린": {"hp": (120, 165), "atk": (21, 30), "point": (70, 110), "xp": (50, 76), "weight": 46, "emoji": "👺"},
     "도적 정찰병": {"hp": (135, 185), "atk": (24, 34), "point": (88, 135), "xp": (62, 92), "weight": 42, "emoji": "🗡️"},
 
@@ -286,8 +286,8 @@ def roll_monster():
         "atk_max": data["atk"][1],
         "point_min": data["point"][0],
         "point_max": data["point"][1],
-        "point_min": data["point"][0],
-        "point_max": data["point"][1],
+        "xp_min": data["xp"][0],
+        "xp_max": data["xp"][1],
     }
 
 
@@ -334,10 +334,11 @@ class FoodSelect(discord.ui.Select):
 
         for food_name, count, heal_amount in food_rows:
             heal_text = "전체 회복" if heal_amount >= 999 else f"HP {heal_amount} 회복"
+            label_text = f"{food_name} x{count} / {heal_text}"
 
             options.append(
                 discord.SelectOption(
-                    label=f"{food_name} x{count}",
+                    label=label_text[:100],
                     value=food_name,
                     description=heal_text,
                 )
@@ -424,6 +425,8 @@ class HuntView(discord.ui.View):
         max_hp: int = 100,
         attack_bonus: int = 0,
         player_level: int = 1,
+        weapon_enhance_level: int = 0,
+        armor_enhance_level: int = 0,
     ):
         super().__init__(timeout=180)
 
@@ -435,6 +438,8 @@ class HuntView(discord.ui.View):
         self.max_hp = max_hp
         self.attack_bonus = attack_bonus
         self.player_level = player_level
+        self.weapon_enhance_level = weapon_enhance_level
+        self.armor_enhance_level = armor_enhance_level
         self.battle_turns = 0
 
         self.monster = roll_monster()
@@ -458,7 +463,8 @@ class HuntView(discord.ui.View):
             desc += f"  🛡 실드 : `{self.shield}`"
 
         desc += (
-            f"\n⚔ 장착 무기 : `{self.weapon_name}`  /  Lv.`{self.player_level}`\n\n"
+            f"\n⚔ 장착 무기 : `{self.weapon_name} +{self.weapon_enhance_level}`  /  Lv.`{self.player_level}`\n"
+            f"🛡 장착 방어구 : `{self.armor_name or '없음'} +{self.armor_enhance_level}`\n\n"
             f"👹 위험도 : `{get_monster_risk(monster)}`\n"
             f"❤️ 몬스터 체력 예상 : `{monster['hp_min']} ~ {monster['hp_max']}`\n"
             f"⚔ 몬스터 공격력 예상 : `{monster['atk_min']} ~ {monster['atk_max']}`\n"
@@ -592,6 +598,11 @@ class HuntView(discord.ui.View):
         self.battle_turns += 1
 
         attack_min, attack_max = WEAPON_STATS.get(self.weapon_name, (1, 3))
+
+        enhance_multiplier = 1 + (self.weapon_enhance_level * 0.05)
+        attack_min = int(attack_min * enhance_multiplier)
+        attack_max = int(attack_max * enhance_multiplier)
+
         player_damage = random.randint(
             attack_min + self.attack_bonus,
             attack_max + self.attack_bonus,

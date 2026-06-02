@@ -36,6 +36,7 @@ from cogs.adventure.adventure_utils import (
     get_user_level,
     get_user_max_hp,
     get_user_attack_bonus,
+    get_equipment_enhance_level,
     EQUIPMENT_NAMES,
 )
 
@@ -495,6 +496,11 @@ class AdventureSelect(discord.ui.Select):
                 return
 
             shield = ARMOR_SHIELDS.get(armor_name, 0)
+            weapon_enhance_level = await get_equipment_enhance_level(user_id, weapon_name)
+            armor_enhance_level = await get_equipment_enhance_level(user_id, armor_name)
+
+            if armor_enhance_level > 0:
+                shield = int(shield * (1 + (armor_enhance_level * 0.05)))
 
             if armor_name:
                 armor_instance = await get_equipped_equipment(user_id, armor_name)
@@ -518,6 +524,8 @@ class AdventureSelect(discord.ui.Select):
                 max_hp=max_hp,
                 attack_bonus=attack_bonus,
                 player_level=user_level,
+                weapon_enhance_level=weapon_enhance_level,
+                armor_enhance_level=armor_enhance_level,
             )
 
             try:
@@ -1084,7 +1092,6 @@ class Adventure(commands.Cog):
         await interaction.response.send_message(
             embed=embed,
             view=AdventureView(),
-            ephemeral=True,
         )
 
 async def setup(bot: commands.Bot):

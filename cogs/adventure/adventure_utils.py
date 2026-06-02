@@ -57,9 +57,18 @@ async def ensure_equipment_schema():
             max_durability INTEGER NOT NULL,
             break_count INTEGER NOT NULL DEFAULT 0,
             is_equipped INTEGER NOT NULL DEFAULT 0,
+            enhance_level INTEGER NOT NULL DEFAULT 0,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
         """)
+
+        try:
+            await db.execute("""
+            ALTER TABLE adventure_equipment_instances
+            ADD COLUMN enhance_level INTEGER NOT NULL DEFAULT 0
+            """)
+        except aiosqlite.OperationalError:
+            pass
 
         await db.commit()
 
@@ -617,6 +626,99 @@ async def repair_equipment_instance(user_id: int, equipment_id: int):
 
     return item_name, durability, max_durability, break_count
 
+
+
+
+async def get_equipment_enhance_level(user_id: int, item_name: str) -> int:
+    if not item_name:
+        return 0
+
+    await ensure_adventure_profile(user_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT enhance_level
+        FROM adventure_equipment_instances
+        WHERE user_id = ?
+        AND item_name = ?
+        AND is_equipped = 1
+        ORDER BY equipment_id ASC
+        LIMIT 1
+        """, (user_id, item_name)) as cursor:
+            row = await cursor.fetchone()
+
+    if not row:
+        return 0
+
+    return max(0, min(5, int(row[0] or 0)))
+
+
+async def get_equipment_enhance_level_by_id(user_id: int, equipment_id: int) -> int:
+    await ensure_adventure_profile(user_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT enhance_level
+        FROM adventure_equipment_instances
+        WHERE user_id = ?
+        AND equipment_id = ?
+        """, (user_id, equipment_id)) as cursor:
+            row = await cursor.fetchone()
+
+    if not row:
+        return 0
+
+    return max(0, min(5, int(row[0] or 0)))
+
+
+async def get_enhanceable_equipment(user_id: int):
+    await ensure_adventure_profile(user_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT equipment_id, item_name, durability, max_durability, enhance_level, is_equipped
+        FROM adventure_equipment_instances
+        WHERE user_id = ?
+        AND item_name != '녹슨검'
+        AND enhance_level < 5
+        ORDER BY is_equipped DESC, item_name, enhance_level DESC, durability DESC, equipment_id ASC
+        """, (user_id,)) as cursor:
+            return await cursor.fetchall()
+
+
+async def enhance_equipment_instance(user_id: int, equipment_id: int):
+    await ensure_adventure_profile(user_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT item_name, enhance_level
+        FROM adventure_equipment_instances
+        WHERE user_id = ?
+        AND equipment_id = ?
+        """, (user_id, equipment_id)) as cursor:
+            row = await cursor.fetchone()
+
+        if not row:
+            return None
+
+        item_name, enhance_level = row
+        enhance_level = int(enhance_level or 0)
+
+        if enhance_level >= 5:
+            return (item_name, enhance_level, enhance_level)
+
+        new_level = enhance_level + 1
+
+        await db.execute("""
+        UPDATE adventure_equipment_instances
+        SET enhance_level = ?
+        WHERE user_id = ?
+        AND equipment_id = ?
+        """, (new_level, user_id, equipment_id))
+
+        await db.commit()
+
+    return (item_name, enhance_level, new_level)
 
 
 def get_next_6am_kst() -> datetime:

@@ -11,6 +11,8 @@ from cogs.adventure.adventure_utils import (
     get_adventure_item_count,
     get_repairable_equipment,
     repair_equipment_instance,
+    get_enhanceable_equipment,
+    enhance_equipment_instance,
     get_adventure_inventory,
     EQUIPMENT_NAMES,
 )
@@ -131,6 +133,58 @@ REPAIR_RECIPES = {
 }
 
 
+
+ENHANCE_MAX_LEVEL = 5
+ENHANCE_COST_RATES = {1: 0.10, 2: 0.20, 3: 0.35, 4: 0.55, 5: 0.80}
+ENHANCE_COAL_COSTS = {1: 2, 2: 4, 3: 8, 4: 12, 5: 20}
+ENHANCE_ORE_COSTS = {1: 1, 2: 2, 3: 4, 4: 6, 5: 10}
+
+EQUIPMENT_ORES = {
+    "구리검": "구리광석",
+    "철검": "철광석",
+    "은검": "은광석",
+    "금검": "금광석",
+    "미스릴검": "미스릴광석",
+    "다이아검": "다이아원석",
+    "흑철검": "흑철광석",
+    "비브라늄검": "비브라늄원석",
+    "오리하르콘검": "오리하르콘광석",
+    "철갑옷": "철광석",
+    "은갑옷": "은광석",
+    "금갑옷": "금광석",
+    "미스릴갑옷": "미스릴광석",
+    "다이아갑옷": "다이아원석",
+    "흑철갑옷": "흑철광석",
+    "비브라늄갑옷": "비브라늄원석",
+    "오리하르콘갑옷": "오리하르콘광석",
+}
+
+
+def get_equipment_craft_cost(item_name: str) -> int:
+    for recipe in EQUIPMENT_RECIPES.values():
+        if recipe["name"] == item_name:
+            return int(recipe["cost"])
+    return 0
+
+
+def get_enhance_materials(item_name: str, next_level: int):
+    ore_name = EQUIPMENT_ORES.get(item_name)
+    if not ore_name or next_level not in ENHANCE_COAL_COSTS:
+        return None
+    return {"석탄": ENHANCE_COAL_COSTS[next_level], ore_name: ENHANCE_ORE_COSTS[next_level]}
+
+
+def get_enhance_point_cost(item_name: str, next_level: int) -> int:
+    craft_cost = get_equipment_craft_cost(item_name)
+    if craft_cost <= 0 or next_level not in ENHANCE_COST_RATES:
+        return 0
+    return max(1, int(craft_cost * ENHANCE_COST_RATES[next_level]))
+
+
+def enhance_effect_text(level: int) -> str:
+    return f"+{level * 5}%"
+
+
 def material_text(materials: dict[str, int]) -> str:
     return ", ".join([f"{item} x{amount}" for item, amount in materials.items()])
 
@@ -224,12 +278,17 @@ async def make_blacksmith_embed(user_id: int):
     smelt_keys = await get_available_smelt_keys(user_id)
     craft_keys = await get_available_equipment_recipe_keys(user_id)
     repair_rows = await get_repairable_equipment(user_id)
+    enhance_rows = await get_enhanceable_equipment(user_id)
 
     smelt_lines = [f"🔥 {SMELT_RECIPES[key]['name']}" for key in smelt_keys]
     craft_lines = [f"⚒️ {EQUIPMENT_RECIPES[key]['name']}" for key in craft_keys]
     repair_lines = [
         f"🛠 {item_name} #{equipment_id} `{durability}/{max_durability}`"
         for equipment_id, item_name, durability, max_durability, break_count in repair_rows[:10]
+    ]
+    enhance_lines = [
+        f"✨ {item_name} #{equipment_id} `+{enhance_level}` → `+{enhance_level + 1}`"
+        for equipment_id, item_name, durability, max_durability, enhance_level, is_equipped in enhance_rows[:10]
     ]
 
     embed = discord.Embed(
@@ -255,7 +314,8 @@ async def make_blacksmith_embed(user_id: int):
         value=(
             f"**제련**\n{chr(10).join(smelt_lines) if smelt_lines else '가능한 제련 없음'}\n\n"
             f"**장비 제작**\n{chr(10).join(craft_lines) if craft_lines else '가능한 장비 제작 없음'}\n\n"
-            f"**수리**\n{chr(10).join(repair_lines) if repair_lines else '수리할 장비 없음'}"
+            f"**수리**\n{chr(10).join(repair_lines) if repair_lines else '수리할 장비 없음'}\n\n"
+            f"**강화**\n{chr(10).join(enhance_lines) if enhance_lines else '강화할 장비 없음'}"
         ),
         inline=False,
     )
@@ -571,6 +631,140 @@ class RepairSelect(discord.ui.Select):
         )
 
 
+
+class EnhanceSelect(discord.ui.Select):
+    def __init__(self, rows):
+        options = []
+
+        for equipment_id, item_name, durability, max_durability, enhance_level, is_equipped in rows[:25]:
+            next_level = enhance_level + 1
+            materials = get_enhance_materials(item_name, next_level)
+
+            if not materials:
+                continue
+
+            point_cost = get_enhance_point_cost(item_name, next_level)
+            equipped_text = " / 장착중" if is_equipped else ""
+
+            options.append(
+                discord.SelectOption(
+                    label=f"✨ {item_name} #{equipment_id} +{enhance_level} → +{next_level}"[:100],
+                    value=str(equipment_id),
+                    description=(
+                        f"{material_text(materials)} / {point_cost}P"
+                        f"{equipped_text}"
+                    )[:100],
+                )
+            )
+
+        if not options:
+            options.append(
+                discord.SelectOption(
+                    label="강화할 장비 없음",
+                    value="none",
+                    description="현재 강화 가능한 장비가 없습니다.",
+                )
+            )
+
+        super().__init__(
+            placeholder="강화할 장비를 선택하세요.",
+            min_values=1,
+            max_values=1,
+            options=options[:25],
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.values[0] == "none":
+            await interaction.response.send_message(
+                "✅ 현재 강화할 장비가 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        user_id = interaction.user.id
+        equipment_id = int(self.values[0])
+
+        await ensure_adventure_profile(user_id)
+
+        rows = await get_enhanceable_equipment(user_id)
+        selected = next((row for row in rows if row[0] == equipment_id), None)
+
+        if not selected:
+            await interaction.response.send_message(
+                "❌ 강화할 장비를 찾을 수 없거나 이미 최대 강화입니다.",
+                ephemeral=True,
+            )
+            return
+
+        equipment_id, item_name, durability, max_durability, enhance_level, is_equipped = selected
+        next_level = enhance_level + 1
+
+        if next_level > ENHANCE_MAX_LEVEL:
+            await interaction.response.send_message(
+                "❌ 이미 최대 강화입니다.",
+                ephemeral=True,
+            )
+            return
+
+        materials = get_enhance_materials(item_name, next_level)
+
+        if not materials:
+            await interaction.response.send_message(
+                "❌ 이 장비는 강화할 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        point_cost = get_enhance_point_cost(item_name, next_level)
+        missing = await get_missing_materials(user_id, materials)
+        points = await get_user_points(user_id)
+
+        if points < point_cost:
+            missing.append(f"포인트 `{points}/{point_cost}P`")
+
+        if missing:
+            await interaction.response.send_message(
+                "❌ 강화에 필요한 재료 또는 포인트가 부족합니다.\n"
+                f"부족한 항목 : {', '.join(missing)}",
+                ephemeral=True,
+            )
+            return
+
+        for material_name, needed in materials.items():
+            await remove_adventure_item(user_id, material_name, needed)
+
+        await spend_points(user_id, point_cost)
+
+        result = await enhance_equipment_instance(user_id, equipment_id)
+
+        if not result:
+            await interaction.response.send_message(
+                "❌ 강화 처리 중 장비 정보를 찾을 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        item_name, before_level, after_level = result
+
+        embed = discord.Embed(
+            title="✨ 장비 강화 완료",
+            description=(
+                f"👤 작업자 : {interaction.user.mention}\n\n"
+                f"강화 장비 : `{item_name} #{equipment_id}`\n"
+                f"강화 결과 : `+{before_level}` → `+{after_level}`\n"
+                f"강화 효과 : `{enhance_effect_text(after_level)}`\n"
+                f"사용 재료 : `{material_text(materials)}`\n"
+                f"사용 포인트 : `{point_cost}P`"
+            ),
+            color=discord.Color.gold(),
+        )
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=None,
+        )
+
+
 class BlacksmithMenuSelect(discord.ui.Select):
     def __init__(self, user_id: int):
         self.user_id = user_id
@@ -592,6 +786,12 @@ class BlacksmithMenuSelect(discord.ui.Select):
                 description="내구도가 감소한 장비를 수리합니다.",
                 emoji="🛠️",
                 value="repair",
+            ),
+            discord.SelectOption(
+                label="강화",
+                description="장비를 +5까지 강화합니다.",
+                emoji="✨",
+                value="enhance",
             ),
         ]
 
@@ -696,6 +896,59 @@ class BlacksmithMenuSelect(discord.ui.Select):
                     "이미 한 번 내구도 0이 된 장비는 다시 0이 되면 파괴됩니다."
                 ),
                 color=discord.Color.orange(),
+            )
+
+            await interaction.response.edit_message(
+                embed=embed,
+                view=view,
+            )
+            return
+
+
+
+        if selected == "enhance":
+            rows = await get_enhanceable_equipment(interaction.user.id)
+
+            if not rows:
+                await interaction.response.edit_message(
+                    content=None,
+                    embed=discord.Embed(
+                        title="✨ 장비 강화",
+                        description="✅ 현재 강화할 장비가 없습니다.",
+                        color=discord.Color.gold(),
+                    ),
+                    view=None,
+                )
+                return
+
+            view = discord.ui.View(timeout=60)
+            view.add_item(EnhanceSelect(rows))
+
+            lines = []
+
+            for equipment_id, item_name, durability, max_durability, enhance_level, is_equipped in rows[:15]:
+                next_level = enhance_level + 1
+                materials = get_enhance_materials(item_name, next_level)
+                point_cost = get_enhance_point_cost(item_name, next_level)
+                equipped_text = " / 장착중" if is_equipped else ""
+
+                if not materials:
+                    continue
+
+                lines.append(
+                    f"`{item_name} #{equipment_id}` +{enhance_level} → +{next_level}{equipped_text}\n"
+                    f"└ {material_text(materials)} + {point_cost}P"
+                )
+
+            embed = discord.Embed(
+                title="✨ 장비 강화",
+                description=(
+                    "강화할 장비를 선택하세요.\n"
+                    "성공률은 전 구간 100%이며 실패/하락/파괴가 없습니다.\n"
+                    "강화 효과는 단계당 5%, 최대 +25%입니다.\n\n"
+                    + "\n\n".join(lines)
+                ),
+                color=discord.Color.gold(),
             )
 
             await interaction.response.edit_message(
