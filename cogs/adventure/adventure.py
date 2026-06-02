@@ -710,7 +710,12 @@ class AdventureSelect(discord.ui.Select):
             color=discord.Color.green(),
         )
 
-        await interaction.edit_original_response(embed=embed, view=None)
+        try:
+            await interaction.delete_original_response()
+        except discord.HTTPException:
+            pass
+
+        await interaction.channel.send(embed=embed)
 
 
 class AdventureView(discord.ui.View):
@@ -1092,6 +1097,7 @@ class Adventure(commands.Cog):
         await interaction.response.send_message(
             embed=embed,
             view=AdventureView(),
+            ephemeral=True,
         )
 
 async def setup(bot: commands.Bot):
