@@ -54,13 +54,14 @@ class GameNameModal(discord.ui.Modal):
         default_game_name: str = "",
         default_match_size: str = "",
         default_recruit_description: str = "",
+        original_game_name: str | None = None,
     ):
         super().__init__(title="게임 추가/수정")
 
         self.role = role
         self.recruit_channel = recruit_channel
         self.tempvoice_channel = tempvoice_channel
-
+        self.original_game_name = original_game_name
         self.game_name = discord.ui.TextInput(
             label="게임 이름",
             placeholder="예: 롤, 배그, 발로란트",
@@ -122,24 +123,44 @@ class GameNameModal(discord.ui.Modal):
             return
 
         async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("""
-            INSERT OR REPLACE INTO game_settings (
-                game_name,
-                role_id,
-                recruit_channel_id,
-                tempvoice_creator_id,
-                match_size,
-                recruit_description
-            )
-            VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                game_name,
-                self.role.id,
-                self.recruit_channel.id,
-                self.tempvoice_channel.id,
-                match_size,
-                recruit_description,
-            ))
+            if self.original_game_name:
+                await db.execute("""
+                UPDATE game_settings
+                SET game_name = ?,
+                    role_id = ?,
+                    recruit_channel_id = ?,
+                    tempvoice_creator_id = ?,
+                    match_size = ?,
+                    recruit_description = ?
+                WHERE game_name = ?
+                """, (
+                    game_name,
+                    self.role.id,
+                    self.recruit_channel.id,
+                    self.tempvoice_channel.id,
+                    match_size,
+                    recruit_description,
+                    self.original_game_name,
+                ))
+            else:
+                await db.execute("""
+                INSERT OR REPLACE INTO game_settings (
+                    game_name,
+                    role_id,
+                    recruit_channel_id,
+                    tempvoice_creator_id,
+                    match_size,
+                    recruit_description
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    game_name,
+                    self.role.id,
+                    self.recruit_channel.id,
+                    self.tempvoice_channel.id,
+                    match_size,
+                    recruit_description,
+                ))
 
             await db.commit()
 
@@ -337,6 +358,7 @@ class GameEditSelect(discord.ui.Select):
                 default_game_name=game_name,
                 default_match_size=str(match_size),
                 default_recruit_description=recruit_description or "",
+                original_game_name=game_name,
             )
         )
 
