@@ -346,6 +346,93 @@ async def make_blacksmith_embed(user_id: int):
 
     return embed
 
+class SmeltQuantityModal(discord.ui.Modal):
+    def __init__(self, recipe_key: str, recipe: dict):
+        super().__init__(title="제련 개수 입력")
+        self.recipe_key = recipe_key
+        self.recipe = recipe
+
+        self.quantity_input = discord.ui.TextInput(
+            label="제련할 개수",
+            placeholder="예: 1, 5, 10",
+            default="1",
+            min_length=1,
+            max_length=3,
+            required=True,
+        )
+
+        self.add_item(self.quantity_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+
+        try:
+            quantity = int(str(self.quantity_input.value).strip())
+        except ValueError:
+            await interaction.response.send_message(
+                "❌ 제련 개수는 숫자로 입력해야 합니다.",
+                ephemeral=True,
+            )
+            return
+
+        if quantity <= 0:
+            await interaction.response.send_message(
+                "❌ 제련 개수는 1개 이상이어야 합니다.",
+                ephemeral=True,
+            )
+            return
+
+        if quantity > 99:
+            await interaction.response.send_message(
+                "❌ 한 번에 제련할 수 있는 개수는 최대 99개입니다.",
+                ephemeral=True,
+            )
+            return
+
+        await ensure_adventure_profile(user_id)
+
+        total_materials = {
+            item_name: needed * quantity
+            for item_name, needed in self.recipe["materials"].items()
+        }
+
+        total_cost = self.recipe["cost"] * quantity
+
+        missing = await get_missing_materials(user_id, total_materials)
+        points = await get_user_points(user_id)
+
+        if points < total_cost:
+            missing.append(f"포인트 `{points}/{total_cost}P`")
+
+        if missing:
+            await interaction.response.send_message(
+                "❌ 제련에 필요한 재료 또는 포인트가 부족합니다.\n"
+                f"부족한 항목 : {', '.join(missing)}",
+                ephemeral=True,
+            )
+            return
+
+        for item_name, needed in total_materials.items():
+            await remove_adventure_item(user_id, item_name, needed)
+
+        await spend_points(user_id, total_cost)
+        await add_adventure_item(user_id, self.recipe["name"], quantity)
+
+        embed = discord.Embed(
+            title="🔥 제련 완료",
+            description=(
+                f"👤 작업자 : {interaction.user.mention}\n\n"
+                f"제련 결과 : `{self.recipe['name']} x{quantity}`\n"
+                f"사용 재료 : `{material_text(total_materials)}`\n"
+                f"사용 포인트 : `{total_cost}P`"
+            ),
+            color=discord.Color.orange(),
+        )
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=None,
+        )
 
 class SmeltSelect(discord.ui.Select):
     def __init__(self, recipe_keys):
@@ -390,42 +477,8 @@ class SmeltSelect(discord.ui.Select):
 
         recipe = SMELT_RECIPES[recipe_key]
 
-        await ensure_adventure_profile(user_id)
-
-        missing = await get_missing_materials(user_id, recipe["materials"])
-        points = await get_user_points(user_id)
-
-        if points < recipe["cost"]:
-            missing.append(f"포인트 `{points}/{recipe['cost']}P`")
-
-        if missing:
-            await interaction.response.send_message(
-                "❌ 제련에 필요한 재료 또는 포인트가 부족합니다.\n"
-                f"부족한 항목 : {', '.join(missing)}",
-                ephemeral=True,
-            )
-            return
-
-        for item_name, needed in recipe["materials"].items():
-            await remove_adventure_item(user_id, item_name, needed)
-
-        await spend_points(user_id, recipe["cost"])
-        await add_adventure_item(user_id, recipe["name"], 1)
-
-        embed = discord.Embed(
-            title="🔥 제련 완료",
-            description=(
-                f"👤 작업자 : {interaction.user.mention}\n\n"
-                f"제련 결과 : `{recipe['name']} x1`\n"
-                f"사용 재료 : `{material_text(recipe['materials'])}`\n"
-                f"사용 포인트 : `{recipe['cost']}P`"
-            ),
-            color=discord.Color.orange(),
-        )
-
-        await interaction.response.edit_message(
-            embed=embed,
-            view=None,
+        await interaction.response.send_modal(
+            SmeltQuantityModal(recipe_key, recipe)
         )
 
 
