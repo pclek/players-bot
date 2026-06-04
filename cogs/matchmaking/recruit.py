@@ -28,6 +28,34 @@ async def get_recruit_members(message_id: int):
             return await cursor.fetchall()
 
 
+def make_finished_recruit_embed(
+    old_embed: discord.Embed | None,
+    title: str,
+    status_text: str,
+    color: discord.Color,
+):
+    if old_embed:
+        embed = old_embed.copy()
+    else:
+        embed = discord.Embed(color=color)
+
+    embed.title = title
+    embed.color = color
+
+    old_description = embed.description or "모집 정보가 남아있지 않습니다."
+
+    if "━━━━━━━━━━━━━━━━━━" in old_description:
+        old_description = old_description.split("━━━━━━━━━━━━━━━━━━")[0].rstrip()
+
+    embed.description = (
+        f"{old_description}\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"{status_text}"
+    )
+
+    return embed
+
+
 class RecruitPostView(discord.ui.View):
     def __init__(
         self,
@@ -208,10 +236,12 @@ class RecruitPostView(discord.ui.View):
 
             await db.commit()
 
-        embed = discord.Embed(
-            title=f"🚀 {game_name} 시작",
-            description="모집장이 게임 시작을 눌러 모집이 종료되었습니다.",
-            color=discord.Color.blue(),
+        old_embed = interaction.message.embeds[0] if interaction.message.embeds else None
+        embed = make_finished_recruit_embed(
+            old_embed,
+            f"🚀 {game_name} 시작",
+            "모집장이 게임 시작을 눌러 모집이 종료되었습니다.",
+            discord.Color.blue(),
         )
 
         await interaction.message.edit(embed=embed, content="", view=None)
@@ -261,10 +291,13 @@ class RecruitPostView(discord.ui.View):
             )
             await db.commit()
 
-        embed = interaction.message.embeds[0]
-        embed.color = discord.Color.dark_grey()
-        embed.title = "🔒 모집 종료"
-        embed.description = "이 모집은 종료되었습니다."
+        old_embed = interaction.message.embeds[0] if interaction.message.embeds else None
+        embed = make_finished_recruit_embed(
+            old_embed,
+            "🔒 모집 종료",
+            "모집장이 모집 종료를 눌러 모집이 종료되었습니다.",
+            discord.Color.dark_grey(),
+        )
 
         await interaction.message.edit(embed=embed, content="", view=None)
         await interaction.response.send_message(
@@ -568,10 +601,12 @@ class Recruit(commands.Cog):
                     try:
                         message = await text_channel.fetch_message(message_id)
 
-                        embed = discord.Embed(
-                            title="🔒 모집 종료",
-                            description="음성채널이 비어 모집이 자동 종료되었습니다.",
-                            color=discord.Color.dark_grey(),
+                        old_embed = message.embeds[0] if message.embeds else None
+                        embed = make_finished_recruit_embed(
+                            old_embed,
+                            "🔒 모집 종료",
+                            "음성채널이 비어 모집이 자동 종료되었습니다.",
+                            discord.Color.dark_grey(),
                         )
 
                         await message.edit(
