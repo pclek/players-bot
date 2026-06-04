@@ -61,6 +61,28 @@ async def set_setting(key: str, value: str):
         """,
             (key, value),
         )
+        for sql in [
+            "ALTER TABLE inactive_role_rules ADD COLUMN rule_name TEXT DEFAULT '장기 미활동 설정'",
+            "ALTER TABLE inactive_role_rules ADD COLUMN reauth_remove_role_ids TEXT",
+        ]:
+            try:
+                await db.execute(sql)
+            except aiosqlite.OperationalError:
+                pass
+
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS inactive_reauth_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            guild_id INTEGER,
+            rule_id INTEGER,
+            rule_name TEXT,
+            removed_role_ids TEXT,
+            restored_role_ids TEXT,
+            reauth_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+
         await db.commit()
 
 
@@ -80,8 +102,10 @@ async def ensure_inactive_rule_schema():
         CREATE TABLE IF NOT EXISTS inactive_role_rules (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             guild_id INTEGER,
+            rule_name TEXT DEFAULT '장기 미활동 설정',
             base_role_ids TEXT NOT NULL,
             inactive_role_ids TEXT NOT NULL,
+            reauth_remove_role_ids TEXT,
             inactive_days INTEGER NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -115,14 +139,17 @@ async def migrate_old_inactive_settings():
         await db.execute("""
         INSERT INTO inactive_role_rules (
             guild_id,
+            rule_name,
             base_role_ids,
             inactive_role_ids,
+            reauth_remove_role_ids,
             inactive_days,
             enabled
         )
-        VALUES (NULL, ?, ?, ?, 1)
+        VALUES (NULL, '기존 미활동 설정', ?, ?, ?, ?, 1)
         """, (
             str(base_role_id),
+            str(inactive_role_id),
             str(inactive_role_id),
             int(inactive_days),
         ))
@@ -136,14 +163,14 @@ async def get_inactive_rules(include_disabled: bool = False):
     async with aiosqlite.connect(DB_PATH) as db:
         if include_disabled:
             async with db.execute("""
-            SELECT id, guild_id, base_role_ids, inactive_role_ids, inactive_days, enabled
+            SELECT id, guild_id, rule_name, base_role_ids, inactive_role_ids, reauth_remove_role_ids, inactive_days, enabled
             FROM inactive_role_rules
             ORDER BY id ASC
             """) as cursor:
                 return await cursor.fetchall()
 
         async with db.execute("""
-        SELECT id, guild_id, base_role_ids, inactive_role_ids, inactive_days, enabled
+        SELECT id, guild_id, rule_name, base_role_ids, inactive_role_ids, reauth_remove_role_ids, inactive_days, enabled
         FROM inactive_role_rules
         WHERE enabled = 1
         ORDER BY id ASC
@@ -153,8 +180,10 @@ async def get_inactive_rules(include_disabled: bool = False):
 
 async def create_inactive_rule(
     guild_id: int,
+    rule_name: str,
     base_role_ids: list[int],
     inactive_role_ids: list[int],
+    reauth_remove_role_ids: list[int],
     inactive_days: int,
 ):
     await ensure_inactive_rule_schema()
@@ -163,16 +192,20 @@ async def create_inactive_rule(
         await db.execute("""
         INSERT INTO inactive_role_rules (
             guild_id,
+            rule_name,
             base_role_ids,
             inactive_role_ids,
+            reauth_remove_role_ids,
             inactive_days,
             enabled
         )
-        VALUES (?, ?, ?, ?, 1)
+        VALUES (?, ?, ?, ?, ?, ?, 1)
         """, (
             guild_id,
+            rule_name,
             ",".join(str(role_id) for role_id in base_role_ids),
             ",".join(str(role_id) for role_id in inactive_role_ids),
+            ",".join(str(role_id) for role_id in reauth_remove_role_ids),
             inactive_days,
         ))
 
@@ -182,8 +215,10 @@ async def create_inactive_rule(
 async def update_inactive_rule(
     rule_id: int,
     guild_id: int,
+    rule_name: str,
     base_role_ids: list[int],
     inactive_role_ids: list[int],
+    reauth_remove_role_ids: list[int],
     inactive_days: int,
 ):
     await ensure_inactive_rule_schema()
@@ -192,15 +227,19 @@ async def update_inactive_rule(
         await db.execute("""
         UPDATE inactive_role_rules
         SET guild_id = ?,
+            rule_name = ?,
             base_role_ids = ?,
             inactive_role_ids = ?,
+            reauth_remove_role_ids = ?,
             inactive_days = ?,
             enabled = 1
         WHERE id = ?
         """, (
             guild_id,
+            rule_name,
             ",".join(str(role_id) for role_id in base_role_ids),
             ",".join(str(role_id) for role_id in inactive_role_ids),
+            ",".join(str(role_id) for role_id in reauth_remove_role_ids),
             inactive_days,
             rule_id,
         ))
@@ -321,7 +360,7 @@ class InactiveRuleMenuSelect(discord.ui.Select):
         options = [
             discord.SelectOption(
                 label="장기 미활동 설정 추가",
-                description="기준 역할/기간/지급 역할을 새로 등록합니다.",
+                description="이름/기준 역할/기간/지급 역할/재인증 제거 역할을 등록합니다.",
                 value="add",
             ),
             discord.SelectOption(
@@ -352,14 +391,7 @@ class InactiveRuleMenuSelect(discord.ui.Select):
         selected = self.values[0]
 
         if selected == "add":
-            view = discord.ui.View(timeout=60)
-            view.add_item(InactiveBaseRolesSelect())
-
-            await interaction.response.edit_message(
-                content="📌 기준 역할을 선택하세요.\n여러 개 선택 가능하며, 해당 역할 중 하나라도 가진 유저가 검사 대상입니다.",
-                embed=None,
-                view=view,
-            )
+            await interaction.response.send_modal(InactiveRuleNameModal())
             return
 
         if selected in ["edit", "delete"]:
@@ -394,8 +426,37 @@ class InactiveRuleMenuView(discord.ui.View):
         self.add_item(PunishBackButton())
 
 
+class InactiveRuleNameModal(discord.ui.Modal):
+    def __init__(self, rule_id: int | None = None, default_name: str | None = None):
+        super().__init__(title="장기 미활동 설정 이름")
+        self.rule_id = rule_id
+
+        self.rule_name = discord.ui.TextInput(
+            label="설정 이름",
+            placeholder="예: 신입 30일 미활동 / 정회원 60일 휴면",
+            required=True,
+            max_length=50,
+            default=default_name or "",
+        )
+
+        self.add_item(self.rule_name)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        rule_name = str(self.rule_name.value).strip() or "장기 미활동 설정"
+
+        view = discord.ui.View(timeout=60)
+        view.add_item(InactiveBaseRolesSelect(rule_name, self.rule_id))
+
+        await interaction.response.send_message(
+            "📌 기준 역할을 선택하세요.\n여러 개 선택 가능하며, 해당 역할 중 하나라도 가진 유저가 검사 대상입니다.",
+            view=view,
+            ephemeral=True,
+        )
+
+
 class InactiveBaseRolesSelect(discord.ui.RoleSelect):
-    def __init__(self, rule_id: int | None = None):
+    def __init__(self, rule_name: str, rule_id: int | None = None):
+        self.rule_name = rule_name
         self.rule_id = rule_id
 
         super().__init__(
@@ -408,14 +469,20 @@ class InactiveBaseRolesSelect(discord.ui.RoleSelect):
         base_role_ids = [role.id for role in self.values]
 
         await interaction.response.send_modal(
-            InactiveDaysModal(base_role_ids, self.rule_id)
+            InactiveDaysModal(self.rule_name, base_role_ids, self.rule_id)
         )
 
 
 class InactiveDaysModal(discord.ui.Modal):
-    def __init__(self, base_role_ids: list[int], rule_id: int | None = None):
+    def __init__(
+        self,
+        rule_name: str,
+        base_role_ids: list[int],
+        rule_id: int | None = None,
+    ):
         title = "장기 미활동 기간 설정" if rule_id is None else "장기 미활동 기간 수정"
         super().__init__(title=title)
+        self.rule_name = rule_name
         self.base_role_ids = base_role_ids
         self.rule_id = rule_id
 
@@ -448,6 +515,7 @@ class InactiveDaysModal(discord.ui.Modal):
         view = discord.ui.View(timeout=60)
         view.add_item(
             InactiveTargetRolesSelect(
+                self.rule_name,
                 self.base_role_ids,
                 inactive_days,
                 self.rule_id,
@@ -464,10 +532,12 @@ class InactiveDaysModal(discord.ui.Modal):
 class InactiveTargetRolesSelect(discord.ui.RoleSelect):
     def __init__(
         self,
+        rule_name: str,
         base_role_ids: list[int],
         inactive_days: int,
         rule_id: int | None = None,
     ):
+        self.rule_name = rule_name
         self.base_role_ids = base_role_ids
         self.inactive_days = inactive_days
         self.rule_id = rule_id
@@ -481,11 +551,59 @@ class InactiveTargetRolesSelect(discord.ui.RoleSelect):
     async def callback(self, interaction: discord.Interaction):
         inactive_role_ids = [role.id for role in self.values]
 
+        view = discord.ui.View(timeout=60)
+        view.add_item(
+            InactiveReauthRemoveRolesSelect(
+                self.rule_name,
+                self.base_role_ids,
+                inactive_role_ids,
+                self.inactive_days,
+                self.rule_id,
+            )
+        )
+
+        await interaction.response.edit_message(
+            content=(
+                "🔁 재인증 시 제거할 역할을 선택하세요.\n"
+                "보통 방금 선택한 미활동 지급 역할을 선택하면 됩니다.\n"
+                "여러 개 선택 가능합니다."
+            ),
+            embed=None,
+            view=view,
+        )
+
+
+class InactiveReauthRemoveRolesSelect(discord.ui.RoleSelect):
+    def __init__(
+        self,
+        rule_name: str,
+        base_role_ids: list[int],
+        inactive_role_ids: list[int],
+        inactive_days: int,
+        rule_id: int | None = None,
+    ):
+        self.rule_name = rule_name
+        self.base_role_ids = base_role_ids
+        self.inactive_role_ids = inactive_role_ids
+        self.inactive_days = inactive_days
+        self.rule_id = rule_id
+
+        super().__init__(
+            placeholder="재인증 시 제거할 역할 선택",
+            min_values=1,
+            max_values=25,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        reauth_remove_role_ids = [role.id for role in self.values]
+
         if self.rule_id is None:
             await create_inactive_rule(
                 interaction.guild.id,
+                self.rule_name,
                 self.base_role_ids,
-                inactive_role_ids,
+                self.inactive_role_ids,
+                reauth_remove_role_ids,
                 self.inactive_days,
             )
             action_text = "저장"
@@ -493,14 +611,17 @@ class InactiveTargetRolesSelect(discord.ui.RoleSelect):
             await update_inactive_rule(
                 self.rule_id,
                 interaction.guild.id,
+                self.rule_name,
                 self.base_role_ids,
-                inactive_role_ids,
+                self.inactive_role_ids,
+                reauth_remove_role_ids,
                 self.inactive_days,
             )
             action_text = "수정"
 
         base_text = ", ".join(f"<@&{role_id}>" for role_id in self.base_role_ids)
-        inactive_text = ", ".join(f"<@&{role_id}>" for role_id in inactive_role_ids)
+        inactive_text = ", ".join(f"<@&{role_id}>" for role_id in self.inactive_role_ids)
+        remove_text = ", ".join(f"<@&{role_id}>" for role_id in reauth_remove_role_ids)
 
         view = discord.ui.View(timeout=60)
         view.add_item(PunishBackButton())
@@ -508,10 +629,11 @@ class InactiveTargetRolesSelect(discord.ui.RoleSelect):
         await interaction.response.edit_message(
             content=(
                 f"✅ 장기 미활동 설정을 {action_text}했습니다.\n"
+                f"설정 이름: `{self.rule_name}`\n"
                 f"기준 역할: {base_text}\n"
                 f"미활동 기간: `{self.inactive_days}일`\n"
-                f"지급 역할: {inactive_text}\n\n"
-                f"재인증 채널에서 채팅하면 지급 역할을 제거하고 기준 역할을 복구합니다."
+                f"지급 역할: {inactive_text}\n"
+                f"재인증 시 제거 역할: {remove_text}"
             ),
             embed=None,
             view=view,
@@ -525,14 +647,14 @@ class InactiveRuleSelect(discord.ui.Select):
 
         options = []
 
-        for rule_id, guild_id, base_role_ids, inactive_role_ids, inactive_days, enabled in rows[:25]:
+        for rule_id, guild_id, rule_name, base_role_ids, inactive_role_ids, reauth_remove_role_ids, inactive_days, enabled in rows[:25]:
             status = "사용중" if enabled else "비활성"
             base_preview = format_roles(guild, base_role_ids)
             inactive_preview = format_roles(guild, inactive_role_ids)
 
             options.append(
                 discord.SelectOption(
-                    label=f"#{rule_id} / {inactive_days}일 / {status}"[:100],
+                    label=f"{rule_name} / {inactive_days}일 / {status}"[:100],
                     value=str(rule_id),
                     description=f"기준: {base_preview} → 지급: {inactive_preview}"[:100],
                 )
@@ -566,14 +688,16 @@ class InactiveRuleSelect(discord.ui.Select):
             )
             return
 
-        view = discord.ui.View(timeout=60)
-        view.add_item(InactiveBaseRolesSelect(rule_id))
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+            SELECT rule_name
+            FROM inactive_role_rules
+            WHERE id = ?
+            """, (rule_id,)) as cursor:
+                row = await cursor.fetchone()
 
-        await interaction.response.edit_message(
-            content="📌 수정할 기준 역할을 다시 선택하세요.\n여러 개 선택 가능합니다.",
-            embed=None,
-            view=view,
-        )
+        default_name = row[0] if row else "장기 미활동 설정"
+        await interaction.response.send_modal(InactiveRuleNameModal(rule_id, default_name))
 
 
 async def show_inactive_rule_list(interaction: discord.Interaction):
@@ -589,14 +713,25 @@ async def show_inactive_rule_list(interaction: discord.Interaction):
 
     lines = []
 
-    for rule_id, guild_id, base_role_ids, inactive_role_ids, inactive_days, enabled in rows:
-        status = "사용중" if enabled else "비활성"
+    async with aiosqlite.connect(DB_PATH) as db:
+        for rule_id, guild_id, rule_name, base_role_ids, inactive_role_ids, reauth_remove_role_ids, inactive_days, enabled in rows:
+            async with db.execute("""
+            SELECT COUNT(*)
+            FROM inactive_reauth_logs
+            WHERE rule_id = ?
+            """, (rule_id,)) as cursor:
+                count_row = await cursor.fetchone()
 
-        lines.append(
-            f"**#{rule_id}** `{inactive_days}일` / `{status}`\n"
-            f"기준 역할 : {format_roles(interaction.guild, base_role_ids)}\n"
-            f"지급 역할 : {format_roles(interaction.guild, inactive_role_ids)}"
-        )
+            reauth_count = count_row[0] if count_row else 0
+            status = "사용중" if enabled else "비활성"
+
+            lines.append(
+                f"**{rule_name}** `#{rule_id}` `{inactive_days}일` / `{status}`\n"
+                f"기준 역할 : {format_roles(interaction.guild, base_role_ids)}\n"
+                f"지급 역할 : {format_roles(interaction.guild, inactive_role_ids)}\n"
+                f"재인증 제거 : {format_roles(interaction.guild, reauth_remove_role_ids)}\n"
+                f"재인증 누적 : `{reauth_count}회`"
+            )
 
     embed = discord.Embed(
         title="📋 장기 미활동 설정 목록",
@@ -794,12 +929,13 @@ class PunishMenuSelect(discord.ui.Select):
         if inactive_rows:
             inactive_lines = []
 
-            for rule_id, guild_id, base_role_ids, inactive_role_ids, inactive_days, enabled in inactive_rows:
+            for rule_id, guild_id, rule_name, base_role_ids, inactive_role_ids, reauth_remove_role_ids, inactive_days, enabled in inactive_rows:
                 status = "사용중" if enabled else "비활성"
                 inactive_lines.append(
-                    f"#{rule_id} `{inactive_days}일` / `{status}`\n"
+                    f"`{rule_name}` #{rule_id} `{inactive_days}일` / `{status}`\n"
                     f"기준: {format_roles(interaction.guild, base_role_ids)}\n"
-                    f"지급: {format_roles(interaction.guild, inactive_role_ids)}"
+                    f"지급: {format_roles(interaction.guild, inactive_role_ids)}\n"
+                    f"재인증 제거: {format_roles(interaction.guild, reauth_remove_role_ids)}"
                 )
 
             inactive_text = "\n\n".join(inactive_lines)

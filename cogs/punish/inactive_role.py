@@ -44,11 +44,35 @@ async def ensure_inactive_rule_schema():
         CREATE TABLE IF NOT EXISTS inactive_role_rules (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             guild_id INTEGER,
+            rule_name TEXT DEFAULT '장기 미활동 설정',
             base_role_ids TEXT NOT NULL,
             inactive_role_ids TEXT NOT NULL,
+            reauth_remove_role_ids TEXT,
             inactive_days INTEGER NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+
+        for sql in [
+            "ALTER TABLE inactive_role_rules ADD COLUMN rule_name TEXT DEFAULT '장기 미활동 설정'",
+            "ALTER TABLE inactive_role_rules ADD COLUMN reauth_remove_role_ids TEXT",
+        ]:
+            try:
+                await db.execute(sql)
+            except aiosqlite.OperationalError:
+                pass
+
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS inactive_reauth_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            guild_id INTEGER,
+            rule_id INTEGER,
+            rule_name TEXT,
+            removed_role_ids TEXT,
+            restored_role_ids TEXT,
+            reauth_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
         """)
 
@@ -79,14 +103,17 @@ async def migrate_old_inactive_settings():
         await db.execute("""
         INSERT INTO inactive_role_rules (
             guild_id,
+            rule_name,
             base_role_ids,
             inactive_role_ids,
+            reauth_remove_role_ids,
             inactive_days,
             enabled
         )
-        VALUES (NULL, ?, ?, ?, 1)
+        VALUES (NULL, '기존 미활동 설정', ?, ?, ?, ?, 1)
         """, (
             str(base_role_id),
+            str(inactive_role_id),
             str(inactive_role_id),
             int(inactive_days),
         ))
@@ -100,7 +127,8 @@ async def get_inactive_rules(guild_id: int | None = None):
     async with aiosqlite.connect(DB_PATH) as db:
         if guild_id is None:
             async with db.execute("""
-            SELECT id, guild_id, base_role_ids, inactive_role_ids, inactive_days, enabled
+            SELECT id, guild_id, rule_name, base_role_ids, inactive_role_ids,
+                   reauth_remove_role_ids, inactive_days, enabled
             FROM inactive_role_rules
             WHERE enabled = 1
             ORDER BY inactive_days ASC, id ASC
@@ -108,7 +136,8 @@ async def get_inactive_rules(guild_id: int | None = None):
                 return await cursor.fetchall()
 
         async with db.execute("""
-        SELECT id, guild_id, base_role_ids, inactive_role_ids, inactive_days, enabled
+        SELECT id, guild_id, rule_name, base_role_ids, inactive_role_ids,
+               reauth_remove_role_ids, inactive_days, enabled
         FROM inactive_role_rules
         WHERE enabled = 1
         AND (guild_id IS NULL OR guild_id = ?)
@@ -168,13 +197,24 @@ class InactiveRole(commands.Cog):
 
         removed_roles = []
         added_roles = []
+        applied_rule_names = []
 
-        for rule_id, guild_id, base_role_ids, inactive_role_ids, inactive_days, enabled in rules:
+        for (
+            rule_id,
+            guild_id,
+            rule_name,
+            base_role_ids,
+            inactive_role_ids,
+            reauth_remove_role_ids,
+            inactive_days,
+            enabled,
+        ) in rules:
             base_ids = parse_id_list(base_role_ids)
             inactive_ids = parse_id_list(inactive_role_ids)
+            remove_ids = parse_id_list(reauth_remove_role_ids) or inactive_ids
 
-            inactive_roles = [
-                role for role_id in inactive_ids
+            remove_roles = [
+                role for role_id in remove_ids
                 if (role := message.guild.get_role(role_id)) is not None
             ]
 
@@ -183,29 +223,55 @@ class InactiveRole(commands.Cog):
                 if (role := message.guild.get_role(role_id)) is not None
             ]
 
-            if not inactive_roles:
+            if not remove_roles:
                 continue
 
-            if not any(role in member.roles for role in inactive_roles):
+            if not any(role in member.roles for role in remove_roles):
                 continue
 
             try:
-                roles_to_remove = [role for role in inactive_roles if role in member.roles]
+                roles_to_remove = [role for role in remove_roles if role in member.roles]
                 roles_to_add = [role for role in base_roles if role not in member.roles]
 
                 if roles_to_remove:
                     await member.remove_roles(
                         *roles_to_remove,
-                        reason=f"재인증 채널 활동으로 미활동 역할 제거 - 규칙 #{rule_id}",
+                        reason=f"재인증 채널 활동으로 역할 제거 - {rule_name} #{rule_id}",
                     )
                     removed_roles.extend(roles_to_remove)
 
                 if roles_to_add:
                     await member.add_roles(
                         *roles_to_add,
-                        reason=f"재인증 채널 활동으로 기준 역할 복구 - 규칙 #{rule_id}",
+                        reason=f"재인증 채널 활동으로 기준 역할 복구 - {rule_name} #{rule_id}",
                     )
                     added_roles.extend(roles_to_add)
+
+                async with aiosqlite.connect(DB_PATH) as db:
+                    await db.execute("""
+                    INSERT INTO inactive_reauth_logs (
+                        user_id,
+                        guild_id,
+                        rule_id,
+                        rule_name,
+                        removed_role_ids,
+                        restored_role_ids,
+                        reauth_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        member.id,
+                        message.guild.id,
+                        rule_id,
+                        rule_name,
+                        ",".join(str(role.id) for role in roles_to_remove),
+                        ",".join(str(role.id) for role in roles_to_add),
+                        datetime.now(KST).isoformat(),
+                    ))
+
+                    await db.commit()
+
+                applied_rule_names.append(f"`{rule_name}`")
 
             except discord.Forbidden:
                 await message.channel.send(
@@ -226,11 +292,13 @@ class InactiveRole(commands.Cog):
 
         removed_text = ", ".join(role.mention for role in dict.fromkeys(removed_roles))
         added_text = ", ".join(role.mention for role in dict.fromkeys(added_roles)) if added_roles else "추가 지급 역할 없음"
+        rule_text = ", ".join(dict.fromkeys(applied_rule_names))
 
         embed = discord.Embed(
             title="✅ 재인증 완료",
             description=(
                 f"{member.mention} 님의 재인증이 완료되었습니다.\n"
+                f"적용 설정 : {rule_text}\n"
                 f"제거 역할 : {removed_text}\n"
                 f"지급 역할 : {added_text}"
             ),
@@ -268,7 +336,16 @@ class InactiveRole(commands.Cog):
         before_role_ids = {role.id for role in before.roles}
         after_role_ids = {role.id for role in after.roles}
 
-        for rule_id, guild_id, base_role_ids, inactive_role_ids, inactive_days, enabled in rules:
+        for (
+            rule_id,
+            guild_id,
+            rule_name,
+            base_role_ids,
+            inactive_role_ids,
+            reauth_remove_role_ids,
+            inactive_days,
+            enabled,
+        ) in rules:
             for base_role_id in parse_id_list(base_role_ids):
                 if base_role_id not in before_role_ids and base_role_id in after_role_ids:
                     await update_user_activity(after.id)
@@ -322,7 +399,16 @@ class InactiveRole(commands.Cog):
 
                 member_role_ids = {role.id for role in member.roles}
 
-                for rule_id, guild_id, base_role_ids, inactive_role_ids, inactive_days, enabled in rules:
+                for (
+                    rule_id,
+                    guild_id,
+                    rule_name,
+                    base_role_ids,
+                    inactive_role_ids,
+                    reauth_remove_role_ids,
+                    inactive_days,
+                    enabled,
+                ) in rules:
                     base_ids = parse_id_list(base_role_ids)
                     inactive_ids = parse_id_list(inactive_role_ids)
 
@@ -351,7 +437,7 @@ class InactiveRole(commands.Cog):
                     try:
                         await member.add_roles(
                             *inactive_roles,
-                            reason=f"{inactive_days}일 이상 미활동으로 인한 자동 역할 지급 - 규칙 #{rule_id}",
+                            reason=f"{inactive_days}일 이상 미활동으로 인한 자동 역할 지급 - {rule_name} #{rule_id}",
                         )
                     except discord.HTTPException:
                         pass
