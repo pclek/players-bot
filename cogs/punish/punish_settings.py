@@ -61,28 +61,6 @@ async def set_setting(key: str, value: str):
         """,
             (key, value),
         )
-        for sql in [
-            "ALTER TABLE inactive_role_rules ADD COLUMN rule_name TEXT DEFAULT '장기 미활동 설정'",
-            "ALTER TABLE inactive_role_rules ADD COLUMN reauth_remove_role_ids TEXT",
-        ]:
-            try:
-                await db.execute(sql)
-            except aiosqlite.OperationalError:
-                pass
-
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS inactive_reauth_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            guild_id INTEGER,
-            rule_id INTEGER,
-            rule_name TEXT,
-            removed_role_ids TEXT,
-            restored_role_ids TEXT,
-            reauth_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-        """)
-
         await db.commit()
 
 
@@ -109,6 +87,40 @@ async def ensure_inactive_rule_schema():
             inactive_days INTEGER NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+
+        for sql in [
+            "ALTER TABLE inactive_role_rules ADD COLUMN rule_name TEXT DEFAULT '장기 미활동 설정'",
+            "ALTER TABLE inactive_role_rules ADD COLUMN reauth_remove_role_ids TEXT",
+        ]:
+            try:
+                await db.execute(sql)
+            except aiosqlite.OperationalError:
+                pass
+
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS inactive_reauth_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            guild_id INTEGER,
+            rule_id INTEGER,
+            rule_name TEXT,
+            removed_role_ids TEXT,
+            restored_role_ids TEXT,
+            reauth_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS inactive_user_states (
+            user_id INTEGER NOT NULL,
+            guild_id INTEGER NOT NULL,
+            rule_id INTEGER NOT NULL,
+            rule_name TEXT,
+            inactive_role_ids TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, guild_id, rule_id)
         )
         """)
 

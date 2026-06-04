@@ -881,22 +881,22 @@ class Sticky(commands.Cog):
         self.bot = bot
         self.processing_channels = set()
 
-async def cog_load(self):
-    await ensure_sticky_schema()
+    async def cog_load(self):
+        await ensure_sticky_schema()
 
-    self.bot.add_view(StickyButtonView())
+        self.bot.add_view(StickyButtonView())
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("""
-        SELECT button_actions, recruit_button
-        FROM sticky_messages
-        """) as cursor:
-            rows = await cursor.fetchall()
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+            SELECT button_actions, recruit_button
+            FROM sticky_messages
+            """) as cursor:
+                rows = await cursor.fetchall()
 
-    for button_actions, recruit_button in rows:
-        actions = parse_button_actions(button_actions, recruit_button)
-        if actions:
-            self.bot.add_view(StickyButtonView(actions))
+        for button_actions, recruit_button in rows:
+            actions = parse_button_actions(button_actions, recruit_button)
+            if actions:
+                self.bot.add_view(StickyButtonView(actions))
 
     @app_commands.command(name="스티키", description="스티키 메시지를 관리합니다.")
     async def sticky(self, interaction: discord.Interaction):
