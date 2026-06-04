@@ -950,16 +950,26 @@ class AdventureInventorySelect(discord.ui.Select):
             if item_name == "녹슨검":
                 continue
 
-            mark = ""
+            marks = []
 
             if item_name == equipped_weapon or item_name == equipped_armor:
-                mark = "장착중"
+                marks.append("장착중")
+
+            if item_name in WEAPON_NAMES or item_name in ARMOR_NAMES:
+                marks.append("장착 가능")
+
+            if item_name in FOOD_HEALS:
+                heal_amount = FOOD_HEALS[item_name]
+                heal_text = "전체 회복" if heal_amount >= 999 else f"HP {heal_amount} 회복"
+                marks.append(f"사용 가능 / {heal_text}")
+
+            mark_text = " / ".join(marks)
 
             options.append(
                 discord.SelectOption(
                     label=f"{item_name} x{quantity}"[:100],
                     value=item_name,
-                    description=f"{category or '기타'} {mark}"[:100],
+                    description=f"{category or '기타'} {mark_text}"[:100],
                 )
             )
 

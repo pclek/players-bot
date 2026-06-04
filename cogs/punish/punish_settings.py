@@ -16,20 +16,39 @@ def make_punish_settings_embed():
     )
 
 
-class PunishBackButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(
-            label="뒤로가기",
-            style=discord.ButtonStyle.gray,
-            emoji="↩️",
-        )
+def parse_id_list(raw: str | None):
+    if not raw:
+        return []
 
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.edit_message(
-            content=None,
-            embed=make_punish_settings_embed(),
-            view=PunishMenuView(),
-        )
+    ids = []
+
+    for value in str(raw).split(","):
+        value = value.strip()
+
+        if not value:
+            continue
+
+        try:
+            ids.append(int(value))
+        except ValueError:
+            continue
+
+    return ids
+
+
+def format_roles(guild: discord.Guild, raw_ids: str | None):
+    role_ids = parse_id_list(raw_ids)
+
+    if not role_ids:
+        return "없음"
+
+    texts = []
+
+    for role_id in role_ids:
+        role = guild.get_role(role_id)
+        texts.append(role.mention if role else f"`삭제된 역할:{role_id}`")
+
+    return ", ".join(texts)
 
 
 async def set_setting(key: str, value: str):
@@ -55,6 +74,156 @@ async def get_setting(key: str):
     return row[0] if row else None
 
 
+async def ensure_inactive_rule_schema():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS inactive_role_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER,
+            base_role_ids TEXT NOT NULL,
+            inactive_role_ids TEXT NOT NULL,
+            inactive_days INTEGER NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+
+        await db.commit()
+
+
+async def migrate_old_inactive_settings():
+    await ensure_inactive_rule_schema()
+
+    base_role_id = await get_setting("inactive_base_role_id")
+    inactive_days = await get_setting("inactive_days")
+    inactive_role_id = await get_setting("inactive_role_id")
+
+    if not base_role_id or not inactive_days or not inactive_role_id:
+        return
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT id
+        FROM inactive_role_rules
+        LIMIT 1
+        """) as cursor:
+            existing = await cursor.fetchone()
+
+        if existing:
+            return
+
+        await db.execute("""
+        INSERT INTO inactive_role_rules (
+            guild_id,
+            base_role_ids,
+            inactive_role_ids,
+            inactive_days,
+            enabled
+        )
+        VALUES (NULL, ?, ?, ?, 1)
+        """, (
+            str(base_role_id),
+            str(inactive_role_id),
+            int(inactive_days),
+        ))
+
+        await db.commit()
+
+
+async def get_inactive_rules(include_disabled: bool = False):
+    await migrate_old_inactive_settings()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        if include_disabled:
+            async with db.execute("""
+            SELECT id, guild_id, base_role_ids, inactive_role_ids, inactive_days, enabled
+            FROM inactive_role_rules
+            ORDER BY id ASC
+            """) as cursor:
+                return await cursor.fetchall()
+
+        async with db.execute("""
+        SELECT id, guild_id, base_role_ids, inactive_role_ids, inactive_days, enabled
+        FROM inactive_role_rules
+        WHERE enabled = 1
+        ORDER BY id ASC
+        """) as cursor:
+            return await cursor.fetchall()
+
+
+async def create_inactive_rule(
+    guild_id: int,
+    base_role_ids: list[int],
+    inactive_role_ids: list[int],
+    inactive_days: int,
+):
+    await ensure_inactive_rule_schema()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        INSERT INTO inactive_role_rules (
+            guild_id,
+            base_role_ids,
+            inactive_role_ids,
+            inactive_days,
+            enabled
+        )
+        VALUES (?, ?, ?, ?, 1)
+        """, (
+            guild_id,
+            ",".join(str(role_id) for role_id in base_role_ids),
+            ",".join(str(role_id) for role_id in inactive_role_ids),
+            inactive_days,
+        ))
+
+        await db.commit()
+
+
+async def update_inactive_rule(
+    rule_id: int,
+    guild_id: int,
+    base_role_ids: list[int],
+    inactive_role_ids: list[int],
+    inactive_days: int,
+):
+    await ensure_inactive_rule_schema()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        UPDATE inactive_role_rules
+        SET guild_id = ?,
+            base_role_ids = ?,
+            inactive_role_ids = ?,
+            inactive_days = ?,
+            enabled = 1
+        WHERE id = ?
+        """, (
+            guild_id,
+            ",".join(str(role_id) for role_id in base_role_ids),
+            ",".join(str(role_id) for role_id in inactive_role_ids),
+            inactive_days,
+            rule_id,
+        ))
+
+        await db.commit()
+
+
+class PunishBackButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="뒤로가기",
+            style=discord.ButtonStyle.gray,
+            emoji="↩️",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            content=None,
+            embed=make_punish_settings_embed(),
+            view=PunishMenuView(),
+        )
+
+
 class PunishRoleSelect(discord.ui.RoleSelect):
     def __init__(self, setting_key: str, label: str):
         self.setting_key = setting_key
@@ -72,6 +241,8 @@ class PunishRoleSelect(discord.ui.RoleSelect):
             embed=None,
             view=view,
         )
+
+
 class RejoinNoticeChannelSelect(discord.ui.ChannelSelect):
     def __init__(self):
         super().__init__(
@@ -144,30 +315,113 @@ class RejoinNoticeMessageModal(discord.ui.Modal):
             ephemeral=True,
         )
 
-class InactiveBaseRoleSelect(discord.ui.RoleSelect):
+
+class InactiveRuleMenuSelect(discord.ui.Select):
     def __init__(self):
+        options = [
+            discord.SelectOption(
+                label="장기 미활동 설정 추가",
+                description="기준 역할/기간/지급 역할을 새로 등록합니다.",
+                value="add",
+            ),
+            discord.SelectOption(
+                label="장기 미활동 설정 수정",
+                description="등록된 미활동 설정을 수정합니다.",
+                value="edit",
+            ),
+            discord.SelectOption(
+                label="장기 미활동 설정 삭제",
+                description="등록된 미활동 설정을 삭제합니다.",
+                value="delete",
+            ),
+            discord.SelectOption(
+                label="장기 미활동 설정 목록",
+                description="현재 등록된 미활동 설정을 확인합니다.",
+                value="list",
+            ),
+        ]
+
         super().__init__(
-            placeholder="기준 역할을 선택하세요. 예: 신입 역할",
+            placeholder="장기 미활동 설정 작업을 선택하세요.",
             min_values=1,
             max_values=1,
+            options=options,
         )
 
     async def callback(self, interaction: discord.Interaction):
-        base_role = self.values[0]
+        selected = self.values[0]
+
+        if selected == "add":
+            view = discord.ui.View(timeout=60)
+            view.add_item(InactiveBaseRolesSelect())
+
+            await interaction.response.edit_message(
+                content="📌 기준 역할을 선택하세요.\n여러 개 선택 가능하며, 해당 역할 중 하나라도 가진 유저가 검사 대상입니다.",
+                embed=None,
+                view=view,
+            )
+            return
+
+        if selected in ["edit", "delete"]:
+            rows = await get_inactive_rules(include_disabled=True)
+
+            if not rows:
+                await interaction.response.edit_message(
+                    content="❌ 등록된 장기 미활동 설정이 없습니다.",
+                    embed=None,
+                    view=None,
+                )
+                return
+
+            view = discord.ui.View(timeout=60)
+            view.add_item(InactiveRuleSelect(rows, selected, interaction.guild))
+            view.add_item(PunishBackButton())
+
+            await interaction.response.edit_message(
+                content="📋 처리할 장기 미활동 설정을 선택하세요.",
+                embed=None,
+                view=view,
+            )
+            return
+
+        await show_inactive_rule_list(interaction)
+
+
+class InactiveRuleMenuView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.add_item(InactiveRuleMenuSelect())
+        self.add_item(PunishBackButton())
+
+
+class InactiveBaseRolesSelect(discord.ui.RoleSelect):
+    def __init__(self, rule_id: int | None = None):
+        self.rule_id = rule_id
+
+        super().__init__(
+            placeholder="기준 역할 선택",
+            min_values=1,
+            max_values=25,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        base_role_ids = [role.id for role in self.values]
 
         await interaction.response.send_modal(
-            InactiveDaysModal(base_role.id)
+            InactiveDaysModal(base_role_ids, self.rule_id)
         )
 
 
 class InactiveDaysModal(discord.ui.Modal):
-    def __init__(self, base_role_id: int):
-        super().__init__(title="장기 미활동 기간 설정")
-        self.base_role_id = base_role_id
+    def __init__(self, base_role_ids: list[int], rule_id: int | None = None):
+        title = "장기 미활동 기간 설정" if rule_id is None else "장기 미활동 기간 수정"
+        super().__init__(title=title)
+        self.base_role_ids = base_role_ids
+        self.rule_id = rule_id
 
         self.days = discord.ui.TextInput(
             label="미활동 기간",
-            placeholder="숫자만 입력. 예: 7",
+            placeholder="숫자만 입력. 예: 30",
             required=True,
             max_length=3,
         )
@@ -193,52 +447,172 @@ class InactiveDaysModal(discord.ui.Modal):
 
         view = discord.ui.View(timeout=60)
         view.add_item(
-            InactiveTargetRoleSelect(
-                self.base_role_id,
+            InactiveTargetRolesSelect(
+                self.base_role_ids,
                 inactive_days,
+                self.rule_id,
             )
         )
 
         await interaction.response.send_message(
-            "🏷 지급할 미활동 역할을 선택하세요.",
+            "🏷 미활동 시 지급할 역할을 선택하세요.\n여러 개 선택 가능합니다.",
             view=view,
             ephemeral=True,
         )
 
 
-class InactiveTargetRoleSelect(discord.ui.RoleSelect):
-    def __init__(self, base_role_id: int, inactive_days: int):
-        self.base_role_id = base_role_id
+class InactiveTargetRolesSelect(discord.ui.RoleSelect):
+    def __init__(
+        self,
+        base_role_ids: list[int],
+        inactive_days: int,
+        rule_id: int | None = None,
+    ):
+        self.base_role_ids = base_role_ids
         self.inactive_days = inactive_days
+        self.rule_id = rule_id
 
         super().__init__(
-            placeholder="지급할 미활동 역할을 선택하세요. 예: 미활동",
+            placeholder="미활동 시 지급할 역할 선택",
             min_values=1,
-            max_values=1,
+            max_values=25,
         )
 
     async def callback(self, interaction: discord.Interaction):
-        inactive_role = self.values[0]
+        inactive_role_ids = [role.id for role in self.values]
 
-        await set_setting("inactive_base_role_id", str(self.base_role_id))
-        await set_setting("inactive_days", str(self.inactive_days))
-        await set_setting("inactive_role_id", str(inactive_role.id))
+        if self.rule_id is None:
+            await create_inactive_rule(
+                interaction.guild.id,
+                self.base_role_ids,
+                inactive_role_ids,
+                self.inactive_days,
+            )
+            action_text = "저장"
+        else:
+            await update_inactive_rule(
+                self.rule_id,
+                interaction.guild.id,
+                self.base_role_ids,
+                inactive_role_ids,
+                self.inactive_days,
+            )
+            action_text = "수정"
 
-        base_role = interaction.guild.get_role(self.base_role_id)
+        base_text = ", ".join(f"<@&{role_id}>" for role_id in self.base_role_ids)
+        inactive_text = ", ".join(f"<@&{role_id}>" for role_id in inactive_role_ids)
 
         view = discord.ui.View(timeout=60)
         view.add_item(PunishBackButton())
 
         await interaction.response.edit_message(
             content=(
-                f"✅ 장기 미활동 설정을 저장했습니다.\n"
-                f"기준 역할: {base_role.mention if base_role else '`삭제된 역할`'}\n"
+                f"✅ 장기 미활동 설정을 {action_text}했습니다.\n"
+                f"기준 역할: {base_text}\n"
                 f"미활동 기간: `{self.inactive_days}일`\n"
-                f"지급 역할: {inactive_role.mention}"
+                f"지급 역할: {inactive_text}\n\n"
+                f"재인증 채널에서 채팅하면 지급 역할을 제거하고 기준 역할을 복구합니다."
             ),
             embed=None,
             view=view,
         )
+
+
+class InactiveRuleSelect(discord.ui.Select):
+    def __init__(self, rows, mode: str, guild: discord.Guild):
+        self.mode = mode
+        self.guild = guild
+
+        options = []
+
+        for rule_id, guild_id, base_role_ids, inactive_role_ids, inactive_days, enabled in rows[:25]:
+            status = "사용중" if enabled else "비활성"
+            base_preview = format_roles(guild, base_role_ids)
+            inactive_preview = format_roles(guild, inactive_role_ids)
+
+            options.append(
+                discord.SelectOption(
+                    label=f"#{rule_id} / {inactive_days}일 / {status}"[:100],
+                    value=str(rule_id),
+                    description=f"기준: {base_preview} → 지급: {inactive_preview}"[:100],
+                )
+            )
+
+        super().__init__(
+            placeholder="장기 미활동 설정 선택",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        rule_id = int(self.values[0])
+
+        if self.mode == "delete":
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("""
+                DELETE FROM inactive_role_rules
+                WHERE id = ?
+                """, (rule_id,))
+                await db.commit()
+
+            view = discord.ui.View(timeout=60)
+            view.add_item(PunishBackButton())
+
+            await interaction.response.edit_message(
+                content=f"✅ 장기 미활동 설정 `#{rule_id}` 을(를) 삭제했습니다.",
+                embed=None,
+                view=view,
+            )
+            return
+
+        view = discord.ui.View(timeout=60)
+        view.add_item(InactiveBaseRolesSelect(rule_id))
+
+        await interaction.response.edit_message(
+            content="📌 수정할 기준 역할을 다시 선택하세요.\n여러 개 선택 가능합니다.",
+            embed=None,
+            view=view,
+        )
+
+
+async def show_inactive_rule_list(interaction: discord.Interaction):
+    rows = await get_inactive_rules(include_disabled=True)
+
+    if not rows:
+        await interaction.response.edit_message(
+            content="📋 등록된 장기 미활동 설정이 없습니다.",
+            embed=None,
+            view=None,
+        )
+        return
+
+    lines = []
+
+    for rule_id, guild_id, base_role_ids, inactive_role_ids, inactive_days, enabled in rows:
+        status = "사용중" if enabled else "비활성"
+
+        lines.append(
+            f"**#{rule_id}** `{inactive_days}일` / `{status}`\n"
+            f"기준 역할 : {format_roles(interaction.guild, base_role_ids)}\n"
+            f"지급 역할 : {format_roles(interaction.guild, inactive_role_ids)}"
+        )
+
+    embed = discord.Embed(
+        title="📋 장기 미활동 설정 목록",
+        description="\n\n".join(lines),
+        color=discord.Color.red(),
+    )
+
+    view = discord.ui.View(timeout=60)
+    view.add_item(PunishBackButton())
+
+    await interaction.response.edit_message(
+        content=None,
+        embed=embed,
+        view=view,
+    )
+
 
 class PunishMenuSelect(discord.ui.Select):
     def __init__(self):
@@ -255,7 +629,7 @@ class PunishMenuSelect(discord.ui.Select):
             ),
             discord.SelectOption(
                 label="장기 미활동 설정",
-                description="특정 역할이 일정 기간 활동 없을 때 미활동 역할을 지급합니다.",
+                description="여러 미활동 규칙을 추가/수정/삭제합니다.",
                 value="inactive",
             ),
             discord.SelectOption(
@@ -270,13 +644,8 @@ class PunishMenuSelect(discord.ui.Select):
             ),
             discord.SelectOption(
                 label="재인증 채널 설정",
-                description="미활동자가 채팅하면 인턴 역할로 복구될 채널을 설정합니다.",
+                description="미활동자가 재인증할 채널을 설정합니다.",
                 value="reauth_channel",
-            ),
-            discord.SelectOption(
-                label="재인증 추가 역할 설정",
-                description="재인증 완료 시 추가로 지급할 역할을 설정합니다.",
-                value="reauth_extra_role",
             ),
             discord.SelectOption(
                 label="현재 설정 조회",
@@ -324,18 +693,26 @@ class PunishMenuSelect(discord.ui.Select):
                 view=view,
             )
             return
-        if selected == "inactive":
-            view = discord.ui.View(timeout=60)
-            view.add_item(InactiveBaseRoleSelect())
 
-            view.add_item(PunishBackButton())
+        if selected == "inactive":
+            await migrate_old_inactive_settings()
 
             await interaction.response.edit_message(
-                content="📌 장기 미활동 기준 역할을 선택하세요.",
-                embed=None,
-                view=view,
+                content=None,
+                embed=discord.Embed(
+                    title="⏳ 장기 미활동 설정",
+                    description=(
+                        "장기 미활동 규칙을 여러 개 등록할 수 있습니다.\n\n"
+                        "기준 역할은 여러 개 선택 가능하고,\n"
+                        "미활동 시 지급 역할도 여러 개 선택 가능합니다.\n\n"
+                        "재인증 채널에서 채팅하면 지급 역할을 제거하고 기준 역할을 복구합니다."
+                    ),
+                    color=discord.Color.red(),
+                ),
+                view=InactiveRuleMenuView(),
             )
             return
+
         if selected == "rejoin_notice_channel":
             view = discord.ui.View(timeout=60)
             view.add_item(RejoinNoticeChannelSelect())
@@ -361,20 +738,6 @@ class PunishMenuSelect(discord.ui.Select):
             )
             return
 
-        if selected == "reauth_extra_role":
-            view = discord.ui.View(timeout=60)
-            view.add_item(
-                PunishRoleSelect("reauth_extra_role_id", "재인증 시 추가 지급할 역할을 선택하세요.")
-            )
-            view.add_item(PunishBackButton())
-
-            await interaction.response.edit_message(
-                content="🏷 재인증 완료 시 추가로 지급할 역할을 선택하세요.",
-                embed=None,
-                view=view,
-            )
-            return
-
         if selected == "rejoin_notice_message":
             try:
                 await interaction.message.delete()
@@ -385,25 +748,20 @@ class PunishMenuSelect(discord.ui.Select):
                     pass
 
             await interaction.response.send_modal(RejoinNoticeMessageModal())
-            return        
+            return
 
         quarantine_role_id = await get_setting("quarantine_role_id")
         exempt_role_id = await get_setting("punish_exempt_role_id")
-        inactive_base_role_id = await get_setting("inactive_base_role_id")
-        inactive_days = await get_setting("inactive_days")
-        inactive_role_id = await get_setting("inactive_role_id")
         rejoin_notice_channel_id = await get_setting("rejoin_notice_channel_id")
         rejoin_notice_message = await get_setting("rejoin_notice_message")
         reauth_channel_id = await get_setting("reauth_channel_id")
-        reauth_extra_role_id = await get_setting("reauth_extra_role_id")
+        inactive_rows = await get_inactive_rules(include_disabled=True)
 
         quarantine_text = "설정 안 됨"
         exempt_text = "설정 안 됨"
-        inactive_text = "설정 안 됨"
         rejoin_channel_text = "설정 안 됨"
         rejoin_message_text = rejoin_notice_message if rejoin_notice_message else "설정 안 됨"
         reauth_channel_text = "설정 안 됨"
-        reauth_extra_role_text = "설정 안 됨"
 
         if quarantine_role_id:
             role = interaction.guild.get_role(int(quarantine_role_id))
@@ -416,28 +774,7 @@ class PunishMenuSelect(discord.ui.Select):
             exempt_text = (
                 role.mention if role else f"삭제된 역할 ID: `{exempt_role_id}`"
             )
-            
-        if inactive_base_role_id and inactive_days and inactive_role_id:
-            base_role = interaction.guild.get_role(int(inactive_base_role_id))
-            inactive_role = interaction.guild.get_role(int(inactive_role_id))
 
-            base_text = (
-                base_role.mention
-                if base_role
-                else f"삭제된 역할 ID: `{inactive_base_role_id}`"
-            )
-
-            role_text = (
-                inactive_role.mention
-                if inactive_role
-                else f"삭제된 역할 ID: `{inactive_role_id}`"
-            )
-
-            inactive_text = (
-                f"기준 역할: {base_text}\n"
-                f"기간: `{inactive_days}일`\n"
-                f"지급 역할: {role_text}"
-            )
         if rejoin_notice_channel_id:
             channel = interaction.guild.get_channel(int(rejoin_notice_channel_id))
             rejoin_channel_text = (
@@ -453,13 +790,22 @@ class PunishMenuSelect(discord.ui.Select):
                 if channel
                 else f"삭제된 채널 ID: `{reauth_channel_id}`"
             )
-        if reauth_extra_role_id:
-            role = interaction.guild.get_role(int(reauth_extra_role_id))
-            reauth_extra_role_text = (
-                role.mention
-                if role
-                else f"삭제된 역할 ID: `{reauth_extra_role_id}`"
-            )
+
+        if inactive_rows:
+            inactive_lines = []
+
+            for rule_id, guild_id, base_role_ids, inactive_role_ids, inactive_days, enabled in inactive_rows:
+                status = "사용중" if enabled else "비활성"
+                inactive_lines.append(
+                    f"#{rule_id} `{inactive_days}일` / `{status}`\n"
+                    f"기준: {format_roles(interaction.guild, base_role_ids)}\n"
+                    f"지급: {format_roles(interaction.guild, inactive_role_ids)}"
+                )
+
+            inactive_text = "\n\n".join(inactive_lines)
+        else:
+            inactive_text = "설정 안 됨"
+
         embed = discord.Embed(title="🛡 제재 설정", color=discord.Color.red())
 
         embed.add_field(name="격리 역할", value=quarantine_text, inline=False)
@@ -468,7 +814,6 @@ class PunishMenuSelect(discord.ui.Select):
         embed.add_field(name="재입장 안내 채널", value=rejoin_channel_text, inline=False)
         embed.add_field(name="재입장 안내 문구", value=rejoin_message_text, inline=False)
         embed.add_field(name="재인증 채널", value=reauth_channel_text, inline=False)
-        embed.add_field(name="재인증 추가 역할", value=reauth_extra_role_text, inline=False)
 
         view = discord.ui.View(timeout=60)
         view.add_item(PunishBackButton())
@@ -497,6 +842,8 @@ class PunishSettings(commands.Cog):
                 "❌ 이 명령어를 사용할 권한이 없습니다.", ephemeral=True
             )
             return
+
+        await migrate_old_inactive_settings()
 
         embed = discord.Embed(
             title="🛡 제재 설정 메뉴",

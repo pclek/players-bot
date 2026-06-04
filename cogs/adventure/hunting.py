@@ -462,8 +462,16 @@ class HuntView(discord.ui.View):
         if self.shield > 0:
             desc += f"  🛡 실드 : `{self.shield}`"
 
+        attack_min, attack_max = WEAPON_STATS.get(self.weapon_name, (1, 3))
+
+        enhance_multiplier = 1 + (self.weapon_enhance_level * 0.05)
+
+        final_attack_min = int(attack_min * enhance_multiplier) + self.attack_bonus
+        final_attack_max = int(attack_max * enhance_multiplier) + self.attack_bonus
+
         desc += (
             f"\n⚔ 장착 무기 : `{self.weapon_name} +{self.weapon_enhance_level}`  /  Lv.`{self.player_level}`\n"
+            f"⚔ 플레이어 공격력 : `{final_attack_min} ~ {final_attack_max}`\n"
             f"🛡 장착 방어구 : `{self.armor_name or '없음'} +{self.armor_enhance_level}`\n\n"
             f"👹 위험도 : `{get_monster_risk(monster)}`\n"
             f"❤️ 몬스터 체력 예상 : `{monster['hp_min']} ~ {monster['hp_max']}`\n"
@@ -746,8 +754,7 @@ class HuntView(discord.ui.View):
 
         await interaction.response.send_message(
             embed=embed,
-            view=FoodView(self, food_rows),
-            ephemeral=True,
+            view=FoodView(self, food_rows),            
         )
 
     @discord.ui.button(label="🏃 도망", style=discord.ButtonStyle.gray)

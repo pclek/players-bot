@@ -115,6 +115,9 @@ ADVENTURE_ITEM_SEED_ROWS = [
 
 
 async def ensure_adventure_item_catalog():
+    current_item_names = [name for name, category in ADVENTURE_ITEM_SEED_ROWS]
+    placeholders = ",".join("?" for _ in current_item_names)
+
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
         CREATE TABLE IF NOT EXISTS adventure_items (
@@ -136,6 +139,21 @@ async def ensure_adventure_item_catalog():
                 name,
                 category,
             ))
+
+        if current_item_names:
+            await db.execute(f"""
+            DELETE FROM adventure_items
+            WHERE name NOT IN ({placeholders})
+            """, current_item_names)
+
+            try:
+                await db.execute(f"""
+                UPDATE adventure_shop_items
+                SET enabled = 0
+                WHERE item_name NOT IN ({placeholders})
+                """, current_item_names)
+            except aiosqlite.OperationalError:
+                pass
 
         await db.commit()
 

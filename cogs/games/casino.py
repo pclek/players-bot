@@ -1200,7 +1200,7 @@ class SlotBetButton(discord.ui.Button):
         elif roll <= 965:
             symbol = random.choice(SLOT_SYMBOLS)
             symbols = [symbol, symbol, symbol]
-            multiplier = 1.8
+            multiplier = 2.2
             result = "3개 일치"
         elif roll <= 995:
             symbols = ["💎", "💎", "💎"]
