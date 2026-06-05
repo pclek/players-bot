@@ -891,6 +891,7 @@ class Trade(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+
     async def cog_load(self):
         await ensure_trade_schema()
 
