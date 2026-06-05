@@ -1195,16 +1195,16 @@ class SlotBetButton(discord.ui.Button):
             other = random.choice([s for s in SLOT_SYMBOLS if s != symbol])
             symbols = [symbol, symbol, other]
             random.shuffle(symbols)
-            multiplier = 1.1
+            multiplier = 1.8
             result = "2개 일치"
         elif roll <= 965:
             symbol = random.choice(SLOT_SYMBOLS)
             symbols = [symbol, symbol, symbol]
-            multiplier = 2.2
+            multiplier = 2.8
             result = "3개 일치"
         elif roll <= 995:
             symbols = ["💎", "💎", "💎"]
-            multiplier = 4
+            multiplier = 4.5
             result = "다이아 잭팟"
         else:
             symbols = ["7️⃣", "7️⃣", "7️⃣"]
