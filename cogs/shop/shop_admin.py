@@ -355,7 +355,28 @@ class AdventureShopPriceModal(discord.ui.Modal):
             )
             return
 
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT id
+        FROM adventure_shop_items
+        WHERE item_name = ?
+        """, (self.item_name,)) as cursor:
+            exists = await cursor.fetchone()
+
+        if exists:
+            await db.execute("""
+            UPDATE adventure_shop_items
+            SET stock = stock + ?,
+                price = ?,
+                user_limit = ?,
+                enabled = 1
+            WHERE item_name = ?
+            """, (
+                stock,
+                price,
+                user_limit,
+                self.item_name,
+            ))
+        else:
             await db.execute("""
             INSERT INTO adventure_shop_items (
                 item_name,
@@ -1005,15 +1026,9 @@ class ShopAdminMenuSelect(discord.ui.Select):
         selected = self.values[0]
 
         if selected == "add":
-            try:
-                await interaction.message.delete()
-            except Exception:
-                try:
-                    await interaction.delete_original_response()
-                except Exception:
-                    pass
-
-            await interaction.response.send_modal(ShopItemModal())
+            await interaction.response.send_modal(
+                ShopItemModal()
+            )
             return
 
         if selected == "adventure_add":
