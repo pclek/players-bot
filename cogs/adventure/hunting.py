@@ -17,6 +17,7 @@ from cogs.adventure.adventure_utils import (
     get_user_attack_bonus,
     get_user_max_hp,
     get_user_level,
+    end_user_battle,
 )
 
 DB_PATH = "database/bot.db"
@@ -428,7 +429,7 @@ class HuntView(discord.ui.View):
         weapon_enhance_level: int = 0,
         armor_enhance_level: int = 0,
     ):
-        super().__init__(timeout=180)
+        super().__init__(timeout=None)
 
         self.user_id = user_id
         self.player_hp = player_hp
@@ -515,6 +516,7 @@ class HuntView(discord.ui.View):
             item.disabled = True
 
         await set_user_hp(self.user_id, self.player_hp)
+        await end_user_battle(self.user_id)
 
         durability_text = ""
 

@@ -13,6 +13,7 @@ from cogs.adventure.adventure_utils import (
     format_dead_until,
     equip_equipment_instance,
     get_user_max_hp,
+    is_user_in_battle,
 )
 
 DB_PATH = "database/bot.db"
@@ -1092,6 +1093,14 @@ class AdventureItemUseFoodButton(discord.ui.Button):
         self.item_name = item_name
 
     async def callback(self, interaction: discord.Interaction):
+
+        if await is_user_in_battle(interaction.user.id):
+            await interaction.response.send_message(
+                "⚔️ 전투 중에는 음식을 사용할 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
         heal_amount = FOOD_HEALS.get(self.item_name)
 
         if not heal_amount:
@@ -1325,6 +1334,13 @@ class Shop(commands.Cog):
         self.bot = bot
     @app_commands.command(name="상점", description="포인트 상점을 확인합니다.")
     async def shop(self, interaction: discord.Interaction):
+        if await is_user_in_battle(interaction.user.id):
+            await interaction.response.send_message(
+                "⚔️ 전투 중에는 상점을 이용할 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+        
         await interaction.response.defer(ephemeral=True)
 
         async with aiosqlite.connect(DB_PATH) as db:
@@ -1479,6 +1495,14 @@ class Shop(commands.Cog):
             await db.commit()        
     @app_commands.command(name="인벤토리", description="구매한 상품 목록을 확인합니다.")
     async def inventory(self, interaction: discord.Interaction):
+
+        if await is_user_in_battle(interaction.user.id):
+            await interaction.response.send_message(
+                "⚔️ 전투 중에는 인벤토리를 사용할 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
         await interaction.response.defer(ephemeral=True)
 
         async with aiosqlite.connect(DB_PATH) as db:

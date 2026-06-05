@@ -38,6 +38,9 @@ from cogs.adventure.adventure_utils import (
     get_user_attack_bonus,
     get_equipment_enhance_level,
     EQUIPMENT_NAMES,
+    is_user_in_battle,
+    start_user_battle,
+    update_user_battle_message,
 )
 
 from cogs.adventure.hunting import HuntView, ARMOR_SHIELDS
@@ -458,6 +461,18 @@ class AdventureSelect(discord.ui.Select):
         job_type = self.values[0]
 
         await ensure_adventure_profile(user_id)
+
+        if await is_user_in_battle(user_id):
+            await interaction.edit_original_response(
+                content=(
+                    "❌ 현재 전투 중이라 다른 모험/제작/장착을 사용할 수 없습니다.\n"
+                    "전투를 승리/패배/도망으로 종료한 뒤 다시 이용해주세요."
+                ),
+                embed=None,
+                view=None,
+            )
+            return
+
         if job_type == "recipebook":
             embed = await make_recipebook_embed(user_id, "cooking")
 
@@ -534,13 +549,20 @@ class AdventureSelect(discord.ui.Select):
                 pass
 
             await add_adventure_daily_count(user_id, "hunting")
+            await start_user_battle(user_id, interaction.channel.id, None)
 
-            await interaction.channel.send(
+            battle_message = await interaction.channel.send(
                 embed=view.make_embed(
                     f"전투를 시작합니다.\n"
                     f"오늘 사냥 횟수 : `{hunting_count + 1}/{HUNTING_DAILY_LIMIT}`"
                 ),
                 view=view,
+            )
+
+            await update_user_battle_message(
+                user_id,
+                interaction.channel.id,
+                battle_message.id,
             )
             return
 
@@ -1000,6 +1022,14 @@ class Adventure(commands.Cog):
                 "🪦 아직 부활 대기중입니다.\n"
                 "영혼은 접속했지만 몸이 로그아웃 상태입니다.\n"
                 f"부활 예정 : `{format_dead_until(dead_until)}`",
+            )
+            return
+
+        if await is_user_in_battle(interaction.user.id):
+            await interaction.response.send_message(
+                "❌ 현재 전투 중이라 `/모험` 메뉴를 열 수 없습니다.\n"
+                "전투를 승리/패배/도망으로 종료한 뒤 다시 이용해주세요.",
+                ephemeral=True,
             )
             return
 

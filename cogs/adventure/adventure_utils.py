@@ -848,3 +848,92 @@ async def enhance_equipment_instance(user_id: int, equipment_id: int):
         await db.commit()
 
     return (item_name, enhance_level, new_level)
+
+
+async def ensure_active_battle_schema():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS adventure_active_battles (
+            user_id INTEGER PRIMARY KEY,
+            channel_id INTEGER,
+            message_id INTEGER,
+            started_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+        await db.commit()
+
+
+async def is_user_in_battle(user_id: int) -> bool:
+    await ensure_active_battle_schema()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT 1
+        FROM adventure_active_battles
+        WHERE user_id = ?
+        """, (user_id,)) as cursor:
+            row = await cursor.fetchone()
+
+    return row is not None
+
+
+async def start_user_battle(
+    user_id: int,
+    channel_id: int | None = None,
+    message_id: int | None = None,
+):
+    await ensure_active_battle_schema()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        INSERT INTO adventure_active_battles (
+            user_id,
+            channel_id,
+            message_id,
+            started_at
+        )
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id)
+        DO UPDATE SET
+            channel_id = excluded.channel_id,
+            message_id = excluded.message_id,
+            started_at = excluded.started_at
+        """, (
+            user_id,
+            channel_id,
+            message_id,
+            datetime.now(KST).isoformat(),
+        ))
+        await db.commit()
+
+
+async def update_user_battle_message(
+    user_id: int,
+    channel_id: int,
+    message_id: int,
+):
+    await ensure_active_battle_schema()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        UPDATE adventure_active_battles
+        SET channel_id = ?,
+            message_id = ?
+        WHERE user_id = ?
+        """, (
+            channel_id,
+            message_id,
+            user_id,
+        ))
+        await db.commit()
+
+
+async def end_user_battle(user_id: int):
+    await ensure_active_battle_schema()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        DELETE FROM adventure_active_battles
+        WHERE user_id = ?
+        """, (user_id,))
+        await db.commit()
