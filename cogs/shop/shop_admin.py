@@ -355,44 +355,45 @@ class AdventureShopPriceModal(discord.ui.Modal):
             )
             return
 
-        async with db.execute("""
-        SELECT id
-        FROM adventure_shop_items
-        WHERE item_name = ?
-        """, (self.item_name,)) as cursor:
-            exists = await cursor.fetchone()
-
-        if exists:
-            await db.execute("""
-            UPDATE adventure_shop_items
-            SET stock = stock + ?,
-                price = ?,
-                user_limit = ?,
-                enabled = 1
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+            SELECT id
+            FROM adventure_shop_items
             WHERE item_name = ?
-            """, (
-                stock,
-                price,
-                user_limit,
-                self.item_name,
-            ))
-        else:
-            await db.execute("""
-            INSERT INTO adventure_shop_items (
-                item_name,
-                price,
-                stock,
-                user_limit,
-                limit_type,
-                enabled
-            )
-            VALUES (?, ?, ?, ?, 'daily', 1)
-            """, (
-                self.item_name,
-                price,
-                stock,
-                user_limit,
-            ))
+            """, (self.item_name,)) as cursor:
+                exists = await cursor.fetchone()
+
+            if exists:
+                await db.execute("""
+                UPDATE adventure_shop_items
+                SET stock = stock + ?,
+                    price = ?,
+                    user_limit = ?,
+                    enabled = 1
+                WHERE item_name = ?
+                """, (
+                    stock,
+                    price,
+                    user_limit,
+                    self.item_name,
+                ))
+            else:
+                await db.execute("""
+                INSERT INTO adventure_shop_items (
+                    item_name,
+                    price,
+                    stock,
+                    user_limit,
+                    limit_type,
+                    enabled
+                )
+                VALUES (?, ?, ?, ?, 'daily', 1)
+                """, (
+                    self.item_name,
+                    price,
+                    stock,
+                    user_limit,
+                ))
 
             await db.commit()
 
@@ -472,16 +473,115 @@ class AdventureShopItemSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         item_name = self.values[0]
 
-        try:
-            await interaction.message.delete()
-        except Exception:
-            try:
-                await interaction.delete_original_response()
-            except Exception:
-                pass
-
         await interaction.response.send_modal(
             AdventureShopPriceModal(item_name)
+        )
+
+class AdventureManageSelect(discord.ui.Select):
+    def __init__(self, rows, mode):
+        self.mode = mode
+
+        options = []
+
+        for item_id, item_name, price, stock in rows[:25]:
+            options.append(
+                discord.SelectOption(
+                    label=item_name,
+                    value=str(item_id),
+                    description=f"{price}P / 재고 {stock}",
+                )
+            )
+
+        super().__init__(
+            placeholder="모험상품 선택",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        item_id = int(self.values[0])
+
+        if self.mode == "delete":
+
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("""
+                DELETE FROM adventure_shop_items
+                WHERE id = ?
+                """, (item_id,))
+                await db.commit()
+
+            await interaction.response.edit_message(
+                content="✅ 모험상품 삭제 완료",
+                embed=None,
+                view=None,
+            )
+            return
+
+        await interaction.response.send_modal(
+            AdventureEditModal(item_id)
+        )
+
+class AdventureEditModal(discord.ui.Modal):
+
+    def __init__(self, item_id: int):
+        super().__init__(title="모험상품 수정")
+
+        self.item_id = item_id
+
+        self.price = discord.ui.TextInput(
+            label="가격",
+            required=True,
+        )
+
+        self.stock = discord.ui.TextInput(
+            label="재고",
+            required=True,
+        )
+
+        self.limit = discord.ui.TextInput(
+            label="일일 제한",
+            required=False,
+        )
+
+        self.add_item(self.price)
+        self.add_item(self.stock)
+        self.add_item(self.limit)
+
+    async def on_submit(self, interaction: discord.Interaction):
+
+        try:
+            price = int(self.price.value)
+            stock = int(self.stock.value)
+            limit = int(self.limit.value or 0)
+        except ValueError:
+            await interaction.response.send_message(
+                "❌ 숫자만 입력해주세요.",
+                ephemeral=True,
+            )
+            return
+
+        async with aiosqlite.connect(DB_PATH) as db:
+
+            await db.execute("""
+            UPDATE adventure_shop_items
+            SET
+                price = ?,
+                stock = ?,
+                user_limit = ?
+            WHERE id = ?
+            """, (
+                price,
+                stock,
+                limit,
+                self.item_id,
+            ))
+
+            await db.commit()
+
+        await interaction.response.send_message(
+            "✅ 모험상품 수정 완료",
+            ephemeral=True,
         )
 
 class ShopItemSelect(discord.ui.Select):
@@ -978,6 +1078,17 @@ class ShopAdminMenuSelect(discord.ui.Select):
                 value="adventure_add",
             ),
             discord.SelectOption(
+                label="모험상품 수정",
+                description="등록된 모험상품의 가격/재고를 수정합니다.",
+                value="adventure_edit",
+            ),
+
+            discord.SelectOption(
+                label="모험상품 삭제",
+                description="등록된 모험상품을 삭제합니다.",
+                value="adventure_delete",
+            ),
+            discord.SelectOption(
                 label="상품 삭제",
                 description="상품을 완전히 삭제합니다.",
                 value="delete",
@@ -1061,7 +1172,48 @@ class ShopAdminMenuSelect(discord.ui.Select):
                 view=view,
             )
             return
+        if selected in ("adventure_edit", "adventure_delete"):
 
+            async with aiosqlite.connect(DB_PATH) as db:
+
+                async with db.execute("""
+                SELECT
+                    id,
+                    item_name,
+                    price,
+                    stock
+                FROM adventure_shop_items
+                ORDER BY item_name
+                """) as cursor:
+
+                    rows = await cursor.fetchall()
+
+            if not rows:
+                await interaction.response.send_message(
+                    "❌ 등록된 모험상품이 없습니다.",
+                    ephemeral=True,
+                )
+                return
+
+            view = discord.ui.View(timeout=60)
+
+            view.add_item(
+                AdventureManageSelect(
+                    rows,
+                    "delete" if selected == "adventure_delete" else "edit"
+                )
+            )
+
+            view.add_item(
+                ShopAdminBackButton()
+            )
+
+            await interaction.response.edit_message(
+                content="모험상품 선택",
+                embed=None,
+                view=view,
+            )
+            return        
         if selected == "list":
             await send_shop_admin_list(interaction)
             return
