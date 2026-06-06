@@ -20,11 +20,14 @@ from cogs.adventure.hunting import apply_death_penalty
 DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
 
+
 MIN_BET = 50
 MAX_BET = 500
 CASINO_COOLDOWN_SECONDS = 60 * 60
 CASINO_DAILY_LIMIT = 5
-
+TREASURE_FEE_RATE = 0.05
+TREASURE_VALUES_RATE = [0.05, 0.10, 0.15, 0.25, 0.45]
+ACTIVE_TREASURE_USERS = set()
 ROULETTE_DEATH_CHANCE = 40
 ROULETTE_MAX_SHOTS = 5
 ROULETTE_MULTIPLIERS = {
@@ -394,7 +397,8 @@ def get_game_label(game_type: str) -> str:
     
     if game_type == "roulette":
         return "러시안 룰렛"
-
+    if game_type == "treasure":
+        return "보물찾기"
     return game_type
 
 
@@ -439,6 +443,12 @@ class CasinoMainSelect(discord.ui.Select):
                 description="40% 사망 확률, 생존할수록 배당 증가",
                 emoji="🔫",
                 value="roulette",
+            ),
+            discord.SelectOption(
+                label="보물찾기",
+                description="2인 턴제 보물찾기 PvP",
+                emoji="🏴‍☠️",
+                value="treasure",
             ),
         ]
 
@@ -514,6 +524,57 @@ class CasinoMainSelect(discord.ui.Select):
             await interaction.response.edit_message(
                 embed=embed,
                 view=SlotBetView(),
+            )
+            return
+
+        if selected == "treasure":
+            attendance_error = await check_casino_attendance(interaction.user.id)
+
+            if attendance_error:
+                await interaction.response.send_message(attendance_error, ephemeral=True)
+                return
+
+            limit_error = await check_casino_limit(interaction.user.id, "treasure")
+
+            if limit_error:
+                await interaction.response.send_message(limit_error, ephemeral=True)
+                return
+
+            dead, dead_until = await is_user_dead(interaction.user.id)
+
+            if dead:
+                await interaction.response.send_message(
+                    "🪦 사망 상태에서는 보물찾기를 진행할 수 없습니다.\n"
+                    f"부활 예정 : `{format_dead_until(dead_until)}`",
+                    ephemeral=True,
+                )
+                return
+            if interaction.user.id in ACTIVE_TREASURE_USERS:
+                await interaction.response.send_message(
+                    "❌ 이미 진행 중인 보물찾기가 있습니다.",
+                    ephemeral=True,
+                )
+                return
+
+            embed = discord.Embed(
+                title="🏴‍☠️ 보물찾기",
+                description=(
+                    "상대와 포인트를 걸고 3x3 보물판을 번갈아 선택합니다.\n\n"
+                    "칸 구성 : `보물 5개 / 함정 1개 / 방어 2개 / 약탈 1개`\n"
+                    "보물은 발견 즉시 공개됩니다.\n"
+                    "방어는 다음 내 턴에만 유지됩니다.\n"
+                    "약탈은 게임 종료 후 상대 보물 중 랜덤 1개를 빼앗습니다.\n"
+                    "함정에 방어 없이 걸리면 즉시 패배하고, 모인 판돈은 상대가 가져갑니다.\n\n"
+                    f"최소 배팅 : `{MIN_BET}P`\n"
+                    f"최대 배팅 : `{MAX_BET}P`\n"
+                    f"{await make_usage_text(interaction.user.id, 'treasure')}"
+                ),
+                color=discord.Color.dark_gold(),
+            )
+
+            await interaction.response.edit_message(
+                embed=embed,
+                view=TreasureSetupView(interaction.user.id),
             )
             return
 
@@ -1190,7 +1251,580 @@ class PokerActionButton(discord.ui.Button):
             view=view,
         )
 
+def make_treasure_values(total_pot: int):
+    values = [int(total_pot * rate) for rate in TREASURE_VALUES_RATE]
+    diff = total_pot - sum(values)
+    values[-1] += diff
+    return values
 
+
+class TreasureSetupView(discord.ui.View):
+    def __init__(self, proposer_id: int):
+        super().__init__(timeout=120)
+        self.proposer_id = proposer_id
+        self.target = None
+
+        self.add_item(TreasureTargetSelect())
+
+        for bet in [50, 100, 200, 300, 500]:
+            self.add_item(TreasureBetButton(bet))
+
+
+class TreasureTargetSelect(discord.ui.UserSelect):
+    def __init__(self):
+        super().__init__(
+            placeholder="상대 선택",
+            min_values=1,
+            max_values=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        view: TreasureSetupView = self.view
+
+        if interaction.user.id != view.proposer_id:
+            await interaction.response.send_message(
+                "❌ 보물찾기를 연 사람만 상대를 선택할 수 있습니다.",
+                ephemeral=True,
+            )
+            return
+
+        target = self.values[0]
+
+        if target.bot:
+            await interaction.response.send_message(
+                "❌ 봇과는 보물찾기를 할 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        if target.id == interaction.user.id:
+            await interaction.response.send_message(
+                "❌ 자기 자신과는 보물찾기를 할 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+        if target.id in ACTIVE_TREASURE_USERS:
+            await interaction.response.send_message(
+                "❌ 상대가 이미 다른 보물찾기를 진행 중입니다.",
+                ephemeral=True,
+            )
+            return
+
+        view.target = target
+
+        await interaction.response.send_message(
+            f"✅ 상대를 {target.mention} 님으로 선택했습니다. 이제 배팅금을 선택하세요.",
+            ephemeral=True,
+        )
+
+
+class TreasureBetButton(discord.ui.Button):
+    def __init__(self, bet: int):
+        super().__init__(
+            label=f"{bet}P",
+            style=discord.ButtonStyle.blurple,
+        )
+        self.bet = bet
+
+    async def callback(self, interaction: discord.Interaction):
+        view: TreasureSetupView = self.view
+
+        if interaction.user.id != view.proposer_id:
+            await interaction.response.send_message(
+                "❌ 보물찾기를 연 사람만 배팅금을 선택할 수 있습니다.",
+                ephemeral=True,
+            )
+            return
+
+        if not view.target:
+            await interaction.response.send_message(
+                "❌ 먼저 상대를 선택해주세요.",
+                ephemeral=True,
+            )
+            return
+
+        error = validate_bet(self.bet)
+
+        if error:
+            await interaction.response.send_message(error, ephemeral=True)
+            return
+
+        points = await get_points(interaction.user.id)
+
+        if points < self.bet:
+            await interaction.response.send_message(
+                f"❌ 포인트가 부족합니다.\n현재 포인트 : `{points}P`",
+                ephemeral=True,
+            )
+            return
+
+        embed = discord.Embed(
+            title="🏴‍☠️ 보물찾기 신청",
+            description=(
+                f"{interaction.user.mention} 님이 {view.target.mention} 님에게 보물찾기를 신청했습니다.\n\n"
+                f"각자 배팅금 : `{self.bet}P`\n"
+                f"총 판돈 : `{self.bet * 2}P`\n\n"
+                "상대가 수락하면 양쪽 포인트가 차감되고 게임이 시작됩니다."
+            ),
+            color=discord.Color.dark_gold(),
+        )
+
+        await interaction.response.edit_message(
+            content="✅ 보물찾기 신청을 공개 채널에 보냈습니다.",
+            embed=None,
+            view=None,
+        )
+
+        await interaction.channel.send(
+            content=view.target.mention,
+            embed=embed,
+            view=TreasureAcceptView(
+                proposer_id=interaction.user.id,
+                target_id=view.target.id,
+                bet=self.bet,
+            ),
+        )
+
+
+class TreasureAcceptView(discord.ui.View):
+    def __init__(self, proposer_id: int, target_id: int, bet: int):
+        super().__init__(timeout=300)
+        self.proposer_id = proposer_id
+        self.target_id = target_id
+        self.bet = bet
+        self.done = False
+
+    @discord.ui.button(label="수락", style=discord.ButtonStyle.green)
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.target_id:
+            await interaction.response.send_message(
+                "❌ 신청받은 사람만 수락할 수 있습니다.",
+                ephemeral=True,
+            )
+            return
+
+        if self.done:
+            await interaction.response.send_message(
+                "❌ 이미 처리된 신청입니다.",
+                ephemeral=True,
+            )
+            return
+        if self.proposer_id in ACTIVE_TREASURE_USERS or self.target_id in ACTIVE_TREASURE_USERS:
+            await interaction.response.send_message(
+                "❌ 참가자 중 이미 진행 중인 보물찾기가 있습니다.",
+                ephemeral=True,
+            )
+            return
+
+        for user_id in [self.proposer_id, self.target_id]:
+            attendance_error = await check_casino_attendance(user_id)
+
+            if attendance_error:
+                await interaction.response.send_message(
+                    f"❌ <@{user_id}> 님이 오늘 출석하지 않아 게임을 시작할 수 없습니다.",
+                    ephemeral=True,
+                )
+                return
+
+            limit_error = await check_casino_limit(user_id, "treasure")
+
+            if limit_error:
+                await interaction.response.send_message(
+                    f"❌ <@{user_id}> 님의 보물찾기 제한 때문에 시작할 수 없습니다.",
+                    ephemeral=True,
+                )
+                return
+
+            dead, dead_until = await is_user_dead(user_id)
+
+            if dead:
+                await interaction.response.send_message(
+                    f"🪦 <@{user_id}> 님은 사망 상태라 보물찾기를 진행할 수 없습니다.\n"
+                    f"부활 예정 : `{format_dead_until(dead_until)}`",
+                    ephemeral=True,
+                )
+                return
+
+            points = await get_points(user_id)
+
+            if points < self.bet:
+                await interaction.response.send_message(
+                    f"❌ <@{user_id}> 님의 포인트가 부족합니다.",
+                    ephemeral=True,
+                )
+                return
+
+        proposer_paid = await spend_points(self.proposer_id, self.bet)
+        target_paid = await spend_points(self.target_id, self.bet)
+
+        if not proposer_paid or not target_paid:
+            await interaction.response.send_message(
+                "❌ 포인트 차감 중 문제가 발생했습니다.",
+                ephemeral=True,
+            )
+            return
+
+        await record_casino_play(self.proposer_id, "treasure")
+        await record_casino_play(self.target_id, "treasure")
+
+        self.done = True
+
+        ACTIVE_TREASURE_USERS.add(self.proposer_id)
+        ACTIVE_TREASURE_USERS.add(self.target_id)
+
+        total_pot = self.bet * 2
+        game = TreasureGame(self.proposer_id, self.target_id, self.bet, total_pot)
+
+        await interaction.response.edit_message(
+            content=None,
+            embed=game.make_embed("✅ 보물찾기가 시작되었습니다."),
+            view=TreasureGameView(game),
+        )
+
+    @discord.ui.button(label="거절", style=discord.ButtonStyle.red)
+    async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id not in (self.proposer_id, self.target_id):
+            await interaction.response.send_message(
+                "❌ 당사자만 거절할 수 있습니다.",
+                ephemeral=True,
+            )
+            return
+
+        self.done = True
+
+        await interaction.response.edit_message(
+            content="❌ 보물찾기 신청이 거절/취소되었습니다.",
+            embed=None,
+            view=None,
+        )
+
+
+class TreasureGame:
+    def __init__(self, player1_id: int, player2_id: int, bet: int, total_pot: int):
+        self.players = [player1_id, player2_id]
+        self.bet = bet
+        self.total_pot = total_pot
+        self.turn_index = 0
+        self.finished = False
+
+        treasure_values = make_treasure_values(total_pot)
+
+        cells = []
+
+        for value in treasure_values:
+            cells.append({
+                "type": "treasure",
+                "value": value,
+                "opened": False,
+                "owner": None,
+            })
+
+        cells.append({"type": "trap", "value": 0, "opened": False, "owner": None})
+        cells.append({"type": "shield", "value": 0, "opened": False, "owner": None})
+        cells.append({"type": "shield", "value": 0, "opened": False, "owner": None})
+        cells.append({"type": "steal", "value": 0, "opened": False, "owner": None})
+
+        random.shuffle(cells)
+
+        self.cells = cells
+
+        self.treasures = {
+            player1_id: [],
+            player2_id: [],
+        }
+
+        self.shield_active = {
+            player1_id: False,
+            player2_id: False,
+        }
+
+        self.shield_ready_turn = {
+            player1_id: False,
+            player2_id: False,
+        }
+
+        self.steal_owner = Noneself.steal_owner = None
+
+    def current_player_id(self):
+        return self.players[self.turn_index]
+
+    def other_player_id(self, user_id: int):
+        return self.players[1] if self.players[0] == user_id else self.players[0]
+
+    def board_text(self):
+        texts = []
+
+        for index, cell in enumerate(self.cells):
+            if not cell["opened"]:
+                texts.append(f"`{index + 1}`")
+            elif cell["type"] == "treasure":
+                texts.append("💰")
+            elif cell["type"] == "trap":
+                texts.append("💀")
+            elif cell["type"] == "shield":
+                texts.append("🛡")
+            elif cell["type"] == "steal":
+                texts.append("🏴‍☠️")
+
+        return (
+            f"{texts[0]} {texts[1]} {texts[2]}\n"
+            f"{texts[3]} {texts[4]} {texts[5]}\n"
+            f"{texts[6]} {texts[7]} {texts[8]}"
+        )
+
+    def score_text(self):
+        lines = []
+
+        for user_id in self.players:
+            total = sum(self.treasures[user_id])
+            shield = "활성" if self.shield_active[user_id] else "없음"
+            steal = "보유" if self.steal_owner == user_id else "없음"
+
+            treasure_list = ", ".join(f"{value}P" for value in self.treasures[user_id]) or "없음"
+
+            lines.append(
+                f"<@{user_id}>\n"
+                f"보물 : `{total}P` ({treasure_list})\n"
+                f"방어 : `{shield}` / 약탈권 : `{steal}`"
+            )
+
+        return "\n\n".join(lines)
+
+    def make_embed(self, message: str | None = None):
+        embed = discord.Embed(
+            title="🏴‍☠️ 보물찾기",
+            description=(
+                f"총 판돈 : `{self.total_pot}P`\n"
+                f"현재 턴 : <@{self.current_player_id()}>\n\n"
+                f"{self.board_text()}\n\n"
+                f"{self.score_text()}"
+            ),
+            color=discord.Color.dark_gold(),
+        )
+
+        if message:
+            embed.add_field(
+                name="진행 상황",
+                value=message,
+                inline=False,
+            )
+
+        return embed
+
+    def is_all_opened(self):
+        return all(cell["opened"] for cell in self.cells)
+
+    async def finish_normal(self):
+        result_lines = []
+
+        if self.steal_owner:
+            thief = self.steal_owner
+            target = self.other_player_id(thief)
+
+            if self.treasures[target]:
+                stolen = random.choice(self.treasures[target])
+                self.treasures[target].remove(stolen)
+                self.treasures[thief].append(stolen)
+
+                result_lines.append(
+                    f"🏴‍☠️ <@{thief}> 님의 약탈권 발동!\n"
+                    f"<@{target}> 님의 보물 중 `{stolen}P` 를 빼앗았습니다."
+                )
+            else:
+                result_lines.append(
+                    f"🏴‍☠️ <@{thief}> 님의 약탈권은 상대 보물이 없어 무효 처리되었습니다."
+                )
+
+        payouts = {}
+
+        for user_id in self.players:
+            amount = sum(self.treasures[user_id])
+            fee = int(amount * TREASURE_FEE_RATE)
+            payout = max(amount - fee, 0)
+            payouts[user_id] = payout
+
+            if payout > 0:
+                await add_points(user_id, payout)
+
+        result_lines.append(
+            "📌 최종 정산\n"
+            + "\n".join(
+                f"<@{user_id}> : 보물 `{sum(self.treasures[user_id])}P` → 수수료 제외 `{payouts[user_id]}P`"
+                for user_id in self.players
+            )
+        )
+
+        return "\n\n".join(result_lines)
+
+    async def finish_trap_loss(self, loser_id: int):
+        winner_id = self.other_player_id(loser_id)
+        result_lines = []
+
+        if self.steal_owner:
+            thief = self.steal_owner
+            target = self.other_player_id(thief)
+
+            if self.treasures[target]:
+                stolen = random.choice(self.treasures[target])
+                self.treasures[target].remove(stolen)
+                self.treasures[thief].append(stolen)
+
+                result_lines.append(
+                    f"🏴‍☠️ <@{thief}> 님의 약탈권 발동!\n"
+                    f"<@{target}> 님의 보물 중 `{stolen}P` 를 빼앗았습니다."
+                )
+            else:
+                result_lines.append(
+                    f"🏴‍☠️ <@{thief}> 님의 약탈권은 상대 보물이 없어 무효 처리되었습니다."
+                )
+
+        fee = int(self.total_pot * TREASURE_FEE_RATE)
+        payout = max(self.total_pot - fee, 0)
+
+        await add_points(winner_id, payout)
+
+        result_lines.append(
+            f"💀 <@{loser_id}> 님이 함정에 걸려 즉시 패배했습니다.\n\n"
+            f"총 판돈 `{self.total_pot}P` 는 <@{winner_id}> 님에게 넘어갑니다.\n"
+            f"수수료 `{fee}P` 제외 지급 : `{payout}P`"
+        )
+
+        return "\n\n".join(result_lines)
+
+    def clear_active_users(self):
+        for user_id in self.players:
+            ACTIVE_TREASURE_USERS.discard(user_id)
+
+
+class TreasureGameView(discord.ui.View):
+    def __init__(self, game: TreasureGame):
+        super().__init__(timeout=None)
+        self.game = game
+        self.refresh_buttons()
+
+    def refresh_buttons(self):
+        self.clear_items()
+
+        if self.game.finished:
+            return
+
+        for index, cell in enumerate(self.game.cells):
+            self.add_item(TreasureCellButton(index, cell["opened"]))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id not in self.game.players:
+            await interaction.response.send_message(
+                "❌ 이 보물찾기의 참가자가 아닙니다.",
+                ephemeral=True,
+            )
+            return False
+
+        if interaction.user.id != self.game.current_player_id():
+            await interaction.response.send_message(
+                "❌ 아직 당신의 턴이 아닙니다.",
+                ephemeral=True,
+            )
+            return False
+
+        return True
+
+
+class TreasureCellButton(discord.ui.Button):
+    def __init__(self, index: int, opened: bool):
+        super().__init__(
+            label=str(index + 1),
+            style=discord.ButtonStyle.gray if not opened else discord.ButtonStyle.green,
+            disabled=opened,
+            row=index // 3,
+        )
+        self.index = index
+
+    async def callback(self, interaction: discord.Interaction):
+        view: TreasureGameView = self.view
+        game = view.game
+
+        user_id = interaction.user.id
+        cell = game.cells[self.index]
+
+        if cell["opened"]:
+            await interaction.response.send_message(
+                "❌ 이미 선택된 칸입니다.",
+                ephemeral=True,
+            )
+            return
+
+        had_shield = game.shield_active[user_id]
+        shield_can_apply = had_shield and game.shield_ready_turn[user_id]
+
+        cell["opened"] = True
+        cell["owner"] = user_id
+
+        message = ""
+
+        if cell["type"] == "treasure":
+            value = cell["value"]
+            game.treasures[user_id].append(value)
+            message = f"💰 <@{user_id}> 님이 `{value}P` 보물을 발견했습니다."
+
+            if shield_can_apply:
+                game.shield_active[user_id] = False
+                game.shield_ready_turn[user_id] = False
+                message += "\n🛡 함정이 아니었기 때문에 방어 효과가 사라졌습니다."
+
+        elif cell["type"] == "shield":
+            game.shield_active[user_id] = True
+            game.shield_ready_turn[user_id] = False
+            message = f"🛡 <@{user_id}> 님이 방어를 획득했습니다.\n다음 자신의 턴에만 유지됩니다."
+
+        elif cell["type"] == "steal":
+            game.steal_owner = user_id
+            message = f"🏴‍☠️ <@{user_id}> 님이 약탈권을 획득했습니다.\n약탈은 게임 종료 후 발동합니다."
+
+            if shield_can_apply:
+                game.shield_active[user_id] = False
+                game.shield_ready_turn[user_id] = False
+                message += "\n🛡 함정이 아니었기 때문에 방어 효과가 사라졌습니다."
+
+        elif cell["type"] == "trap":
+            if shield_can_apply:
+                game.shield_active[user_id] = False
+                game.shield_ready_turn[user_id] = False
+                message = f"💀 함정을 발견했지만, <@{user_id}> 님의 방어가 발동해 생존했습니다."
+            else:
+                game.finished = True
+                result = await game.finish_trap_loss(user_id)
+                game.clear_active_users()
+                view.refresh_buttons()
+
+                await interaction.response.edit_message(
+                    embed=game.make_embed(result),
+                    view=None,
+                )
+                return
+
+        if game.is_all_opened():
+            game.finished = True
+            result = await game.finish_normal()
+            game.clear_active_users()
+            view.refresh_buttons()
+
+            await interaction.response.edit_message(
+                embed=game.make_embed(result),
+                view=None,
+            )
+            return
+        next_user_id = game.other_player_id(user_id)
+
+        if game.shield_active[next_user_id]:
+            game.shield_ready_turn[next_user_id] = True
+
+        game.next_turn()
+        view.refresh_buttons()
+
+        await interaction.response.edit_message(
+            embed=game.make_embed(message),
+            view=view,
+        )
 
 SLOT_SYMBOLS = ["🍒", "🍋", "🔔", "⭐", "💎", "7️⃣"]
 
