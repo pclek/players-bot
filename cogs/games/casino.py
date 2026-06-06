@@ -23,8 +23,8 @@ CASINO_DAILY_LIMIT = 5
 ROULETTE_DEATH_CHANCE = 20
 ROULETTE_MAX_SHOTS = 5
 ROULETTE_MULTIPLIERS = {
-    1: 1.25,
-    2: 1.6,
+    1: 1.1,
+    2: 1.5,
     3: 2.1,
     4: 3.0,
     5: 4.5,
@@ -532,8 +532,8 @@ class CasinoMainSelect(discord.ui.Select):
                     f"발사 1회마다 사망 확률 : `{ROULETTE_DEATH_CHANCE}%`\n"
                     "사망 시 HP가 `0` 이 되고 사망 패널티를 받습니다.\n"
                     "생존할수록 정산 배율이 증가합니다.\n\n"
-                    "1발 생존 : `1.25배`\n"
-                    "2발 생존 : `1.6배`\n"
+                    "1발 생존 : `1.1배`\n"
+                    "2발 생존 : `1.5배`\n"
                     "3발 생존 : `2.1배`\n"
                     "4발 생존 : `3배`\n"
                     "5발 생존 : `4.5배`\n\n"
