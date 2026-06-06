@@ -436,7 +436,7 @@ class CasinoMainSelect(discord.ui.Select):
             ),
             discord.SelectOption(
                 label="러시안 룰렛",
-                description="20% 사망 확률, 생존할수록 배당 증가",
+                description="40% 사망 확률, 생존할수록 배당 증가",
                 emoji="🔫",
                 value="roulette",
             ),
