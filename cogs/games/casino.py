@@ -9,7 +9,12 @@ import aiosqlite
 from discord import app_commands
 from discord.ext import commands
 from cogs.profile.profile import has_attended_today
-from cogs.adventure.adventure_utils import ensure_adventure_profile, get_adventure_profile
+from cogs.adventure.adventure_utils import (
+    ensure_adventure_profile,
+    get_adventure_profile,
+    is_user_dead,
+    format_dead_until,
+)
 from cogs.adventure.hunting import apply_death_penalty
 
 DB_PATH = "database/bot.db"
@@ -1278,12 +1283,12 @@ class RouletteBetButton(discord.ui.Button):
 
         await ensure_adventure_profile(interaction.user.id)
 
-        profile = await get_adventure_profile(interaction.user.id)
-        current_hp = profile[0] if profile else 100
+        dead, dead_until = await is_user_dead(interaction.user.id)
 
-        if current_hp <= 0:
+        if dead:
             await interaction.response.send_message(
-                "🪦 이미 사망 상태라 러시안 룰렛을 진행할 수 없습니다.",
+                "🪦 사망 상태에서는 러시안 룰렛을 진행할 수 없습니다.\n"
+                f"부활 예정 : `{format_dead_until(dead_until)}`",
                 ephemeral=True,
             )
             return
