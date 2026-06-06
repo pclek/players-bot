@@ -9,6 +9,8 @@ import aiosqlite
 from discord import app_commands
 from discord.ext import commands
 from cogs.profile.profile import has_attended_today
+from cogs.adventure.adventure_utils import ensure_adventure_profile, get_adventure_profile
+from cogs.adventure.hunting import apply_death_penalty
 
 DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
@@ -17,6 +19,16 @@ MIN_BET = 50
 MAX_BET = 500
 CASINO_COOLDOWN_SECONDS = 60 * 60
 CASINO_DAILY_LIMIT = 5
+
+ROULETTE_DEATH_CHANCE = 20
+ROULETTE_MAX_SHOTS = 5
+ROULETTE_MULTIPLIERS = {
+    1: 1.25,
+    2: 1.6,
+    3: 2.1,
+    4: 3.0,
+    5: 4.5,
+}
 
 POKER_MAX_TOTAL_BET = 1500
 POKER_WIN_MULTIPLIER = 2.0
@@ -374,6 +386,9 @@ def get_game_label(game_type: str) -> str:
 
     if game_type == "slot":
         return "슬롯머신"
+    
+    if game_type == "roulette":
+        return "러시안 룰렛"
 
     return game_type
 
@@ -413,6 +428,12 @@ class CasinoMainSelect(discord.ui.Select):
                 description="간단한 슬롯머신",
                 emoji="🎰",
                 value="slot",
+            ),
+            discord.SelectOption(
+                label="러시안 룰렛",
+                description="20% 사망 확률, 생존할수록 배당 증가",
+                emoji="🔫",
+                value="roulette",
             ),
         ]
 
@@ -491,6 +512,43 @@ class CasinoMainSelect(discord.ui.Select):
             )
             return
 
+        if selected == "roulette":
+            attendance_error = await check_casino_attendance(interaction.user.id)
+
+            if attendance_error:
+                await interaction.response.send_message(attendance_error, ephemeral=True)
+                return
+
+            limit_error = await check_casino_limit(interaction.user.id, "roulette")
+
+            if limit_error:
+                await interaction.response.send_message(limit_error, ephemeral=True)
+                return
+
+            embed = discord.Embed(
+                title="🔫 러시안 룰렛",
+                description=(
+                    "배팅금을 선택하세요.\n\n"
+                    f"발사 1회마다 사망 확률 : `{ROULETTE_DEATH_CHANCE}%`\n"
+                    "사망 시 HP가 `0` 이 되고 사망 패널티를 받습니다.\n"
+                    "생존할수록 정산 배율이 증가합니다.\n\n"
+                    "1발 생존 : `1.25배`\n"
+                    "2발 생존 : `1.6배`\n"
+                    "3발 생존 : `2.1배`\n"
+                    "4발 생존 : `3배`\n"
+                    "5발 생존 : `4.5배`\n\n"
+                    f"최소 배팅 : `{MIN_BET}P`\n"
+                    f"최대 배팅 : `{MAX_BET}P`\n"
+                    f"{await make_usage_text(interaction.user.id, 'roulette')}"
+                ),
+                color=discord.Color.dark_red(),
+            )
+
+            await interaction.response.edit_message(
+                embed=embed,
+                view=RouletteBetView(),
+            )
+            return
 
 class CasinoMainView(discord.ui.View):
     def __init__(self):
@@ -1130,6 +1188,328 @@ class PokerActionButton(discord.ui.Button):
 
 
 SLOT_SYMBOLS = ["🍒", "🍋", "🔔", "⭐", "💎", "7️⃣"]
+
+class RouletteGame:
+    def __init__(self, user_id: int, display_name: str, bet: int):
+        self.user_id = user_id
+        self.display_name = display_name
+        self.bet = bet
+        self.shots = 0
+        self.finished = False
+
+    def current_multiplier(self) -> float:
+        if self.shots <= 0:
+            return 0
+
+        return ROULETTE_MULTIPLIERS.get(
+            self.shots,
+            ROULETTE_MULTIPLIERS[ROULETTE_MAX_SHOTS],
+        )
+
+    def make_embed(self, message: str | None = None):
+        multiplier = self.current_multiplier()
+        payout = int(self.bet * multiplier) if multiplier > 0 else 0
+
+        cashout_text = (
+            "아직 정산 불가"
+            if self.shots <= 0
+            else f"`{multiplier}배 / {payout}P`"
+        )
+
+        embed = discord.Embed(
+            title="🔫 러시안 룰렛",
+            description=(
+                f"도전자 : <@{self.user_id}>\n"
+                f"배팅금 : `{self.bet}P`\n"
+                f"발사 횟수 : `{self.shots}/{ROULETTE_MAX_SHOTS}`\n"
+                f"발사당 사망 확률 : `{ROULETTE_DEATH_CHANCE}%`\n"
+                f"현재 정산 : {cashout_text}\n\n"
+                "생존하면 계속 발사하거나 정산할 수 있습니다.\n"
+                "사망하면 배팅금을 잃고 HP가 `0` 이 됩니다."
+            ),
+            color=discord.Color.dark_red(),
+        )
+
+        if message:
+            embed.add_field(
+                name="진행 상황",
+                value=message,
+                inline=False,
+            )
+
+        return embed
+
+
+class RouletteBetButton(discord.ui.Button):
+    def __init__(self, bet: int):
+        super().__init__(
+            label=f"{bet}P",
+            style=discord.ButtonStyle.red,
+        )
+        self.bet = bet
+
+    async def callback(self, interaction: discord.Interaction):
+        error = validate_bet(self.bet)
+
+        if error:
+            await interaction.response.send_message(error, ephemeral=True)
+            return
+
+        attendance_error = await check_casino_attendance(interaction.user.id)
+
+        if attendance_error:
+            await interaction.response.send_message(attendance_error, ephemeral=True)
+            return
+
+        limit_error = await check_casino_limit(interaction.user.id, "roulette")
+
+        if limit_error:
+            await interaction.response.send_message(limit_error, ephemeral=True)
+            return
+
+        points = await get_points(interaction.user.id)
+
+        if points < self.bet:
+            await interaction.response.send_message(
+                f"❌ 포인트가 부족합니다.\n현재 포인트 : `{points}P`",
+                ephemeral=True,
+            )
+            return
+
+        await ensure_adventure_profile(interaction.user.id)
+
+        profile = await get_adventure_profile(interaction.user.id)
+        current_hp = profile[0] if profile else 100
+
+        if current_hp <= 0:
+            await interaction.response.send_message(
+                "🪦 이미 사망 상태라 러시안 룰렛을 진행할 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        success = await spend_points(interaction.user.id, self.bet)
+
+        if not success:
+            points = await get_points(interaction.user.id)
+            await interaction.response.send_message(
+                f"❌ 포인트가 부족합니다.\n현재 포인트 : `{points}P`",
+                ephemeral=True,
+            )
+            return
+
+        await record_casino_play(interaction.user.id, "roulette")
+
+        game = RouletteGame(
+            interaction.user.id,
+            interaction.user.display_name,
+            self.bet,
+        )
+
+        await interaction.response.edit_message(
+            content="✅ 러시안 룰렛을 공개 채널에 시작했습니다.",
+            embed=None,
+            view=None,
+        )
+
+        await interaction.channel.send(
+            embed=game.make_embed(
+                f"{interaction.user.mention} 님이 목숨을 건 룰렛을 시작했습니다."
+            ),
+            view=RouletteGameView(game),
+        )
+
+
+class RouletteBetView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+
+        for bet in [50, 100, 200, 300, 500]:
+            self.add_item(RouletteBetButton(bet))
+
+        self.add_item(BackToCasinoButton())
+
+
+class RouletteGameView(discord.ui.View):
+    def __init__(self, game: RouletteGame):
+        super().__init__(timeout=300)
+        self.game = game
+        self.refresh_buttons()
+
+    def refresh_buttons(self):
+        self.clear_items()
+
+        if self.game.finished:
+            return
+
+        self.add_item(RouletteFireButton())
+
+        if self.game.shots > 0:
+            self.add_item(RouletteCashoutButton())
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.game.user_id:
+            await interaction.response.send_message(
+                "❌ 이 룰렛은 당신의 게임이 아닙니다.",
+                ephemeral=True,
+            )
+            return False
+
+        return True
+
+
+class RouletteFireButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="🔫 발사",
+            style=discord.ButtonStyle.red,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        view: RouletteGameView = self.view
+        game = view.game
+
+        if game.finished:
+            await interaction.response.send_message(
+                "❌ 이미 종료된 룰렛입니다.",
+                ephemeral=True,
+            )
+            return
+
+        roll = random.randint(1, 100)
+
+        if roll <= ROULETTE_DEATH_CHANCE:
+            game.finished = True
+
+            await ensure_adventure_profile(game.user_id)
+            profile = await get_adventure_profile(game.user_id)
+
+            weapon_name = profile[1] if profile else "녹슨검"
+            armor_name = profile[2] if profile else "없음"
+
+            death_penalty_text = await apply_death_penalty(
+                game.user_id,
+                weapon_name,
+                armor_name,
+            )
+
+            embed = discord.Embed(
+                title="💥 러시안 룰렛 사망",
+                description=(
+                    f"<@{game.user_id}> 님이 방아쇠를 당겼습니다.\n\n"
+                    f"결과 : `사망`\n"
+                    f"발사 횟수 : `{game.shots + 1}`\n"
+                    f"손실 포인트 : `-{game.bet}P`\n\n"
+                    f"{death_penalty_text}"
+                ),
+                color=discord.Color.dark_red(),
+            )
+
+            view.refresh_buttons()
+
+            await interaction.response.edit_message(
+                embed=embed,
+                view=None,
+            )
+            return
+
+        game.shots += 1
+
+        if game.shots >= ROULETTE_MAX_SHOTS:
+            game.finished = True
+            multiplier = game.current_multiplier()
+            payout = int(game.bet * multiplier)
+            profit = payout - game.bet
+
+            await add_points(game.user_id, payout)
+
+            embed = discord.Embed(
+                title="🏆 러시안 룰렛 최대 생존",
+                description=(
+                    f"<@{game.user_id}> 님이 `{ROULETTE_MAX_SHOTS}`발을 모두 생존했습니다.\n\n"
+                    f"배팅금 : `{game.bet}P`\n"
+                    f"배율 : `{multiplier}배`\n"
+                    f"획득 : `{payout}P`\n"
+                    f"순이익 : `+{profit}P`"
+                ),
+                color=discord.Color.gold(),
+            )
+
+            view.refresh_buttons()
+
+            await interaction.response.edit_message(
+                embed=embed,
+                view=None,
+            )
+            return
+
+        multiplier = game.current_multiplier()
+        payout = int(game.bet * multiplier)
+
+        view.refresh_buttons()
+
+        await interaction.response.edit_message(
+            embed=game.make_embed(
+                f"😮 생존했습니다.\n"
+                f"현재 정산 시 `{payout}P` 를 받을 수 있습니다.\n"
+                "계속 발사하거나 정산할 수 있습니다."
+            ),
+            view=view,
+        )
+
+
+class RouletteCashoutButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="💰 정산",
+            style=discord.ButtonStyle.green,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        view: RouletteGameView = self.view
+        game = view.game
+
+        if game.finished:
+            await interaction.response.send_message(
+                "❌ 이미 종료된 룰렛입니다.",
+                ephemeral=True,
+            )
+            return
+
+        if game.shots <= 0:
+            await interaction.response.send_message(
+                "❌ 아직 생존한 발사가 없어 정산할 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        game.finished = True
+
+        multiplier = game.current_multiplier()
+        payout = int(game.bet * multiplier)
+        profit = payout - game.bet
+
+        await add_points(game.user_id, payout)
+
+        embed = discord.Embed(
+            title="💰 러시안 룰렛 정산",
+            description=(
+                f"<@{game.user_id}> 님이 룰렛을 정산했습니다.\n\n"
+                f"생존 횟수 : `{game.shots}`\n"
+                f"배팅금 : `{game.bet}P`\n"
+                f"배율 : `{multiplier}배`\n"
+                f"획득 : `{payout}P`\n"
+                f"순이익 : `{profit:+}P`"
+            ),
+            color=discord.Color.green(),
+        )
+
+        view.refresh_buttons()
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=None,
+        )
 
 
 class SlotBetButton(discord.ui.Button):
