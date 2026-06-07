@@ -330,52 +330,71 @@ class RecruitPostView(discord.ui.View):
         message_id = interaction.message.id
 
         async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute(
-                """
-            SELECT game_name, host_id
+            async with db.execute("""
+            SELECT game_name, host_id, voice_channel_id
             FROM recruit_posts
             WHERE message_id = ?
-            """,
-                (message_id,),
-            ) as cursor:
+            """, (message_id,)) as cursor:
                 row = await cursor.fetchone()
 
-            if not row:
-                await interaction.response.send_message(
-                    "❌ 모집 정보를 찾을 수 없습니다.", ephemeral=True
-                )
-                return
-
-            game_name, host_id = row
-
-            if interaction.user.id != host_id:
-                await interaction.response.send_message(
-                    "❌ 모집장만 시작할 수 있습니다.", ephemeral=True
-                )
-                return
-
-            await db.execute(
-                "DELETE FROM recruit_members WHERE message_id = ?", (message_id,)
+        if not row:
+            await interaction.response.send_message(
+                "❌ 모집 정보를 찾을 수 없습니다.",
+                ephemeral=True,
             )
+            return
 
-            await db.execute(
-                "DELETE FROM recruit_posts WHERE message_id = ?", (message_id,)
+        game_name, host_id, voice_channel_id = row
+
+        if interaction.user.id != host_id:
+            await interaction.response.send_message(
+                "❌ 모집장만 시작할 수 있습니다.",
+                ephemeral=True,
             )
+            return
+
+        voice_channel_id, rows = await get_recruit_group_rows_by_message(message_id)
+
+        for group_message_id, channel_id in rows:
+            channel = interaction.guild.get_channel(channel_id)
+            if not channel:
+                continue
+
+            try:
+                message = await channel.fetch_message(group_message_id)
+                old_embed = message.embeds[0] if message.embeds else None
+
+                embed = make_finished_recruit_embed(
+                    old_embed,
+                    f"🚀 {game_name} 시작",
+                    "모집장이 게임 시작을 눌러 모집이 종료되었습니다.",
+                    discord.Color.blue(),
+                )
+
+                await message.edit(
+                    content="",
+                    embed=embed,
+                    view=None,
+                )
+            except discord.HTTPException:
+                pass
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            for group_message_id, _ in rows:
+                await db.execute(
+                    "DELETE FROM recruit_members WHERE message_id = ?",
+                    (group_message_id,),
+                )
+                await db.execute(
+                    "DELETE FROM recruit_posts WHERE message_id = ?",
+                    (group_message_id,),
+                )
 
             await db.commit()
 
-        old_embed = interaction.message.embeds[0] if interaction.message.embeds else None
-        embed = make_finished_recruit_embed(
-            old_embed,
-            f"🚀 {game_name} 시작",
-            "모집장이 게임 시작을 눌러 모집이 종료되었습니다.",
-            discord.Color.blue(),
-        )
-
-        await interaction.message.edit(embed=embed, content="", view=None)
-
         await interaction.response.send_message(
-            "✅ 모집을 시작 처리했습니다.", ephemeral=True
+            "✅ 연결된 모집글을 모두 시작 처리했습니다.",
+            ephemeral=True,
         )
 
     @discord.ui.button(
@@ -387,52 +406,72 @@ class RecruitPostView(discord.ui.View):
         message_id = interaction.message.id
 
         async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute(
-                """
-            SELECT host_id
+            async with db.execute("""
+            SELECT game_name, host_id, voice_channel_id
             FROM recruit_posts
             WHERE message_id = ?
-            """,
-                (message_id,),
-            ) as cursor:
+            """, (message_id,)) as cursor:
                 row = await cursor.fetchone()
 
-            if not row:
-                await interaction.response.send_message(
-                    "❌ 모집 정보를 찾을 수 없습니다.", ephemeral=True
-                )
-                return
-
-            host_id = row[0]
-
-            if interaction.user.id != host_id:
-                await interaction.response.send_message(
-                    "❌ 모집장만 종료할 수 있습니다.", ephemeral=True
-                )
-                return
-
-            await db.execute(
-                "DELETE FROM recruit_members WHERE message_id = ?", (message_id,)
+        if not row:
+            await interaction.response.send_message(
+                "❌ 모집 정보를 찾을 수 없습니다.",
+                ephemeral=True,
             )
-            await db.execute(
-                "DELETE FROM recruit_posts WHERE message_id = ?", (message_id,)
+            return
+
+        game_name, host_id, voice_channel_id = row
+
+        if interaction.user.id != host_id:
+            await interaction.response.send_message(
+                "❌ 모집장만 종료할 수 있습니다.",
+                ephemeral=True,
             )
+            return
+
+        voice_channel_id, rows = await get_recruit_group_rows_by_message(message_id)
+
+        for group_message_id, channel_id in rows:
+            channel = interaction.guild.get_channel(channel_id)
+            if not channel:
+                continue
+
+            try:
+                message = await channel.fetch_message(group_message_id)
+                old_embed = message.embeds[0] if message.embeds else None
+
+                embed = make_finished_recruit_embed(
+                    old_embed,
+                    "🔒 모집 종료",
+                    "모집장이 모집 종료를 눌러 모집이 종료되었습니다.",
+                    discord.Color.dark_grey(),
+                )
+
+                await message.edit(
+                    content="",
+                    embed=embed,
+                    view=None,
+                )
+            except discord.HTTPException:
+                pass
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            for group_message_id, _ in rows:
+                await db.execute(
+                    "DELETE FROM recruit_members WHERE message_id = ?",
+                    (group_message_id,),
+                )
+                await db.execute(
+                    "DELETE FROM recruit_posts WHERE message_id = ?",
+                    (group_message_id,),
+                )
+
             await db.commit()
 
-        old_embed = interaction.message.embeds[0] if interaction.message.embeds else None
-        embed = make_finished_recruit_embed(
-            old_embed,
-            "🔒 모집 종료",
-            "모집장이 모집 종료를 눌러 모집이 종료되었습니다.",
-            discord.Color.dark_grey(),
-        )
-
-        await interaction.message.edit(embed=embed, content="", view=None)
         await interaction.response.send_message(
-            "✅ 모집을 종료했습니다.", ephemeral=True
+            "✅ 연결된 모집글을 모두 종료했습니다.",
+            ephemeral=True,
         )
-
-
 class RecruitGameSelect(discord.ui.Select):
     def __init__(self, games):
         options = []
