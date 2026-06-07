@@ -233,6 +233,130 @@ class GameRecruitChannelSelect(discord.ui.ChannelSelect):
             view=view,
         )
 
+class GameEditRoleSelect(discord.ui.RoleSelect):
+    def __init__(
+        self,
+        original_game_name: str,
+        default_game_name: str,
+        default_match_size: str,
+        default_recruit_description: str,
+    ):
+        self.original_game_name = original_game_name
+        self.default_game_name = default_game_name
+        self.default_match_size = default_match_size
+        self.default_recruit_description = default_recruit_description
+
+        super().__init__(
+            placeholder="수정할 역할을 선택하세요.",
+            min_values=1,
+            max_values=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        role = self.values[0]
+
+        view = discord.ui.View(timeout=60)
+        view.add_item(
+            GameEditRecruitChannelSelect(
+                role=role,
+                original_game_name=self.original_game_name,
+                default_game_name=self.default_game_name,
+                default_match_size=self.default_match_size,
+                default_recruit_description=self.default_recruit_description,
+            )
+        )
+        view.add_item(GameBackButton())
+
+        await interaction.response.edit_message(
+            content="📢 수정할 모집채널을 선택하세요.",
+            embed=None,
+            view=view,
+        )
+
+
+class GameEditRecruitChannelSelect(discord.ui.ChannelSelect):
+    def __init__(
+        self,
+        role: discord.Role,
+        original_game_name: str,
+        default_game_name: str,
+        default_match_size: str,
+        default_recruit_description: str,
+    ):
+        self.role = role
+        self.original_game_name = original_game_name
+        self.default_game_name = default_game_name
+        self.default_match_size = default_match_size
+        self.default_recruit_description = default_recruit_description
+
+        super().__init__(
+            placeholder="수정할 모집채널을 선택하세요.",
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        recruit_channel = self.values[0]
+
+        view = discord.ui.View(timeout=60)
+        view.add_item(
+            GameEditTempVoiceSelect(
+                role=self.role,
+                recruit_channel=recruit_channel,
+                original_game_name=self.original_game_name,
+                default_game_name=self.default_game_name,
+                default_match_size=self.default_match_size,
+                default_recruit_description=self.default_recruit_description,
+            )
+        )
+        view.add_item(GameBackButton())
+
+        await interaction.response.edit_message(
+            content="🎙 수정할 생성기 음성채널을 선택하세요.",
+            embed=None,
+            view=view,
+        )
+
+
+class GameEditTempVoiceSelect(discord.ui.ChannelSelect):
+    def __init__(
+        self,
+        role: discord.Role,
+        recruit_channel: discord.TextChannel,
+        original_game_name: str,
+        default_game_name: str,
+        default_match_size: str,
+        default_recruit_description: str,
+    ):
+        self.role = role
+        self.recruit_channel = recruit_channel
+        self.original_game_name = original_game_name
+        self.default_game_name = default_game_name
+        self.default_match_size = default_match_size
+        self.default_recruit_description = default_recruit_description
+
+        super().__init__(
+            placeholder="수정할 TempVoice 생성기 채널을 선택하세요.",
+            channel_types=[discord.ChannelType.voice],
+            min_values=1,
+            max_values=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        tempvoice_channel = self.values[0]
+
+        await interaction.response.send_modal(
+            GameNameModal(
+                self.role,
+                self.recruit_channel,
+                tempvoice_channel,
+                default_game_name=self.default_game_name,
+                default_match_size=self.default_match_size,
+                default_recruit_description=self.default_recruit_description,
+                original_game_name=self.original_game_name,
+            )
+        )
 
 class GameRoleSelect(discord.ui.RoleSelect):
     def __init__(self):
@@ -326,13 +450,13 @@ class GameEditSelect(discord.ui.Select):
             max_values=1,
             options=options,
         )
-
+    
     async def callback(self, interaction: discord.Interaction):
         game_name = self.values[0]
 
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("""
-            SELECT role_id, recruit_channel_id, tempvoice_creator_id, match_size, recruit_description
+            SELECT match_size, recruit_description
             FROM game_settings
             WHERE game_name = ?
             """, (game_name,)) as cursor:
@@ -345,31 +469,29 @@ class GameEditSelect(discord.ui.Select):
             )
             return
 
-        role_id, recruit_channel_id, tempvoice_creator_id, match_size, recruit_description = row
+        match_size, recruit_description = row
 
-        role = interaction.guild.get_role(role_id)
-        recruit_channel = interaction.guild.get_channel(recruit_channel_id)
-        tempvoice_channel = interaction.guild.get_channel(tempvoice_creator_id)
-
-        if not role or not recruit_channel or not tempvoice_channel:
-            await interaction.response.send_message(
-                "❌ 역할 또는 채널이 삭제되어 수정할 수 없습니다.",
-                ephemeral=True,
-            )
-            return
-
-        await interaction.response.send_modal(
-            GameNameModal(
-                role,
-                recruit_channel,
-                tempvoice_channel,
+        view = discord.ui.View(timeout=60)
+        view.add_item(
+            GameEditRoleSelect(
+                original_game_name=game_name,
                 default_game_name=game_name,
                 default_match_size=str(match_size),
                 default_recruit_description=recruit_description or "",
-                original_game_name=game_name,
             )
         )
+        view.add_item(GameBackButton())
 
+        await interaction.response.edit_message(
+            content=(
+                f"✏️ `{game_name}` 게임 설정을 수정합니다.\n"
+                "먼저 새 역할을 선택하세요.\n\n"
+                "현재 값을 그대로 쓰고 싶어도 역할/모집채널/생성기를 다시 선택해야 합니다."
+            ),
+            embed=None,
+            view=view,
+        )
+        
 class GameMenuSelect(discord.ui.Select):
     def __init__(self):
         options = [
