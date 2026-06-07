@@ -535,14 +535,11 @@ class HuntView(discord.ui.View):
             color=color,
         )
 
-        await interaction.response.send_message(
+        await interaction.response.edit_message(
             embed=embed,
+            view=self,
         )
-
-        try:
-            await interaction.message.delete()
-        except discord.HTTPException:
-            pass
+        
     async def check_equipment_after_battle(self) -> str:
         return ""
     

@@ -173,7 +173,6 @@ async def invoke_app_command(interaction: discord.Interaction, command_name: str
                 ephemeral=True,
             )
 
-
 async def create_recruit_from_sticky(
     interaction: discord.Interaction,
     selected_game_name: str | None = None,
@@ -199,7 +198,6 @@ async def create_recruit_from_sticky(
                 """, (selected_game_name,)) as cursor:
                     game = await cursor.fetchone()
             else:
-                # 기존 '모집' 버튼 호환용: 현재 채널을 모집채널로 쓰는 게임을 찾는다.
                 async with db.execute("""
                 SELECT game_name, role_id, recruit_channel_id
                 FROM game_settings
@@ -235,6 +233,7 @@ async def create_recruit_from_sticky(
             return
 
         game_name, role_id, recruit_channel_id = game
+
         role = interaction.guild.get_role(role_id)
         recruit_channel = interaction.guild.get_channel(recruit_channel_id)
 
@@ -244,6 +243,14 @@ async def create_recruit_from_sticky(
                 ephemeral=True,
             )
             return
+
+        target_channels = []
+
+        if isinstance(interaction.channel, discord.TextChannel):
+            target_channels.append(interaction.channel)
+
+        if recruit_channel not in target_channels:
+            target_channels.append(recruit_channel)
 
         embed = discord.Embed(
             title=f"🎮 {game_name} 모집",
@@ -258,46 +265,54 @@ async def create_recruit_from_sticky(
         )
 
         content = role.mention if role else ""
-
-        message = await recruit_channel.send(
-            content=content,
-            embed=embed,
-            view=RecruitPostView(is_full=False),
-        )
+        sent_channels = []
 
         async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("""
-            INSERT INTO recruit_posts (
-                message_id,
-                game_name,
-                host_id,
-                channel_id,
-                voice_channel_id
-            )
-            VALUES (?, ?, ?, ?, ?)
-            """, (
-                message.id,
-                game_name,
-                interaction.user.id,
-                recruit_channel.id,
-                voice_channel.id,
-            ))
+            for target_channel in target_channels:
+                message = await target_channel.send(
+                    content=content,
+                    embed=embed,
+                    view=RecruitPostView(
+                        is_full=False,
+                        voice_channel_id=voice_channel.id,
+                        guild_id=interaction.guild.id,
+                    ),
+                )
 
-            await db.execute("""
-            INSERT OR IGNORE INTO recruit_members (
-                message_id,
-                user_id
-            )
-            VALUES (?, ?)
-            """, (
-                message.id,
-                interaction.user.id,
-            ))
+                await db.execute("""
+                INSERT INTO recruit_posts (
+                    message_id,
+                    game_name,
+                    host_id,
+                    channel_id,
+                    voice_channel_id
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """, (
+                    message.id,
+                    game_name,
+                    interaction.user.id,
+                    target_channel.id,
+                    voice_channel.id,
+                ))
+
+                await db.execute("""
+                INSERT OR IGNORE INTO recruit_members (
+                    message_id,
+                    user_id
+                )
+                VALUES (?, ?)
+                """, (
+                    message.id,
+                    interaction.user.id,
+                ))
+
+                sent_channels.append(target_channel.mention)
 
             await db.commit()
 
         await interaction.followup.send(
-            f"✅ `{game_name}` 모집글을 {recruit_channel.mention}에 생성했습니다.",
+            f"✅ `{game_name}` 모집글을 {' / '.join(sent_channels)} 채널에 생성했습니다.",
             ephemeral=True,
         )
 

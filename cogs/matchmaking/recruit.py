@@ -55,6 +55,106 @@ def make_finished_recruit_embed(
 
     return embed
 
+async def get_recruit_group_rows_by_message(message_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT voice_channel_id
+        FROM recruit_posts
+        WHERE message_id = ?
+        """, (message_id,)) as cursor:
+            row = await cursor.fetchone()
+
+        if not row:
+            return None, []
+
+        voice_channel_id = row[0]
+
+        async with db.execute("""
+        SELECT message_id, channel_id
+        FROM recruit_posts
+        WHERE voice_channel_id = ?
+        """, (voice_channel_id,)) as cursor:
+            rows = await cursor.fetchall()
+
+    return voice_channel_id, rows
+
+
+async def get_recruit_group_members(voice_channel_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT DISTINCT rm.user_id
+        FROM recruit_members rm
+        JOIN recruit_posts rp ON rp.message_id = rm.message_id
+        WHERE rp.voice_channel_id = ?
+        ORDER BY rm.rowid
+        """, (voice_channel_id,)) as cursor:
+            return await cursor.fetchall()
+
+
+def make_recruit_embed(guild, game_name: str, host_id: int, voice_channel_id: int, members):
+    voice_channel = guild.get_channel(voice_channel_id)
+    user_limit = voice_channel.user_limit if voice_channel else 0
+
+    member_lines = [f"- <@{user_id}>" for (user_id,) in members]
+
+    embed = discord.Embed(
+        title=f"🎮 {game_name} 모집",
+        description=(
+            f"👑 모집장: <@{host_id}>\n"
+            f"🎧 음성채널: <#{voice_channel_id}>\n"
+            f"👥 참여자: `{len(members)}"
+            f"{f'/{user_limit}' if user_limit else ''}명`\n\n"
+            f"**참여자 목록**\n"
+            + ("\n".join(member_lines) if member_lines else "없음")
+        ),
+        color=discord.Color.green(),
+    )
+
+    is_full = user_limit > 0 and len(members) >= user_limit
+    return embed, is_full
+
+
+async def update_recruit_group_messages(guild: discord.Guild, voice_channel_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT game_name, host_id
+        FROM recruit_posts
+        WHERE voice_channel_id = ?
+        LIMIT 1
+        """, (voice_channel_id,)) as cursor:
+            post = await cursor.fetchone()
+
+        async with db.execute("""
+        SELECT message_id, channel_id
+        FROM recruit_posts
+        WHERE voice_channel_id = ?
+        """, (voice_channel_id,)) as cursor:
+            rows = await cursor.fetchall()
+
+    if not post:
+        return
+
+    game_name, host_id = post
+    members = await get_recruit_group_members(voice_channel_id)
+    embed, is_full = make_recruit_embed(guild, game_name, host_id, voice_channel_id, members)
+
+    for message_id, channel_id in rows:
+        channel = guild.get_channel(channel_id)
+        if not channel:
+            continue
+
+        try:
+            message = await channel.fetch_message(message_id)
+            await message.edit(
+                embed=embed,
+                view=RecruitPostView(
+                    is_full=is_full,
+                    voice_channel_id=voice_channel_id,
+                    guild_id=guild.id,
+                ),
+            )
+        except discord.HTTPException:
+            pass
 
 class RecruitPostView(discord.ui.View):
     def __init__(
@@ -95,13 +195,33 @@ class RecruitPostView(discord.ui.View):
                 )
                 return
 
-            await db.execute(
-                """
-            INSERT OR IGNORE INTO recruit_members (message_id, user_id)
-            VALUES (?, ?)
-            """,
-                (message_id, interaction.user.id),
-            )
+            async with db.execute("""
+            SELECT voice_channel_id
+            FROM recruit_posts
+            WHERE message_id = ?
+            """, (message_id,)) as cursor:
+                voice_row = await cursor.fetchone()
+
+            if not voice_row:
+                await interaction.response.send_message(
+                    "❌ 모집 정보를 찾을 수 없습니다.", ephemeral=True
+                )
+                return
+
+            voice_channel_id = voice_row[0]
+
+            async with db.execute("""
+            SELECT message_id
+            FROM recruit_posts
+            WHERE voice_channel_id = ?
+            """, (voice_channel_id,)) as cursor:
+                group_rows = await cursor.fetchall()
+
+            for (group_message_id,) in group_rows:
+                await db.execute("""
+                INSERT OR IGNORE INTO recruit_members (message_id, user_id)
+                VALUES (?, ?)
+                """, (group_message_id, interaction.user.id))
 
             await db.commit()
 
@@ -175,22 +295,30 @@ class RecruitPostView(discord.ui.View):
     ):
         message_id = interaction.message.id
 
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                """
-            DELETE FROM recruit_members
-            WHERE message_id = ?
-            AND user_id = ?
-            """,
-                (message_id, interaction.user.id),
+        voice_channel_id, rows = await get_recruit_group_rows_by_message(message_id)
+
+        if not voice_channel_id:
+            await interaction.response.send_message(
+                "❌ 모집 정보를 찾을 수 없습니다.",
+                ephemeral=True,
             )
+            return
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            for group_message_id, _ in rows:
+                await db.execute("""
+                DELETE FROM recruit_members
+                WHERE message_id = ?
+                AND user_id = ?
+                """, (group_message_id, interaction.user.id))
 
             await db.commit()
 
-        await update_recruit_message(interaction.message)
+        await update_recruit_group_messages(interaction.guild, voice_channel_id)
 
         await interaction.response.send_message(
-            "✅ 모집 참여를 취소했습니다.", ephemeral=True
+            "✅ 모집 참여를 취소했습니다.",
+            ephemeral=True,
         )
 
     @discord.ui.button(
@@ -330,42 +458,40 @@ class RecruitGameSelect(discord.ui.Select):
 
         if not interaction.user.voice or not interaction.user.voice.channel:
             await interaction.response.send_message(
-                "❌ 먼저 음성채널에 입장한 뒤 모집을 시작해주세요.", ephemeral=True
+                "❌ 먼저 음성채널에 입장한 뒤 모집을 시작해주세요.",
+                ephemeral=True,
             )
             return
 
         voice_channel = interaction.user.voice.channel
+
         async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute(
-                """
-                                  SELECT message_id
-                                  FROM recruit_posts
-                                  WHERE voice_channel_id = ?
-                                  """,
-                (voice_channel.id,),
-            ) as cursor:
+            async with db.execute("""
+            SELECT message_id
+            FROM recruit_posts
+            WHERE voice_channel_id = ?
+            """, (voice_channel.id,)) as cursor:
                 existing = await cursor.fetchone()
 
         if existing:
             await interaction.response.send_message(
-                "❌ 이 음성채널에는 이미 진행 중인 모집글이 있습니다.", ephemeral=True
+                "❌ 이 음성채널에는 이미 진행 중인 모집글이 있습니다.",
+                ephemeral=True,
             )
             return
 
         async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute(
-                """
+            async with db.execute("""
             SELECT role_id, recruit_channel_id
             FROM game_settings
             WHERE game_name = ?
-            """,
-                (game_name,),
-            ) as cursor:
+            """, (game_name,)) as cursor:
                 game = await cursor.fetchone()
 
         if not game:
             await interaction.response.send_message(
-                "❌ 게임 설정을 찾을 수 없습니다.", ephemeral=True
+                "❌ 게임 설정을 찾을 수 없습니다.",
+                ephemeral=True,
             )
             return
 
@@ -376,9 +502,18 @@ class RecruitGameSelect(discord.ui.Select):
 
         if not recruit_channel:
             await interaction.response.send_message(
-                "❌ 모집 채널을 찾을 수 없습니다.", ephemeral=True
+                "❌ 모집 채널을 찾을 수 없습니다.",
+                ephemeral=True,
             )
             return
+
+        target_channels = []
+
+        if isinstance(interaction.channel, discord.TextChannel):
+            target_channels.append(interaction.channel)
+
+        if recruit_channel not in target_channels:
+            target_channels.append(recruit_channel)
 
         embed = discord.Embed(
             title=f"🎮 {game_name} 모집",
@@ -393,56 +528,57 @@ class RecruitGameSelect(discord.ui.Select):
         )
 
         content = role.mention if role else ""
-
-        message = await recruit_channel.send(
-            content=content,
-            embed=embed,
-            view=RecruitPostView(
-                is_full=False,
-                voice_channel_id=voice_channel.id,
-                guild_id=interaction.guild.id,
-            ),
-        )
+        sent_channels = []
 
         async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                """
-            INSERT INTO recruit_posts (
-                message_id,
-                game_name,
-                host_id,
-                channel_id,
-                voice_channel_id
-            )
-            VALUES (?, ?, ?, ?, ?)
-            """,
-                (
+            for target_channel in target_channels:
+                message = await target_channel.send(
+                    content=content,
+                    embed=embed,
+                    view=RecruitPostView(
+                        is_full=False,
+                        voice_channel_id=voice_channel.id,
+                        guild_id=interaction.guild.id,
+                    ),
+                )
+
+                await db.execute("""
+                INSERT INTO recruit_posts (
+                    message_id,
+                    game_name,
+                    host_id,
+                    channel_id,
+                    voice_channel_id
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """, (
                     message.id,
                     game_name,
                     interaction.user.id,
-                    recruit_channel.id,
+                    target_channel.id,
                     voice_channel.id,
-                ),
-            )
+                ))
 
-            await db.execute(
-                """
-            INSERT OR IGNORE INTO recruit_members (
-                message_id,
-                user_id
-            )
-            VALUES (?, ?)
-            """,
-                (message.id, interaction.user.id),
-            )
+                await db.execute("""
+                INSERT OR IGNORE INTO recruit_members (
+                    message_id,
+                    user_id
+                )
+                VALUES (?, ?)
+                """, (
+                    message.id,
+                    interaction.user.id,
+                ))
+
+                sent_channels.append(target_channel.mention)
 
             await db.commit()
 
         await interaction.response.edit_message(
-            content=f"✅ {recruit_channel.mention} 채널에 모집글을 올렸습니다.",
+            content=f"✅ 모집글을 {' / '.join(sent_channels)} 채널에 올렸습니다.",
             embed=None,
             view=None,
-        )
+        )    
 
 
 class RecruitGameView(discord.ui.View):
@@ -452,75 +588,12 @@ class RecruitGameView(discord.ui.View):
 
 
 async def update_recruit_message(message: discord.Message):
-    message_id = message.id
+    voice_channel_id, rows = await get_recruit_group_rows_by_message(message.id)
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            """
-        SELECT game_name, host_id, voice_channel_id
-        FROM recruit_posts
-        WHERE message_id = ?
-        """,
-            (message_id,),
-        ) as cursor:
-            post = await cursor.fetchone()
-
-        async with db.execute(
-            """
-        SELECT user_id
-        FROM recruit_members
-        WHERE message_id = ?
-        """,
-            (message_id,),
-        ) as cursor:
-            members = await cursor.fetchall()
-
-    if not post:
+    if not voice_channel_id:
         return
 
-    game_name, host_id, voice_channel_id = post
-
-    host_text = f"<@{host_id}>"
-    voice_text = f"<#{voice_channel_id}>"
-
-    member_lines = []
-    for (user_id,) in members:
-        member_lines.append(f"- <@{user_id}>")
-
-        voice_channel = message.guild.get_channel(voice_channel_id)
-
-        user_limit = 0
-
-        if voice_channel:
-
-            user_limit = voice_channel.user_limit
-
-    embed = discord.Embed(
-        title=f"🎮 {game_name} 모집",
-        description=(
-            f"👑 모집장: {host_text}\n"
-            f"🎧 음성채널: {voice_text}\n"
-            f"👥 참여자: `{len(members)}"
-            f"{f'/{user_limit}' if user_limit else ''}명`\n\n"
-            f"**참여자 목록**\n" + ("\n".join(member_lines) if member_lines else "없음")
-        ),
-        color=discord.Color.green(),
-    )
-
-    is_full = False
-
-    if user_limit > 0 and len(members) >= user_limit:
-        is_full = True
-
-    await message.edit(
-        embed=embed,
-        view=RecruitPostView(
-            is_full=is_full,
-            voice_channel_id=voice_channel_id,
-            guild_id=message.guild.id,
-        )
-    )
-
+    await update_recruit_group_messages(message.guild, voice_channel_id)
 
 class Recruit(commands.Cog):
     def __init__(self, bot: commands.Bot):

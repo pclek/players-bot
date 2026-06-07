@@ -1385,7 +1385,6 @@ class TreasureBetButton(discord.ui.Button):
             ),
         )
 
-
 class TreasureAcceptView(discord.ui.View):
     def __init__(self, proposer_id: int, target_id: int, bet: int):
         super().__init__(timeout=300)
@@ -1393,6 +1392,15 @@ class TreasureAcceptView(discord.ui.View):
         self.target_id = target_id
         self.bet = bet
         self.done = False
+
+    async def on_timeout(self):
+        self.done = True
+
+        for item in self.children:
+            item.disabled = True
+
+    async def fail_after_defer(self, interaction: discord.Interaction, message: str):
+        await interaction.followup.send(message, ephemeral=True)
 
     @discord.ui.button(label="수락", style=discord.ButtonStyle.green)
     async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1409,10 +1417,13 @@ class TreasureAcceptView(discord.ui.View):
                 ephemeral=True,
             )
             return
+
+        await interaction.response.defer()
+
         if self.proposer_id in ACTIVE_TREASURE_USERS or self.target_id in ACTIVE_TREASURE_USERS:
-            await interaction.response.send_message(
+            await self.fail_after_defer(
+                interaction,
                 "❌ 참가자 중 이미 진행 중인 보물찾기가 있습니다.",
-                ephemeral=True,
             )
             return
 
@@ -1420,66 +1431,98 @@ class TreasureAcceptView(discord.ui.View):
             attendance_error = await check_casino_attendance(user_id)
 
             if attendance_error:
-                await interaction.response.send_message(
+                await self.fail_after_defer(
+                    interaction,
                     f"❌ <@{user_id}> 님이 오늘 출석하지 않아 게임을 시작할 수 없습니다.",
-                    ephemeral=True,
                 )
                 return
 
             limit_error = await check_casino_limit(user_id, "treasure")
 
             if limit_error:
-                await interaction.response.send_message(
+                await self.fail_after_defer(
+                    interaction,
                     f"❌ <@{user_id}> 님의 보물찾기 제한 때문에 시작할 수 없습니다.",
-                    ephemeral=True,
                 )
                 return
 
             dead, dead_until = await is_user_dead(user_id)
 
             if dead:
-                await interaction.response.send_message(
+                await self.fail_after_defer(
+                    interaction,
                     f"🪦 <@{user_id}> 님은 사망 상태라 보물찾기를 진행할 수 없습니다.\n"
                     f"부활 예정 : `{format_dead_until(dead_until)}`",
-                    ephemeral=True,
                 )
                 return
 
             points = await get_points(user_id)
 
             if points < self.bet:
-                await interaction.response.send_message(
+                await self.fail_after_defer(
+                    interaction,
                     f"❌ <@{user_id}> 님의 포인트가 부족합니다.",
-                    ephemeral=True,
                 )
                 return
 
-        proposer_paid = await spend_points(self.proposer_id, self.bet)
-        target_paid = await spend_points(self.target_id, self.bet)
-
-        if not proposer_paid or not target_paid:
-            await interaction.response.send_message(
-                "❌ 포인트 차감 중 문제가 발생했습니다.",
-                ephemeral=True,
-            )
-            return
-
-        await record_casino_play(self.proposer_id, "treasure")
-        await record_casino_play(self.target_id, "treasure")
-
-        self.done = True
-
-        ACTIVE_TREASURE_USERS.add(self.proposer_id)
-        ACTIVE_TREASURE_USERS.add(self.target_id)
-
         total_pot = self.bet * 2
-        game = TreasureGame(self.proposer_id, self.target_id, self.bet, total_pot)
 
-        await interaction.response.edit_message(
-            content=None,
-            embed=game.make_embed("✅ 보물찾기가 시작되었습니다."),
-            view=TreasureGameView(game),
-        )
+        proposer_paid = False
+        target_paid = False
+
+        try:
+            game = TreasureGame(self.proposer_id, self.target_id, self.bet, total_pot)
+
+            proposer_paid = await spend_points(self.proposer_id, self.bet)
+
+            if not proposer_paid:
+                await self.fail_after_defer(
+                    interaction,
+                    f"❌ <@{self.proposer_id}> 님의 포인트 차감에 실패했습니다.",
+                )
+                return
+
+            target_paid = await spend_points(self.target_id, self.bet)
+
+            if not target_paid:
+                await add_points(self.proposer_id, self.bet)
+
+                await self.fail_after_defer(
+                    interaction,
+                    f"❌ <@{self.target_id}> 님의 포인트 차감에 실패했습니다.",
+                )
+                return
+
+            ACTIVE_TREASURE_USERS.add(self.proposer_id)
+            ACTIVE_TREASURE_USERS.add(self.target_id)
+
+            await record_casino_play(self.proposer_id, "treasure")
+            await record_casino_play(self.target_id, "treasure")
+
+            self.done = True
+
+            await interaction.edit_original_response(
+                content=None,
+                embed=game.make_embed("✅ 보물찾기가 시작되었습니다."),
+                view=TreasureGameView(game),
+            )
+
+        except Exception:
+            ACTIVE_TREASURE_USERS.discard(self.proposer_id)
+            ACTIVE_TREASURE_USERS.discard(self.target_id)
+
+            if proposer_paid:
+                await add_points(self.proposer_id, self.bet)
+
+            if target_paid:
+                await add_points(self.target_id, self.bet)
+
+            await self.fail_after_defer(
+                interaction,
+                "❌ 보물찾기 시작 중 오류가 발생했습니다.\n"
+                "진행 상태를 초기화하고 배팅금을 환불했습니다.",
+            )
+            raise
 
     @discord.ui.button(label="거절", style=discord.ButtonStyle.red)
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1491,6 +1534,8 @@ class TreasureAcceptView(discord.ui.View):
             return
 
         self.done = True
+        ACTIVE_TREASURE_USERS.discard(self.proposer_id)
+        ACTIVE_TREASURE_USERS.discard(self.target_id)
 
         await interaction.response.edit_message(
             content="❌ 보물찾기 신청이 거절/취소되었습니다.",
@@ -1543,7 +1588,8 @@ class TreasureGame:
             player2_id: False,
         }
 
-        self.steal_owner = Noneself.steal_owner = None
+        self.steal_owner = None
+
 
     def current_player_id(self):
         return self.players[self.turn_index]
@@ -1590,6 +1636,9 @@ class TreasureGame:
 
         return "\n\n".join(lines)
 
+    def next_turn(self):
+        self.turn_index = 1 - self.turn_index
+        
     def make_embed(self, message: str | None = None):
         embed = discord.Embed(
             title="🏴‍☠️ 보물찾기",
