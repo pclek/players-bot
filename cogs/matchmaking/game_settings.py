@@ -137,6 +137,7 @@ class GameNameModal(discord.ui.Modal):
                     game_name,
                     self.role.id,
                     self.recruit_channel.id,
+                    self.tempvoice_channel.id,
                     match_size,
                     recruit_description,
                     self.original_game_name,
@@ -144,13 +145,14 @@ class GameNameModal(discord.ui.Modal):
 
                 if cursor.rowcount == 0:
                     await interaction.response.send_message(
-                        "❌ 기존 게임 설정을 찾지 못해 수정하지 못했습니다. 새로 생성하지 않았습니다.",
+                        "❌ 기존 게임 설정을 찾지 못해 수정하지 못했습니다. 새 게임은 생성하지 않았습니다.",
                         ephemeral=True,
                     )
                     return
+
             else:
                 await db.execute("""
-                INSERT OR REPLACE INTO game_settings (
+                INSERT INTO game_settings (
                     game_name,
                     role_id,
                     recruit_channel_id,
