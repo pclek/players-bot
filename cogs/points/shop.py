@@ -19,6 +19,7 @@ from cogs.adventure.adventure_utils import (
 DB_PATH = "database/bot.db"
 
 SHOP_STICKY_COOLDOWN_MINUTES = 30
+INVENTORY_FOOD_COOLDOWN_HOURS = 2
 
 
 async def make_shop_embed(guild: discord.Guild):
@@ -768,7 +769,54 @@ FOOD_HEALS = {
     "황금정식": 999999,
 }
 
+async def ensure_inventory_food_cooldown_schema():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS inventory_food_cooldowns (
+            user_id INTEGER PRIMARY KEY,
+            last_used_at TEXT NOT NULL
+        )
+        """)
+        await db.commit()
 
+
+async def get_inventory_food_cooldown(user_id: int):
+    await ensure_inventory_food_cooldown_schema()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT last_used_at
+        FROM inventory_food_cooldowns
+        WHERE user_id = ?
+        """, (user_id,)) as cursor:
+            row = await cursor.fetchone()
+
+    if not row:
+        return None
+
+    try:
+        return datetime.fromisoformat(row[0])
+    except ValueError:
+        return None
+
+
+async def set_inventory_food_cooldown(user_id: int):
+    await ensure_inventory_food_cooldown_schema()
+
+    now = datetime.now().isoformat()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        INSERT INTO inventory_food_cooldowns (
+            user_id,
+            last_used_at
+        )
+        VALUES (?, ?)
+        ON CONFLICT(user_id)
+        DO UPDATE SET last_used_at = excluded.last_used_at
+        """, (user_id, now))
+
+        await db.commit()
 
 class GeneralInventorySelect(discord.ui.Select):
     def __init__(self, rows):
@@ -1100,6 +1148,25 @@ class AdventureItemUseFoodButton(discord.ui.Button):
                 ephemeral=True,
             )
             return
+        
+        last_used_at = await get_inventory_food_cooldown(interaction.user.id)
+
+        if last_used_at:
+            next_available_at = last_used_at + timedelta(hours=INVENTORY_FOOD_COOLDOWN_HOURS)
+            now = datetime.now()
+
+            if now < next_available_at:
+                remaining = next_available_at - now
+                remaining_minutes = int(remaining.total_seconds() // 60)
+                hours = remaining_minutes // 60
+                minutes = remaining_minutes % 60
+
+                await interaction.response.send_message(
+                    f"⏳ 인벤토리 음식은 `{INVENTORY_FOOD_COOLDOWN_HOURS}시간`에 한 번만 사용할 수 있습니다.\n"
+                    f"남은 시간 : `{hours}시간 {minutes}분`",
+                    ephemeral=True,
+                )
+                return
 
         heal_amount = FOOD_HEALS.get(self.item_name)
 
@@ -1143,6 +1210,8 @@ class AdventureItemUseFoodButton(discord.ui.Button):
                 interaction.user.id,
             ))
             await db.commit()
+
+            await set_inventory_food_cooldown(interaction.user.id)
 
         embed = discord.Embed(
             title="🍽 음식 사용",

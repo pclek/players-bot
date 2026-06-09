@@ -33,6 +33,14 @@ BASE_ESCAPE_CHANCE = 60
 ESCAPE_CHANCE_LOSS_PER_SEARCH = 20
 BATTLE_XP_RATE = 0.10
 
+PLAYER_MISS_CHANCE = 8
+PLAYER_CRIT_CHANCE = 12
+PLAYER_CRIT_MULTIPLIER = 1.5
+
+MONSTER_MISS_CHANCE = 6
+MONSTER_CRIT_CHANCE = 8
+MONSTER_CRIT_MULTIPLIER = 1.4
+
 EQUIPMENT_MAX_DURABILITY = {'녹슨검': 999999, '구리검': 90, '철검': 110, '은검': 130, '금검': 155, '미스릴검': 185, '다이아검': 220, '흑철검': 260, '비브라늄검': 310, '오리하르콘검': 380, '철갑옷': 130, '은갑옷': 155, '금갑옷': 185, '미스릴갑옷': 225, '다이아갑옷': 270, '흑철갑옷': 320, '비브라늄갑옷': 380, '오리하르콘갑옷': 460}
 
 
@@ -301,6 +309,41 @@ def roll_monster():
         "point_max": data["point"][1],
     }
 
+def roll_player_damage(attack_min: int, attack_max: int) -> tuple[int, str]:
+    roll = random.randint(1, 100)
+
+    if roll <= PLAYER_MISS_CHANCE:
+        return 0, "miss"
+
+    damage = random.randint(attack_min, attack_max)
+
+    crit_roll = random.randint(1, 100)
+
+    if crit_roll <= PLAYER_CRIT_CHANCE:
+        damage = int(damage * PLAYER_CRIT_MULTIPLIER)
+        return damage, "crit"
+
+    return damage, "normal"
+
+
+def roll_monster_damage(monster: dict) -> tuple[int, str]:
+    roll = random.randint(1, 100)
+
+    if roll <= MONSTER_MISS_CHANCE:
+        return 0, "miss"
+
+    damage = random.randint(
+        monster["atk_min"],
+        monster["atk_max"],
+    )
+
+    crit_roll = random.randint(1, 100)
+
+    if crit_roll <= MONSTER_CRIT_CHANCE:
+        damage = int(damage * MONSTER_CRIT_MULTIPLIER)
+        return damage, "crit"
+
+    return damage, "normal"
 
 def get_monster_risk(monster: dict) -> str:
     avg_hp = monster["max_hp"]
@@ -411,11 +454,68 @@ class FoodSelect(discord.ui.Select):
 
         await set_user_hp(view.user_id, view.player_hp)
 
+        monster_damage, monster_hit_type = roll_monster_damage(view.monster)
+
+        if view.shield > 0:
+            blocked = min(view.shield, monster_damage)
+            view.shield -= blocked
+            monster_damage -= blocked
+
+        before_damage_hp = view.player_hp
+        view.player_hp -= monster_damage
+        after_damage_hp = max(view.player_hp, 0)
+
+        log = (
+            f"🎒 <@{view.user_id}> 님이 `{food_name}` 을(를) 사용했습니다.\n"
+            f"❤️ 체력 `{before_hp}` → `{before_damage_hp}` (`+{healed}`)"
+        )
+
+        if monster_hit_type == "miss":
+            log += (
+                f"\n\n{view.monster['emoji']} 몬스터의 반격이 빗나갔습니다!"
+            )
+        elif monster_hit_type == "crit":
+            log += (
+                f"\n\n{view.monster['emoji']} 몬스터의 치명타! "
+                f"`{monster_damage}` 피해를 받았습니다.\n"
+                f"HP `{before_damage_hp}` → `{after_damage_hp}`"
+            )
+        else:
+            log += (
+                f"\n\n{view.monster['emoji']} 몬스터의 반격! "
+                f"`{monster_damage}` 피해를 받았습니다.\n"
+                f"HP `{before_damage_hp}` → `{after_damage_hp}`"
+            )
+
+        if view.player_hp <= 0:
+            view.player_hp = 0
+
+            death_penalty_text = await apply_death_penalty(
+                view.user_id,
+                view.weapon_name,
+                view.armor_name,
+            )
+
+            result_text = (
+                f"☠ **전투 패배**\n\n"
+                f"{view.monster['emoji']} `{view.monster['name']}` 에게 패배했습니다.\n"
+                f"음식을 사용했지만 반격을 버티지 못했습니다.\n"
+                f"체력이 `0` 이 되어 사망 상태가 되었습니다.\n"
+                f"획득 보상은 없습니다.\n\n"
+                f"{death_penalty_text}"
+            )
+
+            await view.finish_battle(
+                interaction,
+                result_text,
+                discord.Color.dark_red(),
+            )
+            return
+
+        await set_user_hp(view.user_id, view.player_hp)
+
         await interaction.response.edit_message(
-            embed=view.make_embed(
-                f"🎒 <@{view.user_id}> 님이 `{food_name}` 을(를) 사용했습니다.\n"
-                f"❤️ 체력 `{healed}` 회복!"
-            ),
+            embed=view.make_embed(log),
             view=view,
         )
 
@@ -628,7 +728,7 @@ class HuntView(discord.ui.View):
             attack_min = int(attack_min * enhance_multiplier)
             attack_max = int(attack_max * enhance_multiplier)
 
-            player_damage = random.randint(
+            player_damage, player_hit_type = roll_player_damage(
                 attack_min + self.attack_bonus,
                 attack_max + self.attack_bonus,
             )
@@ -647,7 +747,12 @@ class HuntView(discord.ui.View):
             if weapon_durability_text:
                 durability_messages.append(weapon_durability_text)
 
-            log = f"🗡 당신의 공격! `{player_damage}` 피해를 입혔습니다."
+            if player_hit_type == "miss":
+                log = "💨 당신의 공격이 빗나갔습니다!"
+            elif player_hit_type == "crit":
+                log = f"💥 치명타! `{player_damage}` 피해를 입혔습니다!"
+            else:
+                log = f"🗡 당신의 공격! `{player_damage}` 피해를 입혔습니다."
 
             if self.monster_hp <= 0:
                 reward_points = random.randint(
@@ -678,10 +783,7 @@ class HuntView(discord.ui.View):
                 )
                 return
 
-            monster_damage = random.randint(
-                self.monster["atk_min"],
-                self.monster["atk_max"],
-            )
+            monster_damage, monster_hit_type = roll_monster_damage(self.monster)
 
             if self.shield > 0:
                 blocked = min(self.shield, monster_damage)
@@ -702,11 +804,22 @@ class HuntView(discord.ui.View):
             self.player_hp -= monster_damage
             after_hp = max(self.player_hp, 0)
 
-            log += (
-                f"\n{self.monster['emoji']} 몬스터의 반격! "
-                f"`{monster_damage}` 피해를 받았습니다. "
-                f"HP `{before_hp}` → `{after_hp}`"
-            )
+            if monster_hit_type == "miss":
+                log += (
+                    f"\n{self.monster['emoji']} 몬스터의 반격이 빗나갔습니다!"
+                )
+            elif monster_hit_type == "crit":
+                log += (
+                    f"\n{self.monster['emoji']} 몬스터의 치명타! "
+                    f"`{monster_damage}` 피해를 받았습니다. "
+                    f"HP `{before_hp}` → `{after_hp}`"
+                )
+            else:
+                log += (
+                    f"\n{self.monster['emoji']} 몬스터의 반격! "
+                    f"`{monster_damage}` 피해를 받았습니다. "
+                    f"HP `{before_hp}` → `{after_hp}`"
+                )
 
             if durability_messages:
                 log += "\n\n" + "\n".join(durability_messages)
@@ -801,10 +914,7 @@ class HuntView(discord.ui.View):
                 )
                 return
 
-            monster_damage = random.randint(
-                self.monster["atk_min"],
-                self.monster["atk_max"],
-            )
+            monster_damage, monster_hit_type = roll_monster_damage(self.monster)
 
             if self.shield > 0:
                 blocked = min(self.shield, monster_damage)
@@ -837,10 +947,24 @@ class HuntView(discord.ui.View):
                 )
                 return
 
+            if monster_hit_type == "miss":
+                hit_text = (
+                    f"{self.monster['emoji']} `{self.monster['name']}` 의 공격이 빗나갔습니다!"
+                )
+            elif monster_hit_type == "crit":
+                hit_text = (
+                    f"{self.monster['emoji']} `{self.monster['name']}` 의 치명타!\n"
+                    f"HP -`{monster_damage}`"
+                )
+            else:
+                hit_text = (
+                    f"{self.monster['emoji']} `{self.monster['name']}` 이(가) 공격했습니다.\n"
+                    f"HP -`{monster_damage}`"
+                )
+
             message = (
                 f"❌ 도망 실패!\n\n"
-                f"{self.monster['emoji']} `{self.monster['name']}` 이(가) 공격했습니다.\n"
-                f"HP -`{monster_damage}`\n"
+                f"{hit_text}\n"
                 f"도망 확률 : `{escape_chance}%`"
             )
 
