@@ -1144,13 +1144,24 @@ class AdventureItemUseFoodButton(discord.ui.Button):
             ))
             await db.commit()
 
-        await interaction.response.edit_message(
-            content=(
-                f"🍽 `{self.item_name}` 을(를) 사용했습니다.\n"
+        embed = discord.Embed(
+            title="🍽 음식 사용",
+            description=(
+                f"{interaction.user.mention} 님이 "
+                f"`{self.item_name}` 을(를) 사용했습니다.\n\n"
                 f"❤️ 체력 `{current_hp}` → `{new_hp}`"
             ),
+            color=discord.Color.green(),
+        )
+
+        await interaction.response.edit_message(
+            content=None,
             embed=None,
             view=None,
+        )
+
+        await interaction.channel.send(
+            embed=embed
         )
 
 class AdventureItemDiscardButton(discord.ui.Button):
