@@ -171,9 +171,28 @@ class TempVoiceControlView(discord.ui.View):
             )
             return
 
-        await channel.set_permissions(interaction.guild.default_role, connect=None)
+        try:
+            await channel.set_permissions(
+                interaction.guild.default_role,
+                connect=True,
+                reason=f"{interaction.user} 님이 임시채널 잠금 해제",
+            )
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "❌ 봇에게 채널 권한을 수정할 권한이 없습니다.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException as e:
+            await interaction.response.send_message(
+                f"❌ 잠금 해제 중 오류가 발생했습니다: `{e}`",
+                ephemeral=True,
+            )
+            return
+
         await interaction.response.send_message(
-            "🔓 채널 잠금을 해제했습니다.", ephemeral=True
+            "🔓 채널 잠금을 해제했습니다.",
+            ephemeral=True,
         )
 
     @discord.ui.button(
@@ -220,6 +239,8 @@ class TempVoiceControlView(discord.ui.View):
 class TempVoiceCore(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+        bot.add_view(TempVoiceControlView(0))
 
     @commands.Cog.listener()
     async def on_voice_state_update(
