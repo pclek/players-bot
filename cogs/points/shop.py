@@ -15,6 +15,7 @@ from cogs.adventure.adventure_utils import (
     get_user_max_hp,
     is_user_in_battle,
 )
+from cogs.adventure.crafting import RECIPES
 
 DB_PATH = "database/bot.db"
 
@@ -736,38 +737,14 @@ ARMOR_NAMES = [
     "오리하르콘갑옷",
 ]
 
-FOOD_HEALS = {
-    "구운감자": 25,
-    "옥수수구이": 25,
-    "버섯구이": 35,
-    "붕어구이": 30,
-    "고등어구이": 35,
-    "허브감자": 40,
-    "매운붕어찜": 70,
-    "매운버섯볶음": 70,
-    "당근스튜": 80,
-    "장어구이": 80,
-    "옥수수수프": 85,
-    "야채볶음밥": 85,
-    "모둠채소볶음": 95,
-    "연어구이": 50,
-    "참치구이": 65,
-    "고등어스테이크": 75,
-    "연어스테이크": 110,
-    "문어숙회": 120,
-    "문어볶음": 130,
-    "참치스테이크": 140,
-    "장어덮밥": 150,
-    "참치피쉬앤칩스": 160,
-    "복어탕": 170,
-    "복어회정식": 220,
-    "황금잉어찜": 240,
-    "황금호박죽": 250,
-    "심해어스튜": 280,
-    "심해어만찬": 350,
-    "전설의심해어만찬": 500,
-    "황금정식": 999999,
-}
+FOOD_HEALS = {}
+
+for _, (food_name, _, heal_text) in RECIPES.items():
+    if "전체 회복" in heal_text:
+        FOOD_HEALS[food_name] = 999999
+    else:
+        heal = int(heal_text.replace("체력 ", "").replace(" 회복", ""))
+        FOOD_HEALS[food_name] = heal
 
 async def ensure_inventory_food_cooldown_schema():
     async with aiosqlite.connect(DB_PATH) as db:
