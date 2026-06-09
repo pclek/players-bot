@@ -6,7 +6,14 @@ from datetime import datetime
 
 from utils.checks import is_bot_admin
 from cogs.profile.profile import required_xp, progress_bar, format_voice_time
-
+from cogs.adventure.adventure_utils import (
+    ensure_adventure_profile,
+    add_adventure_item,
+    remove_adventure_item,
+    get_adventure_item_count,
+    get_adventure_inventory,
+    get_user_max_hp,
+)
 DB_PATH = "database/bot.db"
 
 
@@ -120,6 +127,100 @@ class NumberEditModal(discord.ui.Modal):
             ephemeral=True,
         )
 
+class AdventureItemEditModal(discord.ui.Modal):
+    def __init__(self, target: discord.Member, mode: str):
+        title = "모험 아이템 추가" if mode == "add" else "모험 아이템 제거"
+        super().__init__(title=title)
+
+        self.target = target
+        self.mode = mode
+
+        self.item_name = discord.ui.TextInput(
+            label="아이템 이름",
+            placeholder="예: 철주괴, 감자, 다이아원석",
+            required=True,
+            max_length=50,
+        )
+
+        self.amount = discord.ui.TextInput(
+            label="수량",
+            placeholder="예: 1, 10, 99",
+            required=True,
+            max_length=5,
+        )
+
+        self.add_item(self.item_name)
+        self.add_item(self.amount)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not await is_bot_admin(interaction):
+            await interaction.response.send_message(
+                "❌ 권한이 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        item_name = str(self.item_name.value).strip()
+
+        try:
+            amount = int(str(self.amount.value).strip())
+        except ValueError:
+            await interaction.response.send_message(
+                "❌ 수량은 숫자로 입력해주세요.",
+                ephemeral=True,
+            )
+            return
+
+        if amount <= 0:
+            await interaction.response.send_message(
+                "❌ 수량은 1 이상이어야 합니다.",
+                ephemeral=True,
+            )
+            return
+
+        await ensure_adventure_profile(self.target.id)
+
+        if self.mode == "add":
+            await add_adventure_item(self.target.id, item_name, amount)
+
+            await interaction.response.send_message(
+                f"✅ 모험 아이템을 추가했습니다.\n"
+                f"대상: {self.target.mention}\n"
+                f"아이템: `{item_name}`\n"
+                f"수량: `{amount}`",
+                ephemeral=True,
+            )
+            return
+
+        current_count = await get_adventure_item_count(self.target.id, item_name)
+
+        if current_count < amount:
+            await interaction.response.send_message(
+                f"❌ 보유 수량이 부족해서 제거할 수 없습니다.\n"
+                f"대상: {self.target.mention}\n"
+                f"아이템: `{item_name}`\n"
+                f"보유 수량: `{current_count}`\n"
+                f"제거 요청: `{amount}`",
+                ephemeral=True,
+            )
+            return
+
+        success = await remove_adventure_item(self.target.id, item_name, amount)
+
+        if not success:
+            await interaction.response.send_message(
+                "❌ 아이템 제거 중 오류가 발생했습니다.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            f"✅ 모험 아이템을 제거했습니다.\n"
+            f"대상: {self.target.mention}\n"
+            f"아이템: `{item_name}`\n"
+            f"수량: `{amount}`",
+            ephemeral=True,
+        )
 
 class WarningReasonModal(discord.ui.Modal):
     def __init__(self, target: discord.Member):
@@ -296,7 +397,145 @@ class AdminUserInfoView(discord.ui.View):
         await interaction.response.send_modal(
             NumberEditModal(self.target, "레벨", "level")
         )
+    @discord.ui.button(
+        label="모험 인벤토리",
+        style=discord.ButtonStyle.secondary,
+        custom_id="admin_adventure_inventory",
+    )
+    async def adventure_inventory(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        if not await is_bot_admin(interaction):
+            await interaction.response.send_message(
+                "❌ 권한이 없습니다.",
+                ephemeral=True,
+            )
+            return
 
+        await ensure_adventure_profile(self.target.id)
+
+        rows = await get_adventure_inventory(self.target.id)
+
+        if not rows:
+            await interaction.response.send_message(
+                f"📦 {self.target.mention} 님의 모험 인벤토리가 비어 있습니다.",
+                ephemeral=True,
+            )
+            return
+
+        lines = []
+
+        for item_name, quantity, category in rows:
+            category_text = category or "기타"
+            lines.append(f"`{item_name}` x{quantity} / {category_text}")
+
+        chunks = []
+        current = ""
+
+        for line in lines:
+            if len(current) + len(line) + 1 > 1000:
+                chunks.append(current)
+                current = line
+            else:
+                current += ("\n" if current else "") + line
+
+        if current:
+            chunks.append(current)
+
+        embed = discord.Embed(
+            title="📦 모험 인벤토리",
+            description=f"대상: {self.target.mention}",
+            color=discord.Color.blurple(),
+        )
+
+        for index, chunk in enumerate(chunks, start=1):
+            embed.add_field(
+                name=f"인벤토리 {index}",
+                value=chunk,
+                inline=False,
+            )
+
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=True,
+        )
+
+    @discord.ui.button(
+        label="모험 아이템 +",
+        style=discord.ButtonStyle.success,
+        custom_id="admin_adventure_item_add",
+    )
+    async def adventure_item_add(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        if not await is_bot_admin(interaction):
+            await interaction.response.send_message(
+                "❌ 권한이 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_modal(
+            AdventureItemEditModal(self.target, "add")
+        )
+
+    @discord.ui.button(
+        label="모험 아이템 -",
+        style=discord.ButtonStyle.danger,
+        custom_id="admin_adventure_item_remove",
+    )
+    async def adventure_item_remove(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        if not await is_bot_admin(interaction):
+            await interaction.response.send_message(
+                "❌ 권한이 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_modal(
+            AdventureItemEditModal(self.target, "remove")
+        )
+
+    @discord.ui.button(
+        label="모험 부활",
+        style=discord.ButtonStyle.success,
+        custom_id="admin_adventure_revive",
+    )
+    async def adventure_revive(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        if not await is_bot_admin(interaction):
+            await interaction.response.send_message(
+                "❌ 권한이 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        await ensure_adventure_profile(self.target.id)
+
+        max_hp = await get_user_max_hp(self.target.id)
+        revive_hp = max(30, int(max_hp * 0.3))
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+            UPDATE adventure_profiles
+            SET dead_until = NULL,
+                current_hp = ?
+            WHERE user_id = ?
+            """, (
+                revive_hp,
+                self.target.id,
+            ))
+
+            await db.commit()
+
+        await interaction.response.send_message(
+            f"✅ {self.target.mention} 님을 즉시 부활시켰습니다.\n"
+            f"현재 HP: `{revive_hp}/{max_hp}`",
+            ephemeral=True,
+        )
     @discord.ui.button(
         label="새로고침",
         style=discord.ButtonStyle.success,

@@ -569,6 +569,57 @@ async def decrease_equipped_durability(
 
         await db.commit()
 
+    if item_name in WEAPON_NAMES:
+        async with aiosqlite.connect(DB_PATH) as db2:
+            await db2.execute("""
+            UPDATE adventure_profiles
+            SET equipped_weapon = '녹슨검'
+            WHERE user_id = ?
+            """, (user_id,))
+
+            await db2.execute("""
+            UPDATE adventure_equipment_instances
+            SET is_equipped = 0
+            WHERE equipment_id = ?
+            """, (equipment_id,))
+
+            await db2.execute("""
+            UPDATE adventure_equipment_instances
+            SET is_equipped = 1
+            WHERE user_id = ?
+            AND item_name = '녹슨검'
+            """, (user_id,))
+
+            await db2.commit()
+
+        return (
+            f"⚠️ `{item_name}` 의 내구도가 0이 되었습니다.\n"
+            f"⚔ 자동으로 장착 해제되고 `녹슨검` 이 장착되었습니다.\n"
+            f"수리하지 않고 다시 내구도가 0이 되면 파괴됩니다."
+        )
+
+    elif item_name in ARMOR_NAMES:
+        async with aiosqlite.connect(DB_PATH) as db2:
+            await db2.execute("""
+            UPDATE adventure_profiles
+            SET equipped_armor = ''
+            WHERE user_id = ?
+            """, (user_id,))
+
+            await db2.execute("""
+            UPDATE adventure_equipment_instances
+            SET is_equipped = 0
+            WHERE equipment_id = ?
+            """, (equipment_id,))
+
+            await db2.commit()
+
+        return (
+            f"⚠️ `{item_name}` 의 내구도가 0이 되었습니다.\n"
+            f"🛡 자동으로 장착 해제되었습니다.\n"
+            f"수리하지 않고 다시 내구도가 0이 되면 파괴됩니다."
+        )
+
     return (
         f"⚠️ `{item_name}` 의 내구도가 0이 되었습니다.\n"
         f"수리하지 않고 다시 내구도가 0이 되면 파괴됩니다."

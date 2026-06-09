@@ -82,7 +82,7 @@ SMELT_RECIPES = {
     "silver_ingot": {"name": "은주괴", "materials": {"은광석": 3, "석탄": 2}, "cost": 20},
     "gold_ingot": {"name": "금주괴", "materials": {"금광석": 3, "석탄": 2}, "cost": 35},
     "mithril_ingot": {"name": "미스릴주괴", "materials": {"미스릴광석": 3, "은주괴": 1, "석탄": 3}, "cost": 75},
-    "diamond_crystal": {"name": "다이아결정", "materials": {"다이아원석": 2, "철주괴": 1}, "cost": 120},
+    "diamond_crystal": {"name": "다이아결정", "materials": {"다이아원석": 3, "철주괴": 1}, "cost": 120},
     "black_iron_ingot": {"name": "흑철주괴", "materials": {"흑철광석": 3, "금주괴": 1, "석탄": 4}, "cost": 180},
     "vibranium_ingot": {"name": "비브라늄주괴", "materials": {"비브라늄원석": 2, "다이아결정": 1, "석탄": 5}, "cost": 280},
     "orichalcum_ingot": {"name": "오리하르콘주괴", "materials": {"오리하르콘광석": 3, "비브라늄주괴": 1, "흑철주괴": 1}, "cost": 500},
@@ -100,14 +100,14 @@ EQUIPMENT_RECIPES = {
     "vibranium_sword": {"name": "비브라늄검", "materials": {"비브라늄주괴": 7, "다이아결정": 4}, "cost": 5000},
     "orichalcum_sword": {"name": "오리하르콘검", "materials": {"오리하르콘주괴": 8, "비브라늄주괴": 3, "흑철주괴": 3}, "cost": 8500},
 
-    "iron_armor": {"name": "철갑옷", "materials": {"철주괴": 8}, "cost": 250},
-    "silver_armor": {"name": "은갑옷", "materials": {"은주괴": 8}, "cost": 550},
-    "gold_armor": {"name": "금갑옷", "materials": {"금주괴": 10}, "cost": 1100},
-    "mithril_armor": {"name": "미스릴갑옷", "materials": {"미스릴주괴": 10, "은주괴": 3}, "cost": 1900},
-    "diamond_armor": {"name": "다이아갑옷", "materials": {"다이아결정": 9, "미스릴주괴": 3}, "cost": 3200},
-    "black_iron_armor": {"name": "흑철갑옷", "materials": {"흑철주괴": 12, "금주괴": 4}, "cost": 5000},
-    "vibranium_armor": {"name": "비브라늄갑옷", "materials": {"비브라늄주괴": 12, "다이아결정": 6}, "cost": 7500},
-    "orichalcum_armor": {"name": "오리하르콘갑옷", "materials": {"오리하르콘주괴": 14, "비브라늄주괴": 5, "흑철주괴": 5}, "cost": 12000},
+    "iron_armor": {"name": "철갑옷", "materials": {"철주괴": 6}, "cost": 250},
+    "silver_armor": {"name": "은갑옷", "materials": {"은주괴": 6}, "cost": 550},
+    "gold_armor": {"name": "금갑옷", "materials": {"금주괴": 8}, "cost": 1100},
+    "mithril_armor": {"name": "미스릴갑옷", "materials": {"미스릴주괴": 8, "은주괴": 2}, "cost": 1900},
+    "diamond_armor": {"name": "다이아갑옷", "materials": {"다이아결정": 7, "미스릴주괴": 2}, "cost": 3200},
+    "black_iron_armor": {"name": "흑철갑옷", "materials": {"흑철주괴": 9, "금주괴": 3}, "cost": 5000},
+    "vibranium_armor": {"name": "비브라늄갑옷", "materials": {"비브라늄주괴": 9, "다이아결정": 4}, "cost": 7500},
+    "orichalcum_armor": {"name": "오리하르콘갑옷", "materials": {"오리하르콘주괴": 10, "비브라늄주괴": 3, "흑철주괴": 3}, "cost": 12000},
 }
 
 
