@@ -17,6 +17,11 @@ from cogs.adventure.blacksmith import (
     make_blacksmith_embed,
     SMELT_RECIPES,
     EQUIPMENT_RECIPES,
+    REPAIR_RECIPES,
+    ENHANCE_MAX_LEVEL,
+    get_enhance_materials,
+    get_enhance_point_cost,
+    enhance_effect_text,
     material_text as blacksmith_material_text,
 )
 from cogs.adventure.equipment import EquipView
@@ -249,74 +254,106 @@ async def make_recipebook_embed(user_id: int, category: str):
         for item_name, quantity, item_category in rows
     }
 
+    lines = []
+
     if category == "cooking":
         title = "📖 레시피북 - 요리"
-        lines = []
+        color = discord.Color.orange()
 
         for key, recipe in COOKING_RECIPES.items():
             result_name, materials, heal_text = recipe
             cooking_cost = get_cooking_cost(result_name)
 
-            can_make = True
-
-            for item_name, needed in materials.items():
-                if inventory.get(item_name, 0) < needed:
-                    can_make = False
-                    break
+            can_make = all(
+                inventory.get(item_name, 0) >= needed
+                for item_name, needed in materials.items()
+            )
 
             mark = "✅" if can_make else "❌"
 
             lines.append(
                 f"{mark} **{result_name}**\n"
                 f"└ 재료 : {cooking_material_text(materials)}\n"
-                f"└ 효과 : {heal_text} / 조리비 `{cooking_cost}P`"
+                f"└ 효과 : {heal_text}\n"
+                f"└ 조리비 : `{cooking_cost}P`"
             )
-
-        color = discord.Color.orange()
 
     elif category == "smelt":
         title = "📖 레시피북 - 제련"
-        lines = []
-
-        for key, recipe in SMELT_RECIPES.items():
-            can_make = True
-
-            for item_name, needed in recipe["materials"].items():
-                if inventory.get(item_name, 0) < needed:
-                    can_make = False
-                    break
-
-            mark = "✅" if can_make else "❌"
-
-            lines.append(
-                f"{mark} **{recipe['name']}**\n"
-                f"└ 재료 : {blacksmith_material_text(recipe['materials'])}\n"
-                f"└ 비용 : `{recipe['cost']}P`"
-            )
-
         color = discord.Color.dark_orange()
 
-    else:
-        title = "📖 레시피북 - 장비 제작"
-        lines = []
-
-        for key, recipe in EQUIPMENT_RECIPES.items():
-            can_make = True
-
-            for item_name, needed in recipe["materials"].items():
-                if inventory.get(item_name, 0) < needed:
-                    can_make = False
-                    break
+        for key, recipe in SMELT_RECIPES.items():
+            materials = recipe["materials"]
+            can_make = all(
+                inventory.get(item_name, 0) >= needed
+                for item_name, needed in materials.items()
+            )
 
             mark = "✅" if can_make else "❌"
 
             lines.append(
                 f"{mark} **{recipe['name']}**\n"
-                f"└ 재료 : {blacksmith_material_text(recipe['materials'])}\n"
+                f"└ 재료 : {blacksmith_material_text(materials)}\n"
                 f"└ 비용 : `{recipe['cost']}P`"
             )
 
+    elif category == "equipment":
+        title = "📖 레시피북 - 장비 제작"
         color = discord.Color.green()
+
+        for key, recipe in EQUIPMENT_RECIPES.items():
+            materials = recipe["materials"]
+            can_make = all(
+                inventory.get(item_name, 0) >= needed
+                for item_name, needed in materials.items()
+            )
+
+            mark = "✅" if can_make else "❌"
+
+            lines.append(
+                f"{mark} **{recipe['name']}**\n"
+                f"└ 재료 : {blacksmith_material_text(materials)}\n"
+                f"└ 제작비 : `{recipe['cost']}P`"
+            )
+
+    elif category == "repair":
+        title = "📖 레시피북 - 수리"
+        color = discord.Color.blue()
+
+        for item_name, recipe in REPAIR_RECIPES.items():
+            lines.append(
+                f"🛠 **{item_name} 수리**\n"
+                f"└ 재료 : {blacksmith_material_text(recipe['materials'])}\n"
+                f"└ 기본 수리비 : `{recipe['cost']}P`\n"
+                f"└ 내구도 0 장비 수리비 : `{int(recipe['cost'] * 1.5)}P`"
+            )
+
+    elif category == "enhance":
+        title = "📖 레시피북 - 강화"
+        color = discord.Color.gold()
+
+        for recipe in EQUIPMENT_RECIPES.values():
+            item_name = recipe["name"]
+
+            lines.append(f"✨ **{item_name} 강화**")
+
+            for next_level in range(1, ENHANCE_MAX_LEVEL + 1):
+                materials = get_enhance_materials(item_name, next_level)
+
+                if not materials:
+                    continue
+
+                point_cost = get_enhance_point_cost(item_name, next_level)
+
+                lines.append(
+                    f"└ `+{next_level}` {enhance_effect_text(next_level)} : "
+                    f"{blacksmith_material_text(materials)} / `{point_cost}P`"
+                )
+
+    else:
+        title = "📖 레시피북"
+        color = discord.Color.blurple()
+        lines.append("알 수 없는 레시피 종류입니다.")
 
     embed = discord.Embed(
         title=title,
@@ -328,7 +365,7 @@ async def make_recipebook_embed(user_id: int, category: str):
         color=color,
     )
 
-    chunks = split_recipe_lines(lines)
+    chunks = split_recipe_lines(lines, limit=1000)
 
     for index, chunk in enumerate(chunks, start=1):
         embed.add_field(
@@ -338,7 +375,6 @@ async def make_recipebook_embed(user_id: int, category: str):
         )
 
     return embed
-
 
 class RecipeBookSelect(discord.ui.Select):
     def __init__(self, user_id: int):
@@ -362,6 +398,18 @@ class RecipeBookSelect(discord.ui.Select):
                 description="무기/방어구 제작 재료와 비용을 확인합니다.",
                 emoji="⚒️",
                 value="equipment",
+            ),
+            discord.SelectOption(
+                label="수리",
+                description="장비 수리 재료와 비용을 확인합니다.",
+                emoji="🛠️",
+                value="repair",
+            ),
+            discord.SelectOption(
+                label="강화",
+                description="장비 강화 단계별 재료와 비용을 확인합니다.",
+                emoji="✨",
+                value="enhance",
             ),
         ]
 
