@@ -1,6 +1,6 @@
 import discord
 import aiosqlite
-
+from cogs.adventure.hunting import WEAPON_STATS, ARMOR_SHIELDS
 from discord.ext import commands
 
 from cogs.adventure.adventure_utils import (
@@ -91,40 +91,40 @@ SMELT_RECIPES = {
 
 EQUIPMENT_RECIPES = {
     "copper_sword": {"name": "구리검", "materials": {"구리주괴": 3}, "cost": 80},
-    "iron_sword": {"name": "철검", "materials": {"철주괴": 5}, "cost": 180},
-    "silver_sword": {"name": "은검", "materials": {"은주괴": 5}, "cost": 350},
-    "gold_sword": {"name": "금검", "materials": {"금주괴": 6}, "cost": 700},
-    "mithril_sword": {"name": "미스릴검", "materials": {"미스릴주괴": 6, "은주괴": 2}, "cost": 1200},
-    "diamond_sword": {"name": "다이아검", "materials": {"다이아결정": 6, "미스릴주괴": 2}, "cost": 2000},
-    "black_iron_sword": {"name": "흑철검", "materials": {"흑철주괴": 7, "금주괴": 3}, "cost": 3200},
-    "vibranium_sword": {"name": "비브라늄검", "materials": {"비브라늄주괴": 7, "다이아결정": 4}, "cost": 5000},
-    "orichalcum_sword": {"name": "오리하르콘검", "materials": {"오리하르콘주괴": 8, "비브라늄주괴": 3, "흑철주괴": 3}, "cost": 8500},
+    "iron_sword": {"name": "철검", "materials": {"철주괴": 5}, "cost": 300},
+    "silver_sword": {"name": "은검", "materials": {"은주괴": 5}, "cost": 500},
+    "gold_sword": {"name": "금검", "materials": {"금주괴": 6}, "cost": 1100},
+    "mithril_sword": {"name": "미스릴검", "materials": {"미스릴주괴": 6, "은주괴": 2}, "cost": 1900},
+    "diamond_sword": {"name": "다이아검", "materials": {"다이아결정": 6, "미스릴주괴": 2}, "cost": 2900},
+    "black_iron_sword": {"name": "흑철검", "materials": {"흑철주괴": 7, "금주괴": 3}, "cost": 5000},
+    "vibranium_sword": {"name": "비브라늄검", "materials": {"비브라늄주괴": 7, "다이아결정": 4}, "cost": 7500},
+    "orichalcum_sword": {"name": "오리하르콘검", "materials": {"오리하르콘주괴": 8, "비브라늄주괴": 3, "흑철주괴": 3}, "cost": 14500},
 
     "iron_armor": {"name": "철갑옷", "materials": {"철주괴": 6}, "cost": 250},
     "silver_armor": {"name": "은갑옷", "materials": {"은주괴": 6}, "cost": 550},
-    "gold_armor": {"name": "금갑옷", "materials": {"금주괴": 8}, "cost": 1100},
-    "mithril_armor": {"name": "미스릴갑옷", "materials": {"미스릴주괴": 8, "은주괴": 2}, "cost": 1900},
-    "diamond_armor": {"name": "다이아갑옷", "materials": {"다이아결정": 7, "미스릴주괴": 2}, "cost": 3200},
-    "black_iron_armor": {"name": "흑철갑옷", "materials": {"흑철주괴": 9, "금주괴": 3}, "cost": 5000},
-    "vibranium_armor": {"name": "비브라늄갑옷", "materials": {"비브라늄주괴": 9, "다이아결정": 4}, "cost": 7500},
+    "gold_armor": {"name": "금갑옷", "materials": {"금주괴": 8}, "cost": 900},
+    "mithril_armor": {"name": "미스릴갑옷", "materials": {"미스릴주괴": 8, "은주괴": 2}, "cost": 1500},
+    "diamond_armor": {"name": "다이아갑옷", "materials": {"다이아결정": 7, "미스릴주괴": 2}, "cost": 2500},
+    "black_iron_armor": {"name": "흑철갑옷", "materials": {"흑철주괴": 9, "금주괴": 3}, "cost": 3200},
+    "vibranium_armor": {"name": "비브라늄갑옷", "materials": {"비브라늄주괴": 9, "다이아결정": 4}, "cost": 5500},
     "orichalcum_armor": {"name": "오리하르콘갑옷", "materials": {"오리하르콘주괴": 10, "비브라늄주괴": 3, "흑철주괴": 3}, "cost": 12000},
 }
 
 
 REPAIR_RECIPES = {
     "구리검": {"materials": {"구리주괴": 1}, "cost": 50},
-    "철검": {"materials": {"철주괴": 1}, "cost": 300},
-    "은검": {"materials": {"은주괴": 1}, "cost": 500},
-    "금검": {"materials": {"금주괴": 1}, "cost": 900},
-    "미스릴검": {"materials": {"미스릴주괴": 1}, "cost": 1100},
-    "다이아검": {"materials": {"다이아결정": 1}, "cost": 1350},
+    "철검": {"materials": {"철주괴": 1}, "cost": 200},
+    "은검": {"materials": {"은주괴": 1}, "cost": 250},
+    "금검": {"materials": {"금주괴": 1}, "cost": 500},
+    "미스릴검": {"materials": {"미스릴주괴": 1}, "cost": 800},
+    "다이아검": {"materials": {"다이아결정": 1}, "cost": 1200},
     "흑철검": {"materials": {"흑철주괴": 1}, "cost": 1800},
     "비브라늄검": {"materials": {"비브라늄주괴": 2}, "cost": 2500},
     "오리하르콘검": {"materials": {"오리하르콘주괴": 2, "흑철주괴": 1}, "cost": 4000},
 
-    "철갑옷": {"materials": {"철주괴": 2}, "cost": 200},
-    "은갑옷": {"materials": {"은주괴": 2}, "cost": 500},
-    "금갑옷": {"materials": {"금주괴": 2}, "cost": 800},
+    "철갑옷": {"materials": {"철주괴": 2}, "cost": 120},
+    "은갑옷": {"materials": {"은주괴": 2}, "cost": 300},
+    "금갑옷": {"materials": {"금주괴": 2}, "cost": 650},
     "미스릴갑옷": {"materials": {"미스릴주괴": 2}, "cost": 1000},
     "다이아갑옷": {"materials": {"다이아결정": 2}, "cost": 1600},
     "흑철갑옷": {"materials": {"흑철주괴": 2}, "cost": 2400},
@@ -212,6 +212,27 @@ def enhance_effect_text(level: int) -> str:
 def material_text(materials: dict[str, int]) -> str:
     return ", ".join([f"{item} x{amount}" for item, amount in materials.items()])
 
+def equipment_stat_text(item_name: str) -> str:
+    if item_name in WEAPON_STATS:
+        atk_min, atk_max = WEAPON_STATS[item_name]
+        plus5_min = int(atk_min * 1.25)
+        plus5_max = int(atk_max * 1.25)
+
+        return (
+            f"공격력 `{atk_min}~{atk_max}`\n"
+            f"+5강 기준 `{plus5_min}~{plus5_max}`"
+        )
+
+    if item_name in ARMOR_SHIELDS:
+        shield = ARMOR_SHIELDS[item_name]
+        plus5_shield = int(shield * 1.25)
+
+        return (
+            f"실드 `{shield}`\n"
+            f"+5강 기준 `{plus5_shield}`"
+        )
+
+    return "스탯 정보 없음"
 
 async def get_missing_materials(user_id: int, materials: dict[str, int]):
     missing = []
@@ -305,7 +326,18 @@ async def make_blacksmith_embed(user_id: int):
     enhance_rows = await get_enhanceable_equipment(user_id)
 
     smelt_lines = [f"🔥 {SMELT_RECIPES[key]['name']}" for key in smelt_keys]
-    craft_lines = [f"⚒️ {EQUIPMENT_RECIPES[key]['name']}" for key in craft_keys]
+    craft_lines = []
+
+    for key in craft_keys:
+        recipe = EQUIPMENT_RECIPES[key]
+        stat_text = equipment_stat_text(recipe["name"])
+
+        craft_lines.append(
+            f"⚒️ **{recipe['name']}**\n"
+            f"└ {stat_text}\n"
+            f"└ 재료 : {material_text(recipe['materials'])}\n"
+            f"└ 비용 : `{recipe['cost']}P`"
+        )
     repair_lines = [
         f"🛠 {item_name} #{equipment_id} `{durability}/{max_durability}`"
         for equipment_id, item_name, durability, max_durability, break_count in repair_rows[:10]
@@ -494,7 +526,10 @@ class EquipmentCraftSelect(discord.ui.Select):
             options.append(
                 discord.SelectOption(
                     label=recipe["name"],
-                    description=f"{material_text(recipe['materials'])} / {recipe['cost']}P"[:100],
+                    description=(
+                        f"{equipment_stat_text(recipe['name']).replace(chr(10), ' / ')} / "
+                        f"{material_text(recipe['materials'])} / {recipe['cost']}P"
+                    )[:100],
                     value=key,
                 )
             )
@@ -915,8 +950,13 @@ class BlacksmithMenuSelect(discord.ui.Select):
 
             for key in recipe_keys:
                 recipe = SMELT_RECIPES[key]
+                stat_text = equipment_stat_text(recipe["name"])
+
                 lines.append(
-                    f"`{recipe['name']}` : {material_text(recipe['materials'])} + {recipe['cost']}P"
+                    f"**{recipe['name']}**\n"
+                    f"└ {stat_text}\n"
+                    f"└ 재료 : {material_text(recipe['materials'])}\n"
+                    f"└ 비용 : `{recipe['cost']}P`"
                 )
 
             embed = discord.Embed(
