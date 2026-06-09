@@ -950,6 +950,34 @@ class GeneralInventoryDiscardCancelButton(discord.ui.Button):
             view=None,
         )
 
+INVENTORY_CATEGORY_LABELS = {
+    "광산": "⛏ 광산",
+    "농사": "🌾 농사",
+    "낚시": "🎣 낚시",
+    "음식": "🍽 음식",
+    "무기": "⚔ 무기",
+    "방어구": "🛡 방어구",
+    "기타": "📦 기타",
+}
+
+
+def get_inventory_group(item_name: str, category: str | None) -> str:
+    if item_name in FOOD_HEALS:
+        return "음식"
+
+    if item_name in WEAPON_NAMES:
+        return "무기"
+
+    if item_name in ARMOR_NAMES:
+        return "방어구"
+
+    if category in ("광산", "농장", "농사", "낚시"):
+        if category == "농장":
+            return "농사"
+        return category
+
+    return "기타"
+
 
 class CombinedInventoryManageView(discord.ui.View):
     def __init__(self, general_rows, adventure_rows, profile):
@@ -959,7 +987,86 @@ class CombinedInventoryManageView(discord.ui.View):
             self.add_item(GeneralInventorySelect(general_rows))
 
         if adventure_rows:
-            self.add_item(AdventureInventorySelect(adventure_rows, profile))
+            self.add_item(AdventureInventoryCategorySelect(adventure_rows, profile))
+
+
+class AdventureInventoryCategorySelect(discord.ui.Select):
+    def __init__(self, rows, profile):
+        self.rows = rows
+        self.profile = profile
+
+        groups = {}
+
+        for item_name, quantity, category in rows:
+            if item_name == "녹슨검":
+                continue
+
+            group = get_inventory_group(item_name, category)
+            groups[group] = groups.get(group, 0) + 1
+
+        options = []
+
+        for group in ["광산", "농사", "낚시", "음식", "무기", "방어구", "기타"]:
+            count = groups.get(group, 0)
+
+            if count <= 0:
+                continue
+
+            options.append(
+                discord.SelectOption(
+                    label=INVENTORY_CATEGORY_LABELS[group],
+                    value=group,
+                    description=f"{count}종류의 아이템",
+                )
+            )
+
+        if not options:
+            options.append(
+                discord.SelectOption(
+                    label="관리 가능한 아이템 없음",
+                    value="none",
+                    description="관리 가능한 모험 아이템이 없습니다.",
+                )
+            )
+
+        super().__init__(
+            placeholder="볼 모험 아이템 종류를 선택하세요.",
+            min_values=1,
+            max_values=1,
+            options=options[:25],
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        selected_group = self.values[0]
+
+        if selected_group == "none":
+            await interaction.response.send_message(
+                "❌ 관리 가능한 아이템이 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        filtered_rows = []
+
+        for item_name, quantity, category in self.rows:
+            if item_name == "녹슨검":
+                continue
+
+            group = get_inventory_group(item_name, category)
+
+            if group == selected_group:
+                filtered_rows.append((item_name, quantity, category))
+
+        embed = discord.Embed(
+            title=f"🎒 모험 인벤토리 - {INVENTORY_CATEGORY_LABELS.get(selected_group, selected_group)}",
+            description="관리할 아이템을 선택하세요.",
+            color=discord.Color.blurple(),
+        )
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=AdventureInventoryManageView(filtered_rows, self.profile),
+        )
 
 
 class AdventureInventorySelect(discord.ui.Select):
@@ -1004,15 +1111,15 @@ class AdventureInventorySelect(discord.ui.Select):
                 discord.SelectOption(
                     label="관리 가능한 아이템 없음",
                     value="none",
-                    description="버리기/선물하기/장착 가능한 아이템이 없습니다.",
+                    description="관리 가능한 아이템이 없습니다.",
                 )
             )
 
         super().__init__(
-            placeholder="관리할 모험 아이템을 선택하세요.",
+            placeholder="관리할 아이템을 선택하세요.",
             min_values=1,
             max_values=1,
-            options=options,
+            options=options[:25],
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -1046,7 +1153,6 @@ class AdventureInventorySelect(discord.ui.Select):
             embed=embed,
             view=view,
         )
-
 
 class AdventureItemEquipButton(discord.ui.Button):
     def __init__(self, item_name: str):
