@@ -459,6 +459,7 @@ class HuntView(discord.ui.View):
         self.search_count = 0
         self.escaped = False
         self.finished = False
+        self.action_lock = asyncio.Lock()
 
     def make_embed(self, message: str | None = None):
         monster = self.monster
@@ -613,10 +614,11 @@ class HuntView(discord.ui.View):
 
         return ""
 
-    @discord.ui.button(label="⚔ 공격", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="⚔️ 공격", style=discord.ButtonStyle.red)
     async def attack(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.finished:
-            return
+        async with self.action_lock:
+            if self.finished:
+                return
         
         self.battle_turns += 1
 
@@ -695,11 +697,14 @@ class HuntView(discord.ui.View):
             if armor_durability_text:
                 durability_messages.append(armor_durability_text)
 
+        before_hp = self.player_hp
         self.player_hp -= monster_damage
+        after_hp = max(self.player_hp, 0)
 
         log += (
             f"\n{self.monster['emoji']} 몬스터의 반격! "
-            f"`{monster_damage}` 피해를 받았습니다."
+            f"`{monster_damage}` 피해를 받았습니다. "
+            f"HP `{before_hp}` → `{after_hp}`"
         )
 
         if durability_messages:
@@ -774,8 +779,9 @@ class HuntView(discord.ui.View):
 
     @discord.ui.button(label="🏃 도망", style=discord.ButtonStyle.gray)
     async def run_away(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.finished:
-            return
+        async with self.action_lock:
+            if self.finished:
+                return
 
         escape_chance = self.get_escape_chance()
         roll = random.randint(1, 100)

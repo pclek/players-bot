@@ -1091,7 +1091,6 @@ class Adventure(commands.Cog):
 
                     await interaction.response.send_message(
                         embed=embed,
-                        ephemeral=True,
                     )
                     return
 

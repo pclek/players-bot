@@ -430,9 +430,12 @@ class SmeltQuantityModal(discord.ui.Modal):
         )
 
         await interaction.response.edit_message(
-            embed=embed,
+            content="🔥 제련 완료",
+            embed=None,
             view=None,
         )
+
+        await interaction.channel.send(embed=embed)
 
 class SmeltSelect(discord.ui.Select):
     def __init__(self, recipe_keys):
@@ -559,9 +562,12 @@ class EquipmentCraftSelect(discord.ui.Select):
         )
 
         await interaction.response.edit_message(
-            embed=embed,
+            content="⚒️ 장비 제작 완료",
+            embed=None,
             view=None,
         )
+
+        await interaction.channel.send(embed=embed)
 
 
 class RepairSelect(discord.ui.Select):
@@ -684,7 +690,7 @@ class RepairSelect(discord.ui.Select):
         item_name, old_durability, max_durability, break_count = result
 
         embed = discord.Embed(
-            title="🛠 수리 완료",
+            title="🔨 수리 완료",
             description=(
                 f"👤 작업자 : {interaction.user.mention}\n\n"
                 f"`{item_name} #{equipment_id}` 수리가 완료되었습니다.\n"
@@ -703,9 +709,12 @@ class RepairSelect(discord.ui.Select):
             )
 
         await interaction.response.edit_message(
-            embed=embed,
+            content="🔨 수리 완료",
+            embed=None,
             view=None,
         )
+
+        await interaction.channel.send(embed=embed)
 
 
 class EnhanceSelect(discord.ui.Select):
@@ -841,9 +850,12 @@ class EnhanceSelect(discord.ui.Select):
         )
 
         await interaction.response.edit_message(
-            embed=embed,
+            content="✨ 강화 완료",
+            embed=None,
             view=None,
         )
+
+        await interaction.channel.send(embed=embed)
 
 
 class BlacksmithMenuSelect(discord.ui.Select):
