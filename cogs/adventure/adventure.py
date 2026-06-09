@@ -498,7 +498,7 @@ class AdventureSelect(discord.ui.Select):
 
             profile = await get_adventure_profile(user_id)
 
-            current_hp = profile[0]
+            current_hp = profile[0] if profile and profile[0] is not None else 100
             weapon_name = profile[1] or "녹슨검"
             armor_name = profile[2] or ""
 
@@ -545,8 +545,8 @@ class AdventureSelect(discord.ui.Select):
 
             try:
                 await interaction.delete_original_response()
-            except:
-                pass
+            except Exception as e:
+                print(f"[전투 시작 메시지 삭제 실패] {e}")
 
             await add_adventure_daily_count(user_id, "hunting")
             await start_user_battle(user_id, interaction.channel.id, None)

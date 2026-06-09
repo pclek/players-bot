@@ -1,3 +1,4 @@
+import asyncio
 import random
 import discord
 import aiosqlite
@@ -619,128 +620,128 @@ class HuntView(discord.ui.View):
         async with self.action_lock:
             if self.finished:
                 return
-        
-        self.battle_turns += 1
 
-        attack_min, attack_max = WEAPON_STATS.get(self.weapon_name, (1, 3))
-        enhance_multiplier = 1 + (self.weapon_enhance_level * 0.05)
-        attack_min = int(attack_min * enhance_multiplier)
-        attack_max = int(attack_max * enhance_multiplier)
+            self.battle_turns += 1
 
-        player_damage = random.randint(
-            attack_min + self.attack_bonus,
-            attack_max + self.attack_bonus,
-        )
+            attack_min, attack_max = WEAPON_STATS.get(self.weapon_name, (1, 3))
+            enhance_multiplier = 1 + (self.weapon_enhance_level * 0.05)
+            attack_min = int(attack_min * enhance_multiplier)
+            attack_max = int(attack_max * enhance_multiplier)
 
-        self.monster_hp -= player_damage
-        self.monster_revealed = True
-
-        durability_messages = []
-
-        weapon_durability_text = await decrease_equipped_durability(
-            self.user_id,
-            self.weapon_name,
-            1,
-        )
-
-        if weapon_durability_text:
-            durability_messages.append(weapon_durability_text)
-
-        log = f"🗡 당신의 공격! `{player_damage}` 피해를 입혔습니다."
-
-        if self.monster_hp <= 0:
-            reward_points = random.randint(
-                self.monster["point_min"],
-                self.monster["point_max"],
+            player_damage = random.randint(
+                attack_min + self.attack_bonus,
+                attack_max + self.attack_bonus,
             )
 
-            reward_xp = random.randint(
-                self.monster["xp_min"],
-                self.monster["xp_max"],
-            )
-            levelup_text = await self.give_rewards(reward_points, reward_xp)
+            self.monster_hp -= player_damage
+            self.monster_revealed = True
 
-            result_text = (
-                f"🏆 **전투 승리!**\n\n"
-                f"{self.monster['emoji']} `{self.monster['name']}` 을(를) 처치했습니다.\n"
-                f"전투 보상으로 `{reward_points}P` 와 경험치 `{reward_xp}` 를 획득했습니다."
-                f"{levelup_text}"
-            )
+            durability_messages = []
 
-            if durability_messages:
-                result_text += "\n\n" + "\n".join(durability_messages)
-
-            await self.finish_battle(
-                interaction,
-                result_text,
-                discord.Color.gold(),
-            )
-            return
-
-        monster_damage = random.randint(
-            self.monster["atk_min"],
-            self.monster["atk_max"],
-        )
-
-        if self.shield > 0:
-            blocked = min(self.shield, monster_damage)
-            self.shield -= blocked
-            monster_damage -= blocked
-
-        if self.armor_name and self.armor_name != "없음":
-            armor_durability_text = await decrease_equipped_durability(
+            weapon_durability_text = await decrease_equipped_durability(
                 self.user_id,
-                self.armor_name,
+                self.weapon_name,
                 1,
             )
 
-            if armor_durability_text:
-                durability_messages.append(armor_durability_text)
+            if weapon_durability_text:
+                durability_messages.append(weapon_durability_text)
 
-        before_hp = self.player_hp
-        self.player_hp -= monster_damage
-        after_hp = max(self.player_hp, 0)
+            log = f"🗡 당신의 공격! `{player_damage}` 피해를 입혔습니다."
 
-        log += (
-            f"\n{self.monster['emoji']} 몬스터의 반격! "
-            f"`{monster_damage}` 피해를 받았습니다. "
-            f"HP `{before_hp}` → `{after_hp}`"
-        )
+            if self.monster_hp <= 0:
+                reward_points = random.randint(
+                    self.monster["point_min"],
+                    self.monster["point_max"],
+                )
 
-        if durability_messages:
-            log += "\n\n" + "\n".join(durability_messages)
+                reward_xp = random.randint(
+                    self.monster["xp_min"],
+                    self.monster["xp_max"],
+                )
+                levelup_text = await self.give_rewards(reward_points, reward_xp)
 
-        if self.player_hp <= 0:
-            self.player_hp = 0
+                result_text = (
+                    f"🏆 **전투 승리!**\n\n"
+                    f"{self.monster['emoji']} `{self.monster['name']}` 을(를) 처치했습니다.\n"
+                    f"전투 보상으로 `{reward_points}P` 와 경험치 `{reward_xp}` 를 획득했습니다."
+                    f"{levelup_text}"
+                )
 
-            death_penalty_text = await apply_death_penalty(
-                self.user_id,
-                self.weapon_name,
-                self.armor_name,
+                if durability_messages:
+                    result_text += "\n\n" + "\n".join(durability_messages)
+
+                await self.finish_battle(
+                    interaction,
+                    result_text,
+                    discord.Color.gold(),
+                )
+                return
+
+            monster_damage = random.randint(
+                self.monster["atk_min"],
+                self.monster["atk_max"],
             )
 
-            result_text = (
-                f"☠ **전투 패배**\n\n"
-                f"{self.monster['emoji']} `{self.monster['name']}` 에게 패배했습니다.\n"
-                f"체력이 `0` 이 되어 사망 상태가 되었습니다.\n"
-                f"획득 보상은 없습니다.\n\n"
-                f"{death_penalty_text}"
+            if self.shield > 0:
+                blocked = min(self.shield, monster_damage)
+                self.shield -= blocked
+                monster_damage -= blocked
+
+            if self.armor_name and self.armor_name != "없음":
+                armor_durability_text = await decrease_equipped_durability(
+                    self.user_id,
+                    self.armor_name,
+                    1,
+                )
+
+                if armor_durability_text:
+                    durability_messages.append(armor_durability_text)
+
+            before_hp = self.player_hp
+            self.player_hp -= monster_damage
+            after_hp = max(self.player_hp, 0)
+
+            log += (
+                f"\n{self.monster['emoji']} 몬스터의 반격! "
+                f"`{monster_damage}` 피해를 받았습니다. "
+                f"HP `{before_hp}` → `{after_hp}`"
             )
 
             if durability_messages:
-                result_text += "\n\n" + "\n".join(durability_messages)
+                log += "\n\n" + "\n".join(durability_messages)
 
-            await self.finish_battle(
-                interaction,
-                result_text,
-                discord.Color.dark_red(),
+            if self.player_hp <= 0:
+                self.player_hp = 0
+
+                death_penalty_text = await apply_death_penalty(
+                    self.user_id,
+                    self.weapon_name,
+                    self.armor_name,
+                )
+
+                result_text = (
+                    f"☠ **전투 패배**\n\n"
+                    f"{self.monster['emoji']} `{self.monster['name']}` 에게 패배했습니다.\n"
+                    f"체력이 `0` 이 되어 사망 상태가 되었습니다.\n"
+                    f"획득 보상은 없습니다.\n\n"
+                    f"{death_penalty_text}"
+                )
+
+                if durability_messages:
+                    result_text += "\n\n" + "\n".join(durability_messages)
+
+                await self.finish_battle(
+                    interaction,
+                    result_text,
+                    discord.Color.dark_red(),
+                )
+                return
+
+            await interaction.response.edit_message(
+                embed=self.make_embed(log),
+                view=self,
             )
-            return
-
-        await interaction.response.edit_message(
-            embed=self.make_embed(log),
-            view=self,
-        )
 
     @discord.ui.button(label="🎒 가방", style=discord.ButtonStyle.blurple)
     async def bag(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -783,72 +784,72 @@ class HuntView(discord.ui.View):
             if self.finished:
                 return
 
-        escape_chance = self.get_escape_chance()
-        roll = random.randint(1, 100)
+            escape_chance = self.get_escape_chance()
+            roll = random.randint(1, 100)
 
-        if roll <= escape_chance:
-            result_text = (
-                f"🏃 **도망 성공**\n\n"
-                f"`{self.monster['name']}` 에게서 도망쳤습니다.\n"
+            if roll <= escape_chance:
+                result_text = (
+                    f"🏃 **도망 성공**\n\n"
+                    f"`{self.monster['name']}` 에게서 도망쳤습니다.\n"
+                    f"도망 확률 : `{escape_chance}%`"
+                )
+
+                await self.finish_battle(
+                    interaction,
+                    result_text,
+                    discord.Color.light_grey(),
+                )
+                return
+
+            monster_damage = random.randint(
+                self.monster["atk_min"],
+                self.monster["atk_max"],
+            )
+
+            if self.shield > 0:
+                blocked = min(self.shield, monster_damage)
+                self.shield -= blocked
+                monster_damage -= blocked
+
+            self.player_hp -= monster_damage
+
+            if self.player_hp <= 0:
+                self.player_hp = 0
+
+                death_penalty_text = await apply_death_penalty(
+                    self.user_id,
+                    self.weapon_name,
+                    self.armor_name,
+                )
+
+                result_text = (
+                    f"☠ **도망 실패**\n\n"
+                    f"도망치다 `{self.monster['name']}` 에게 당했습니다.\n"
+                    f"HP -`{monster_damage}`\n"
+                    f"체력이 `0` 이 되어 사망 상태가 되었습니다.\n\n"
+                    f"{death_penalty_text}"
+                )
+
+                await self.finish_battle(
+                    interaction,
+                    result_text,
+                    discord.Color.dark_red(),
+                )
+                return
+
+            message = (
+                f"❌ 도망 실패!\n\n"
+                f"{self.monster['emoji']} `{self.monster['name']}` 이(가) 공격했습니다.\n"
+                f"HP -`{monster_damage}`\n"
                 f"도망 확률 : `{escape_chance}%`"
             )
 
-            await self.finish_battle(
-                interaction,
-                result_text,
-                discord.Color.light_grey(),
+            self.update_search_button_state()
+
+            await interaction.response.edit_message(
+                embed=self.make_embed(message),
+                view=self,
             )
-            return
-
-        monster_damage = random.randint(
-            self.monster["atk_min"],
-            self.monster["atk_max"],
-        )
-
-        if self.shield > 0:
-            blocked = min(self.shield, monster_damage)
-            self.shield -= blocked
-            monster_damage -= blocked
-
-        self.player_hp -= monster_damage
-
-        if self.player_hp <= 0:
-            self.player_hp = 0
-
-            death_penalty_text = await apply_death_penalty(
-                self.user_id,
-                self.weapon_name,
-                self.armor_name,
-            )
-
-            result_text = (
-                f"☠ **도망 실패**\n\n"
-                f"도망치다 `{self.monster['name']}` 에게 당했습니다.\n"
-                f"HP -`{monster_damage}`\n"
-                f"체력이 `0` 이 되어 사망 상태가 되었습니다.\n\n"
-                f"{death_penalty_text}"
-            )
-
-            await self.finish_battle(
-                interaction,
-                result_text,
-                discord.Color.dark_red(),
-            )
-            return
-
-        message = (
-            f"❌ 도망 실패!\n\n"
-            f"{self.monster['emoji']} `{self.monster['name']}` 이(가) 공격했습니다.\n"
-            f"HP -`{monster_damage}`\n"
-            f"도망 확률 : `{escape_chance}%`"
-        )
-
-        self.update_search_button_state()
-
-        await interaction.response.edit_message(
-            embed=self.make_embed(message),
-            view=self,
-        )
 
     @discord.ui.button(label="🔍 다른 상대 찾기", style=discord.ButtonStyle.green)
     async def search_other(self, interaction: discord.Interaction, button: discord.ui.Button):
