@@ -33,7 +33,7 @@ BASE_ESCAPE_CHANCE = 60
 ESCAPE_CHANCE_LOSS_PER_SEARCH = 20
 BATTLE_XP_RATE = 0.10
 
-PLAYER_MISS_CHANCE = 6
+PLAYER_MISS_CHANCE = 3
 PLAYER_CRIT_CHANCE = 8
 PLAYER_CRIT_MULTIPLIER = 1.5
 
@@ -226,48 +226,49 @@ MONSTERS = {
     "멧돼지": {"hp": (42, 62), "atk": (6, 10), "point": (16, 30), "xp": (12, 20), "weight": 68, "emoji": "🐗"},
     "숲 늑대": {"hp": (52, 76), "atk": (8, 13), "point": (22, 40), "xp": (16, 26), "weight": 62, "emoji": "🐺"},
     "거대 거미": {"hp": (66, 92), "atk": (10, 16), "point": (30, 52), "xp": (22, 34), "weight": 56, "emoji": "🕷️"},
-    "까마귀 떼": {"hp": (78, 108), "atk": (13, 19), "point": (38, 64), "xp": (28, 44), "weight": 54, "emoji": "🐦"},
-    "독전갈": {"hp": (88, 120), "atk": (15, 22), "point": (46, 74), "xp": (34, 52), "weight": 50, "emoji": "🦂"},
+    "까마귀 떼": {"hp": (78, 108), "atk": (3, 5), "point": (50, 75), "xp": (28, 44), "weight": 54, "emoji": "🐦", "hits": (3, 5), "crit": 6, "miss": 3},
+    "독전갈": {"hp": (88, 120), "atk": (15, 22), "point": (60, 74), "xp": (34, 60), "weight": 50, "emoji": "🦂", "hits": (1, 1), "crit": 22, "miss": 5},
     "숲 도깨비": {"hp": (98, 135), "atk": (17, 24), "point": (56, 88), "xp": (40, 60), "weight": 46, "emoji": "👺"},
     "망령 병사": {"hp": (112, 150), "atk": (19, 27), "point": (70, 104), "xp": (48, 72), "weight": 42, "emoji": "👻"},
     "고블린 전사": {"hp": (128, 172), "atk": (22, 31), "point": (86, 126), "xp": (58, 86), "weight": 39, "emoji": "⚔️"},
     # 구리검 권장
-    "독버섯 군락": {"hp": (96, 132), "atk": (17, 24), "point": (45, 75), "xp": (34, 52), "weight": 52, "emoji": "🍄"},
+    "독버섯 군락": {"hp": (96, 132), "atk": (17, 24), "point": (65, 75), "xp": (34, 62), "weight": 52, "emoji": "🍄", "hits": (1, 1), "crit": 25, "miss": 5},
     "오리너구리": {"hp": (80, 650), "atk": (15, 88), "point": (150, 220), "xp": (100, 150), "weight": 48, "emoji": "🦫"},
     "고블린": {"hp": (120, 165), "atk": (21, 30), "point": (70, 110), "xp": (50, 76), "weight": 46, "emoji": "👺"},
     "도적 정찰병": {"hp": (135, 185), "atk": (24, 34), "point": (88, 135), "xp": (62, 92), "weight": 42, "emoji": "🗡️"},
     # 구리검 후반 ~ 철검 입문 권장
     "동굴 박쥐": {"hp": (125, 175), "atk": (22, 32), "point": (78, 120), "xp": (55, 82), "weight": 44, "emoji": "🦇"},
+    "대장장이의 악몽": {"hp": (200, 250), "atk": (1, 2), "point": (150, 190), "xp": (105, 130), "weight": 44, "emoji": "🛠️","hits": (8, 16), "crit": 10, "miss": 0},
     "늑대 우두머리": {"hp": (135, 190), "atk": (24, 35), "point": (88, 135), "xp": (62, 92), "weight": 42, "emoji": "🐺"},
-    "독침 벌떼": {"hp": (105, 155), "atk": (28, 40), "point": (95, 145), "xp": (66, 98), "weight": 40, "emoji": "🐝"},
+    "독침 벌떼": {"hp": (105, 155), "atk": (3, 7), "point": (110, 145), "xp": (66, 102), "weight": 40, "emoji": "🐝", "hits": (4, 6), "crit": 22, "miss": 3},
     "떠돌이 도적": {"hp": (145, 200), "atk": (26, 38), "point": (105, 155), "xp": (72, 105), "weight": 39, "emoji": "🗡️"},
     "진흙 골렘": {"hp": (170, 240), "atk": (22, 34), "point": (110, 165), "xp": (78, 112), "weight": 38, "emoji": "🪨"},
-    "해골 궁수": {"hp": (130, 185), "atk": (30, 42), "point": (115, 170), "xp": (82, 118), "weight": 37, "emoji": "🏹"},
+    "해골 궁수": {"hp": (100, 155), "atk": (30, 42), "point": (115, 170), "xp": (82, 118), "weight": 37, "emoji": "🏹", "dodge": 20},
     "버섯 포식자": {"hp": (160, 225), "atk": (27, 39), "point": (120, 180), "xp": (86, 125), "weight": 35, "emoji": "🍄"},
     "고블린 투사": {"hp": (175, 245), "atk": (30, 43), "point": (135, 200), "xp": (95, 138), "weight": 34, "emoji": "👺"},
-    "망가진 철갑병": {"hp": (190, 260), "atk": (28, 41), "point": (150, 220), "xp": (105, 150), "weight": 32, "emoji": "🛡️"},
+    "망가진 철갑병": {"hp": (190, 260), "atk": (28, 41), "point": (150, 220), "xp": (105, 150), "weight": 32, "emoji": "🛡️", "crit": 22},
     "어린 오우거": {"hp": (210, 285), "atk": (34, 48), "point": (170, 250), "xp": (115, 165), "weight": 29, "emoji": "👹"},
     # 철검 + 철갑옷 권장
     "스켈레톤": {"hp": (145, 200), "atk": (25, 36), "point": (105, 155), "xp": (72, 105), "weight": 36, "emoji": "💀"},
     "좀비 병사": {"hp": (155, 215), "atk": (26, 38), "point": (125, 180), "xp": (84, 120), "weight": 33, "emoji": "🧟"},
-    "하이에나 무리": {"hp": (165, 230), "atk": (27, 40), "point": (145, 210), "xp": (96, 138), "weight": 30, "emoji": "🐾"},
-    "오크": {"hp": (180, 250), "atk": (30, 44), "point": (190, 280), "xp": (120, 170), "weight": 27, "emoji": "🧌"},
+    "하이에나 무리": {"hp": (165, 230), "atk": (14, 20), "point": (145, 210), "xp": (96, 138), "weight": 30, "emoji": "🐾", "hits": (2, 2), "crit": 6, "miss": 8},
+    "오크": {"hp": (180, 250), "atk": (16, 22), "point": (190, 280), "xp": (120, 170), "weight": 27, "emoji": "🧌", "hits": (2, 2), "crit": 22},
 
     # 은검 + 은갑옷 권장
     "늪지 악어": {"hp": (220, 300), "atk": (34, 48), "point": (240, 350), "xp": (145, 205), "weight": 24, "emoji": "🐊"},
-    "광산 박쥐왕": {"hp": (240, 330), "atk": (36, 52), "point": (290, 420), "xp": (170, 240), "weight": 22, "emoji": "🦇"},
+    "광산 박쥐왕": {"hp": (240, 330), "atk": (18, 26), "point": (290, 420), "xp": (170, 240), "weight": 22, "emoji": "🦇", "hits": (2, 2), "crit": 10, "miss": 10, "dodge": 8},
     "트롤": {"hp": (280, 380), "atk": (40, 58), "point": (360, 520), "xp": (210, 295), "weight": 19, "emoji": "👹"},
-    "사이클롭스": {"hp": (330, 450), "atk": (45, 65), "point": (460, 660), "xp": (255, 360), "weight": 16, "emoji": "👁️"},
+    "사이클롭스": {"hp": (330, 450), "atk": (45, 65), "point": (460, 660), "xp": (255, 360), "weight": 16, "emoji": "👁️", "crit": 22},
 
     # 금검 + 금갑옷 권장
-    "갑옷 골렘": {"hp": (420, 560), "atk": (55, 78), "point": (600, 850), "xp": (320, 450), "weight": 14, "emoji": "🗿"},
-    "저주받은 나무정령": {"hp": (500, 650), "atk": (62, 88), "point": (760, 1050), "xp": (390, 540), "weight": 12, "emoji": "🌲"},
-    "암흑 기사": {"hp": (620, 800), "atk": (72, 100), "point": (980, 1350), "xp": (480, 660), "weight": 7, "emoji": "🛡️"},
+    "갑옷 골렘": {"hp": (420, 560), "atk": (55, 78), "point": (600, 850), "xp": (320, 450), "weight": 14, "emoji": "🗿", "crit": 15, "miss": 2},
+    "저주받은 나무정령": {"hp": (500, 650), "atk": (62, 88), "point": (760, 1050), "xp": (390, 540), "weight": 12, "emoji": "🌲", "crit": 15, "miss": 8},
+    "암흑 기사": {"hp": (620, 800), "atk": (42, 58), "point": (980, 1350), "xp": (480, 660), "weight": 7, "emoji": "🛡️", "hits": (1, 2), "crit": 12, "miss": 4, "dodge": 12},
     "저주받은 기사단장": {"hp": (720, 920), "atk": (82, 112), "point": (1200, 1650), "xp": (570, 780), "weight": 6, "emoji": "⚔️"},
 
     # 미스릴~다이아 권장
-    "미믹": {"hp": (620, 860), "atk": (75, 120), "point": (1350, 1850), "xp": (520, 740), "weight": 5, "emoji": "🎁"},
-    "와이번": {"hp": (850, 1100), "atk": (95, 135), "point": (1700, 2300), "xp": (700, 980), "weight": 4, "emoji": "🐉"},
+    "미믹": {"hp": (620, 860), "atk": (75, 120), "point": (1350, 1850), "xp": (520, 740), "weight": 5, "emoji": "🎁", "crit": 18, "miss": 12},
+    "와이번": {"hp": (850, 1100), "atk": (48, 68), "point": (1700, 2300), "xp": (700, 980), "weight": 4, "emoji": "🐉", "hits": (2, 2), "crit": 10, "miss": 6, "dodge": 8},
     "만티코어": {"hp": (1000, 1300), "atk": (110, 150), "point": (2100, 2800), "xp": (850, 1150), "weight": 3, "emoji": "🦂"},
     "심연의 사제": {"hp": (1150, 1500), "atk": (125, 170), "point": (2500, 3300), "xp": (1050, 1400), "weight": 3, "emoji": "🔮"},
 
@@ -276,9 +277,9 @@ MONSTERS = {
     "보물 고블린": {"hp": (350, 500), "atk": (60, 95), "point": (2000, 2800), "xp": (300, 460), "weight": 1, "emoji": "💰"},
 
     # 비브라늄~오리하르콘 권장
-    "리치": {"hp": (1400, 1800), "atk": (150, 210), "point": (4200, 5600), "xp": (1400, 1900), "weight": 2, "emoji": "🧙"},
-    "고대 드래곤": {"hp": (1900, 2500), "atk": (190, 260), "point": (6500, 8500), "xp": (2000, 2700), "weight": 1, "emoji": "🐲"},
-    "심연의 군주": {"hp": (2600, 3400), "atk": (230, 320), "point": (8500, 11000), "xp": (2800, 3800), "weight": 1, "emoji": "👑"},
+    "리치": {"hp": (1400, 1800), "atk": (150, 210), "point": (4200, 5600), "xp": (1400, 1900), "weight": 2, "emoji": "🧙", "crit": 20, "miss": 5, "dodge": 10},
+    "고대 드래곤": {"hp": (1900, 2500), "atk": (95, 130), "point": (6500, 8500), "xp": (2000, 2700), "weight": 1, "emoji": "🐲", "hits": (2, 2), "crit": 15, "miss": 3, "dodge": 8},
+    "심연의 군주": {"hp": (2600, 3400), "atk": (85, 115), "point": (8500, 11000), "xp": (2800, 3800), "weight": 1, "emoji": "👑", "hits": (2, 3), "crit": 18, "miss": 2, "dodge": 12},
 
 }
 
@@ -304,6 +305,10 @@ def roll_monster():
                 "point_max": data["point"][1],
                 "xp_min": data["xp"][0],
                 "xp_max": data["xp"][1],
+                "hits": data.get("hits", (1, 1)),
+                "crit": data.get("crit", MONSTER_CRIT_CHANCE),
+                "miss": data.get("miss", MONSTER_MISS_CHANCE),
+                "dodge": data.get("dodge", 0),
             }
 
     name = "슬라임"
@@ -319,11 +324,27 @@ def roll_monster():
         "atk_max": data["atk"][1],
         "point_min": data["point"][0],
         "point_max": data["point"][1],
-        "point_min": data["point"][0],
-        "point_max": data["point"][1],
+        "xp_min": data["xp"][0],
+        "xp_max": data["xp"][1],
+        "hits": data.get("hits", (1, 1)),
+        "crit": data.get("crit", MONSTER_CRIT_CHANCE),
+        "miss": data.get("miss", MONSTER_MISS_CHANCE),
+        "dodge": data.get("dodge", 0),
     }
 
-def roll_player_damage(attack_min: int, attack_max: int) -> tuple[int, str]:
+def roll_player_damage(
+    attack_min: int,
+    attack_max: int,
+    monster: dict,
+) -> tuple[int, str]:
+    dodge = monster.get("dodge", 0)
+
+    if dodge > 0:
+        dodge_roll = random.randint(1, 100)
+
+        if dodge_roll <= dodge:
+            return 0, "dodge"
+
     roll = random.randint(1, 100)
 
     if roll <= PLAYER_MISS_CHANCE:
@@ -340,24 +361,45 @@ def roll_player_damage(attack_min: int, attack_max: int) -> tuple[int, str]:
     return damage, "normal"
 
 
-def roll_monster_damage(monster: dict) -> tuple[int, str]:
-    roll = random.randint(1, 100)
+def roll_monster_damage(monster: dict) -> tuple[int, str, list[str]]:
+    hit_min, hit_max = monster.get("hits", (1, 1))
+    hit_count = random.randint(hit_min, hit_max)
 
-    if roll <= MONSTER_MISS_CHANCE:
-        return 0, "miss"
+    miss_chance = monster.get("miss", MONSTER_MISS_CHANCE)
+    crit_chance = monster.get("crit", MONSTER_CRIT_CHANCE)
 
-    damage = random.randint(
-        monster["atk_min"],
-        monster["atk_max"],
-    )
+    total_damage = 0
+    hit_logs = []
 
-    crit_roll = random.randint(1, 100)
+    for index in range(1, hit_count + 1):
+        roll = random.randint(1, 100)
 
-    if crit_roll <= MONSTER_CRIT_CHANCE:
-        damage = int(damage * MONSTER_CRIT_MULTIPLIER)
-        return damage, "crit"
+        if roll <= miss_chance:
+            hit_logs.append(f"{index}타 : 빗나감")
+            continue
 
-    return damage, "normal"
+        damage = random.randint(
+            monster["atk_min"],
+            monster["atk_max"],
+        )
+
+        crit_roll = random.randint(1, 100)
+
+        if crit_roll <= crit_chance:
+            damage = int(damage * MONSTER_CRIT_MULTIPLIER)
+            total_damage += damage
+            hit_logs.append(f"{index}타 : 치명타 `{damage}`")
+        else:
+            total_damage += damage
+            hit_logs.append(f"{index}타 : `{damage}`")
+
+    if total_damage <= 0:
+        return 0, "miss", hit_logs
+
+    if any("치명타" in log for log in hit_logs):
+        return total_damage, "crit", hit_logs
+
+    return total_damage, "normal", hit_logs
 
 def get_monster_risk(monster: dict) -> str:
     avg_hp = monster["max_hp"]
@@ -395,8 +437,9 @@ def get_monster_hp_bar(current_hp: int, max_hp: int) -> str:
 
 
 class FoodSelect(discord.ui.Select):
-    def __init__(self, hunt_view, food_rows):
+    def __init__(self, hunt_view, food_rows, battle_message):
         self.hunt_view = hunt_view
+        self.battle_message = battle_message
 
         options = []
 
@@ -468,12 +511,26 @@ class FoodSelect(discord.ui.Select):
 
         await set_user_hp(view.user_id, view.player_hp)
 
-        monster_damage, monster_hit_type = roll_monster_damage(view.monster)
+        monster_damage, monster_hit_type, monster_hit_logs = roll_monster_damage(view.monster)
 
         if view.shield > 0:
             blocked = min(view.shield, monster_damage)
             view.shield -= blocked
             monster_damage -= blocked
+
+        if monster_damage > 0 and view.armor_name and view.armor_name != "없음":
+            armor_durability_text = await decrease_equipped_durability(
+                view.user_id,
+                view.armor_name,
+                1,
+            )
+
+            if armor_durability_text:
+                log_extra = armor_durability_text
+            else:
+                log_extra = ""
+        else:
+            log_extra = ""
 
         before_damage_hp = view.player_hp
         view.player_hp -= monster_damage
@@ -484,23 +541,31 @@ class FoodSelect(discord.ui.Select):
             f"❤️ 체력 `{before_hp}` → `{before_damage_hp}` (`+{healed}`)"
         )
 
+
+        hit_detail = "\n".join(monster_hit_logs)
+
         if monster_hit_type == "miss":
             log += (
-                f"\n\n{view.monster['emoji']} 몬스터의 반격이 빗나갔습니다!"
+                f"\n{view.monster['emoji']} 몬스터의 반격이 모두 빗나갔습니다!\n"
+                f"{hit_detail}"
             )
         elif monster_hit_type == "crit":
             log += (
-                f"\n\n{view.monster['emoji']} 몬스터의 치명타! "
-                f"`{monster_damage}` 피해를 받았습니다.\n"
+                f"\n{view.monster['emoji']} 몬스터의 연속 공격!\n"
+                f"{hit_detail}\n"
+                f"총 `{monster_damage}` 피해를 받았습니다. "
                 f"HP `{before_damage_hp}` → `{after_damage_hp}`"
             )
         else:
             log += (
-                f"\n\n{view.monster['emoji']} 몬스터의 반격! "
-                f"`{monster_damage}` 피해를 받았습니다.\n"
+                f"\n{view.monster['emoji']} 몬스터의 반격!\n"
+                f"{hit_detail}\n"
+                f"총 `{monster_damage}` 피해를 받았습니다. "
                 f"HP `{before_damage_hp}` → `{after_damage_hp}`"
             )
 
+        if log_extra:
+            log += f"\n\n{log_extra}"
         if view.player_hp <= 0:
             view.player_hp = 0
 
@@ -529,15 +594,21 @@ class FoodSelect(discord.ui.Select):
         await set_user_hp(view.user_id, view.player_hp)
 
         await interaction.response.edit_message(
+            content="✅ 음식을 사용했습니다.",
+            embed=None,
+            view=None,
+        )
+
+        await self.battle_message.edit(
             embed=view.make_embed(log),
             view=view,
         )
 
 
 class FoodView(discord.ui.View):
-    def __init__(self, hunt_view, food_rows):
+    def __init__(self, hunt_view, food_rows, battle_message):
         super().__init__(timeout=60)
-        self.add_item(FoodSelect(hunt_view, food_rows))
+        self.add_item(FoodSelect(hunt_view, food_rows, battle_message))
 
 class HuntView(discord.ui.View):
     def __init__(
@@ -745,6 +816,7 @@ class HuntView(discord.ui.View):
             player_damage, player_hit_type = roll_player_damage(
                 attack_min + self.attack_bonus,
                 attack_max + self.attack_bonus,
+                self.monster,
             )
 
             self.monster_hp -= player_damage
@@ -761,13 +833,26 @@ class HuntView(discord.ui.View):
             if weapon_durability_text:
                 durability_messages.append(weapon_durability_text)
 
-            if player_hit_type == "miss":
-                log = "💨 당신의 공격이 빗나갔습니다!"
-            elif player_hit_type == "crit":
-                log = f"💥 치명타! `{player_damage}` 피해를 입혔습니다!"
-            else:
-                log = f"🗡 당신의 공격! `{player_damage}` 피해를 입혔습니다."
+            if player_hit_type == "dodge":
+                log = (
+                    f"{self.monster['emoji']} "
+                    f"`{self.monster['name']}` 이(가) 공격을 회피했습니다!"
+                )
 
+            elif player_hit_type == "miss":
+                log = "💨 당신의 공격이 빗나갔습니다!"
+
+            elif player_hit_type == "crit":
+                log = (
+                    f"💥 치명타! "
+                    f"`{player_damage}` 피해를 입혔습니다!"
+                )
+
+            else:
+                log = (
+                    f"🗡 당신의 공격! "
+                    f"`{player_damage}` 피해를 입혔습니다."
+                )
             if self.monster_hp <= 0:
                 reward_points = random.randint(
                     self.monster["point_min"],
@@ -797,7 +882,8 @@ class HuntView(discord.ui.View):
                 )
                 return
 
-            monster_damage, monster_hit_type = roll_monster_damage(self.monster)
+            monster_damage, monster_hit_type, monster_hit_logs = roll_monster_damage(self.monster)
+            hit_detail = "\n".join(monster_hit_logs)
 
             if self.shield > 0:
                 blocked = min(self.shield, monster_damage)
@@ -816,23 +902,28 @@ class HuntView(discord.ui.View):
 
             before_hp = self.player_hp
             self.player_hp -= monster_damage
-            after_hp = max(self.player_hp, 0)
+            after_damage_hp = max(self.player_hp, 0)
 
             if monster_hit_type == "miss":
                 log += (
-                    f"\n{self.monster['emoji']} 몬스터의 반격이 빗나갔습니다!"
+                    f"\n{self.monster['emoji']} 몬스터의 반격이 모두 빗나갔습니다!\n"
+                    f"{hit_detail}"
                 )
+
             elif monster_hit_type == "crit":
                 log += (
-                    f"\n{self.monster['emoji']} 몬스터의 치명타! "
-                    f"`{monster_damage}` 피해를 받았습니다. "
-                    f"HP `{before_hp}` → `{after_hp}`"
+                    f"\n{self.monster['emoji']} 몬스터의 연속 공격!\n"
+                    f"{hit_detail}\n"
+                    f"총 `{monster_damage}` 피해를 받았습니다. "
+                    f"HP `{before_hp}` → `{after_damage_hp}`"
                 )
+
             else:
                 log += (
-                    f"\n{self.monster['emoji']} 몬스터의 반격! "
-                    f"`{monster_damage}` 피해를 받았습니다. "
-                    f"HP `{before_hp}` → `{after_hp}`"
+                    f"\n{self.monster['emoji']} 몬스터의 반격!\n"
+                    f"{hit_detail}\n"
+                    f"총 `{monster_damage}` 피해를 받았습니다. "
+                    f"HP `{before_hp}` → `{after_damage_hp}`"
                 )
 
             if durability_messages:
@@ -902,7 +993,8 @@ class HuntView(discord.ui.View):
 
         await interaction.response.send_message(
             embed=embed,
-            view=FoodView(self, food_rows),            
+            view=FoodView(self, food_rows, interaction.message),
+            ephemeral=True,
         )
 
     @discord.ui.button(label="🏃 도망", style=discord.ButtonStyle.gray)
@@ -928,12 +1020,19 @@ class HuntView(discord.ui.View):
                 )
                 return
 
-            monster_damage, monster_hit_type = roll_monster_damage(self.monster)
+            monster_damage, monster_hit_type, monster_hit_logs = roll_monster_damage(self.monster)
 
             if self.shield > 0:
                 blocked = min(self.shield, monster_damage)
                 self.shield -= blocked
                 monster_damage -= blocked
+
+            if monster_damage > 0 and self.armor_name and self.armor_name != "없음":
+                await decrease_equipped_durability(
+                    self.user_id,
+                    self.armor_name,
+                    1,
+                )
 
             self.player_hp -= monster_damage
 

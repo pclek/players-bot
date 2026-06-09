@@ -254,6 +254,126 @@ async def make_cooking_embed(user_id: int):
 
     return embed, craftable_keys
 
+class CraftQuantityModal(discord.ui.Modal):
+    def __init__(self, recipe_key: str):
+        result_name, materials, heal_text = RECIPES[recipe_key]
+
+        super().__init__(title=f"{result_name} 제작 수량")
+
+        self.recipe_key = recipe_key
+        self.result_name = result_name
+        self.materials = materials
+        self.heal_text = heal_text
+
+        self.quantity_input = discord.ui.TextInput(
+            label="제작할 개수",
+            placeholder="예: 1, 5, 10",
+            default="1",
+            min_length=1,
+            max_length=3,
+            required=True,
+        )
+
+        self.add_item(self.quantity_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+
+        try:
+            quantity = int(str(self.quantity_input.value).strip())
+        except ValueError:
+            await interaction.response.send_message(
+                "❌ 제작 개수는 숫자로 입력해야 합니다.",
+                ephemeral=True,
+            )
+            return
+
+        if quantity <= 0:
+            await interaction.response.send_message(
+                "❌ 제작 개수는 1개 이상이어야 합니다.",
+                ephemeral=True,
+            )
+            return
+
+        if quantity > 99:
+            await interaction.response.send_message(
+                "❌ 한 번에 제작할 수 있는 개수는 최대 99개입니다.",
+                ephemeral=True,
+            )
+            return
+
+        cooking_cost = get_cooking_cost(self.result_name)
+        total_cost = cooking_cost * quantity
+
+        total_materials = {
+            item_name: needed * quantity
+            for item_name, needed in self.materials.items()
+        }
+
+        points = await get_user_points(user_id)
+        missing = []
+
+        if points < total_cost:
+            missing.append(f"포인트 `{points}/{total_cost}P`")
+
+        for item_name, needed in total_materials.items():
+            count = await get_adventure_item_count(user_id, item_name)
+
+            if count < needed:
+                missing.append(f"{item_name} `{count}/{needed}`")
+
+        if missing:
+            await interaction.response.send_message(
+                "❌ 요리에 필요한 재료 또는 포인트가 부족합니다.\n"
+                f"부족한 항목 : {', '.join(missing)}",
+                ephemeral=True,
+            )
+            return
+
+        success = await spend_user_points(user_id, total_cost)
+
+        if not success:
+            points = await get_user_points(user_id)
+
+            await interaction.response.send_message(
+                f"❌ 포인트가 부족합니다.\n"
+                f"필요 포인트 : `{total_cost}P`\n"
+                f"현재 포인트 : `{points}P`",
+                ephemeral=True,
+            )
+            return
+
+        for item_name, needed in total_materials.items():
+            await remove_adventure_item(user_id, item_name, needed)
+
+        await add_adventure_item(user_id, self.result_name, quantity)
+
+        used_text = material_text(total_materials)
+
+        embed = discord.Embed(
+            title="🍳 요리 완료",
+            description=(
+                f"👨‍🍳 {interaction.user.mention}\n\n"
+                f"제작 결과 : `{self.result_name} x{quantity}`\n"
+                f"사용 재료 : `{used_text}`\n"
+                f"조리비 : `{total_cost}P`\n"
+                f"효과 : `{self.heal_text}`"
+            ),
+            color=discord.Color.green(),
+        )
+
+        try:
+            await interaction.message.edit(
+                content="✅ 요리 완료",
+                embed=None,
+                view=None,
+            )
+        except Exception:
+            pass
+
+        await interaction.response.send_message(
+            embed=embed,
+        )
 
 class CraftSelect(discord.ui.Select):
     def __init__(self, recipe_keys):
@@ -290,7 +410,6 @@ class CraftSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
         recipe_key = self.values[0]
 
         if recipe_key == "none":
@@ -300,8 +419,6 @@ class CraftSelect(discord.ui.Select):
             )
             return
 
-        await ensure_adventure_profile(user_id)
-
         if recipe_key not in RECIPES:
             await interaction.response.send_message(
                 "❌ 알 수 없는 제작법입니다.",
@@ -309,76 +426,17 @@ class CraftSelect(discord.ui.Select):
             )
             return
 
-        result_name, materials, heal_text = RECIPES[recipe_key]
-        cooking_cost = get_cooking_cost(result_name)
-
-        points = await get_user_points(user_id)
-
-        if points < cooking_cost:
-            await interaction.response.send_message(
-                f"❌ 포인트가 부족합니다.\n"
-                f"필요 포인트 : `{cooking_cost}P`\n"
-                f"현재 포인트 : `{points}P`",
-                ephemeral=True,
+        try:
+            await interaction.message.edit(
+                content="🍳 요리 수량 입력창을 열었습니다.",
+                embed=None,
+                view=None,
             )
-            return
+        except Exception:
+            pass
 
-        missing = []
-
-        for item_name, needed in materials.items():
-            count = await get_adventure_item_count(user_id, item_name)
-
-            if count < needed:
-                missing.append(f"{item_name} `{count}/{needed}`")
-
-        if missing:
-            await interaction.response.send_message(
-                "❌ 재료가 부족합니다.\n"
-                f"부족한 재료 : {', '.join(missing)}",
-                ephemeral=True,
-            )
-            return
-
-        success = await spend_user_points(user_id, cooking_cost)
-
-        if not success:
-            points = await get_user_points(user_id)
-
-            await interaction.response.send_message(
-                f"❌ 포인트가 부족합니다.\n"
-                f"필요 포인트 : `{cooking_cost}P`\n"
-                f"현재 포인트 : `{points}P`",
-                ephemeral=True,
-            )
-            return
-
-        for item_name, needed in materials.items():
-            await remove_adventure_item(user_id, item_name, needed)
-
-        await add_adventure_item(user_id, result_name, 1)
-
-        used_text = material_text(materials)
-
-        embed = discord.Embed(
-            title="🍳 요리 완료",
-            description=(
-                f"👨‍🍳 {interaction.user.mention}\n\n"
-                f"제작 결과 : `{result_name} x1`\n"
-                f"사용 재료 : `{used_text}`\n"
-                f"조리비 : `{cooking_cost}P`\n"
-                f"효과 : `{heal_text}`"
-            ),
-            color=discord.Color.green(),
-        )
-
-        await interaction.response.edit_message(
-            content="✅ 요리 완료",
-            embed=None,
-            view=None,
-        )
-
-        await interaction.channel.send(
-            embed=embed
+        await interaction.response.send_modal(
+            CraftQuantityModal(recipe_key)
         )
  
 
