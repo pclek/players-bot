@@ -7,6 +7,8 @@ DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
 
 
+
+
 async def get_setting(key: str):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
@@ -16,6 +18,17 @@ async def get_setting(key: str):
             row = await cursor.fetchone()
 
     return row[0] if row else None
+
+async def set_setting(key: str, value: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        INSERT INTO settings (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key)
+        DO UPDATE SET value = excluded.value
+        """, (key, value))
+
+        await db.commit()
 
 
 def parse_id_list(raw: str | None):
@@ -349,10 +362,25 @@ class InactiveRole(commands.Cog):
             if role.id in before_role_ids
         ]
 
-        roles_to_add = [
-            role for role in base_roles
-            if role.id not in before_role_ids
+        reauth_add_role_ids_raw = await get_setting("reauth_add_role_ids")
+        reauth_add_ids = parse_id_list(reauth_add_role_ids_raw)
+
+        reauth_add_roles = [
+            role for role_id in reauth_add_ids
+            if (role := message.guild.get_role(role_id)) is not None
         ]
+
+        roles_to_add_dict = {}
+
+        for role in base_roles:
+            if role.id not in before_role_ids:
+                roles_to_add_dict[role.id] = role
+
+        for role in reauth_add_roles:
+            if role.id not in before_role_ids:
+                roles_to_add_dict[role.id] = role
+
+        roles_to_add = list(roles_to_add_dict.values())
 
         if not roles_to_remove and not roles_to_add:
             return
@@ -395,13 +423,33 @@ class InactiveRole(commands.Cog):
 
             await clear_inactive_user_state(member.id, message.guild.id, rule_id)
 
-        except discord.Forbidden:
+        except discord.Forbidden as e:
+            print(
+                f"[재인증 권한 오류] "
+                f"guild={message.guild.id} "
+                f"user={member.id}({member}) "
+                f"rule={rule_name}#{rule_id} "
+                f"remove={[role.id for role in roles_to_remove]} "
+                f"add={[role.id for role in roles_to_add]} "
+                f"error={e}"
+            )
+
             await message.channel.send(
                 f"⚠️ {member.mention} 재인증 처리 실패: 봇 역할 권한을 확인해주세요."
             )
             return
 
-        except discord.HTTPException:
+        except discord.HTTPException as e:
+            print(
+                f"[재인증 처리 오류] "
+                f"guild={message.guild.id} "
+                f"user={member.id}({member}) "
+                f"rule={rule_name}#{rule_id} "
+                f"remove={[role.id for role in roles_to_remove]} "
+                f"add={[role.id for role in roles_to_add]} "
+                f"error={e}"
+            )
+
             await message.channel.send(
                 f"⚠️ {member.mention} 재인증 처리 중 오류가 발생했습니다."
             )
@@ -581,8 +629,14 @@ class InactiveRole(commands.Cog):
                             inactive_role_ids,
                         )
 
-                    except discord.HTTPException:
-                        pass
+                    except discord.HTTPException as e:
+                        print(
+                            f"[미활동 역할 지급 실패] "
+                            f"guild={guild.id} "
+                            f"user={member.id}({member}) "
+                            f"rule={rule_name}#{rule_id} "
+                            f"error={e}"
+                        )
 
                     break
 

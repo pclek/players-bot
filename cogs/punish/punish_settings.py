@@ -390,6 +390,11 @@ class InactiveRuleMenuSelect(discord.ui.Select):
                 description="현재 등록된 미활동 설정을 확인합니다.",
                 value="list",
             ),
+            discord.SelectOption(
+                label="재인증 지급 역할 설정",
+                description="재인증 성공 시 추가 지급할 역할을 설정합니다.",
+                value="reauth_add_roles",
+            ),
         ]
 
         super().__init__(
@@ -423,6 +428,17 @@ class InactiveRuleMenuSelect(discord.ui.Select):
 
             await interaction.response.edit_message(
                 content="📋 처리할 장기 미활동 설정을 선택하세요.",
+                embed=None,
+                view=view,
+            )
+            return
+        if selected == "reauth_add_roles":
+            view = discord.ui.View(timeout=60)
+            view.add_item(ReauthAddRolesSelect())
+            view.add_item(PunishBackButton())
+
+            await interaction.response.edit_message(
+                content="🔁 재인증 성공 시 지급할 역할을 선택하세요.",
                 embed=None,
                 view=view,
             )
@@ -651,6 +667,32 @@ class InactiveReauthRemoveRolesSelect(discord.ui.RoleSelect):
             view=view,
         )
 
+class ReauthAddRolesSelect(discord.ui.RoleSelect):
+    def __init__(self):
+        super().__init__(
+            placeholder="재인증 시 지급할 역할 선택",
+            min_values=1,
+            max_values=10,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        role_ids = ",".join(str(role.id) for role in self.values)
+
+        await set_setting(
+            "reauth_add_role_ids",
+            role_ids,
+        )
+
+        role_text = ", ".join(role.mention for role in self.values)
+
+        view = discord.ui.View(timeout=60)
+        view.add_item(PunishBackButton())
+
+        await interaction.response.edit_message(
+            content=f"✅ 재인증 지급 역할 설정 완료\n{role_text}",
+            embed=None,
+            view=view,
+        )
 
 class InactiveRuleSelect(discord.ui.Select):
     def __init__(self, rows, mode: str, guild: discord.Guild):
@@ -902,6 +944,7 @@ class PunishMenuSelect(discord.ui.Select):
         rejoin_notice_channel_id = await get_setting("rejoin_notice_channel_id")
         rejoin_notice_message = await get_setting("rejoin_notice_message")
         reauth_channel_id = await get_setting("reauth_channel_id")
+        reauth_add_role_ids = await get_setting("reauth_add_role_ids")
         inactive_rows = await get_inactive_rules(include_disabled=True)
 
         quarantine_text = "설정 안 됨"
@@ -909,6 +952,7 @@ class PunishMenuSelect(discord.ui.Select):
         rejoin_channel_text = "설정 안 됨"
         rejoin_message_text = rejoin_notice_message if rejoin_notice_message else "설정 안 됨"
         reauth_channel_text = "설정 안 됨"
+        reauth_add_role_text = "설정 안 됨"
 
         if quarantine_role_id:
             role = interaction.guild.get_role(int(quarantine_role_id))
@@ -928,6 +972,12 @@ class PunishMenuSelect(discord.ui.Select):
                 channel.mention
                 if channel
                 else f"삭제된 채널 ID: `{rejoin_notice_channel_id}`"
+            )
+
+        if reauth_add_role_ids:
+            reauth_add_role_text = format_roles(
+                interaction.guild,
+                reauth_add_role_ids,
             )
 
         if reauth_channel_id:
@@ -962,6 +1012,11 @@ class PunishMenuSelect(discord.ui.Select):
         embed.add_field(name="재입장 안내 채널", value=rejoin_channel_text, inline=False)
         embed.add_field(name="재입장 안내 문구", value=rejoin_message_text, inline=False)
         embed.add_field(name="재인증 채널", value=reauth_channel_text, inline=False)
+        embed.add_field(
+            name="재인증 지급 역할",
+            value=reauth_add_role_text,
+            inline=False,
+        )
 
         view = discord.ui.View(timeout=60)
         view.add_item(PunishBackButton())
