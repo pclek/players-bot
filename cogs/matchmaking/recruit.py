@@ -127,6 +127,12 @@ def make_recruit_embed(guild, game_name: str, host_id: int, voice_channel_id: in
     return embed, is_full
 
 async def create_recruit_invite_url(voice_channel: discord.VoiceChannel):
+    print(f"[모집] invite 생성 시도")
+    print(f"[모집] channel={voice_channel}")
+    print(f"[모집] channel_id={voice_channel.id}")
+    print(f"[모집] guild={voice_channel.guild}")
+    print(f"[모집] permissions={voice_channel.permissions_for(voice_channel.guild.me).create_instant_invite}")
+
     try:
         invite = await voice_channel.create_invite(
             max_age=43200,
@@ -134,14 +140,20 @@ async def create_recruit_invite_url(voice_channel: discord.VoiceChannel):
             unique=True,
             reason="모집 음성채널 입장 링크",
         )
+        print(f"[모집] invite 생성 성공: {invite.url}")
         return invite.url
 
     except discord.Forbidden as e:
-        print(f"[모집] 초대 링크 권한 오류: {e}")
+        print(f"[모집] invite 생성 실패 - Forbidden: {repr(e)}")
         return None
 
     except discord.HTTPException as e:
-        print(f"[모집] 초대 링크 HTTP 오류: {e}")
+        print(f"[모집] invite 생성 실패 - HTTPException: {repr(e)}")
+        print(f"[모집] status={getattr(e, 'status', None)} code={getattr(e, 'code', None)} text={getattr(e, 'text', None)}")
+        return None
+
+    except Exception as e:
+        print(f"[모집] invite 생성 실패 - 기타 오류: {repr(e)}")
         return None
 
 
