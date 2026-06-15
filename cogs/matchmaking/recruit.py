@@ -461,7 +461,7 @@ class RecruitGameSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         game_name = self.values[0]
 
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
 
         if not interaction.user.voice or not interaction.user.voice.channel:
             await interaction.followup.send(
@@ -612,7 +612,7 @@ class Recruit(commands.Cog):
         self.bot = bot
 
     async def cog_load(self):
-        self.bot.add_view(RecruitPostView())
+        pass
 
     @commands.Cog.listener()
     async def on_voice_state_update(
@@ -657,13 +657,15 @@ class Recruit(commands.Cog):
 
         if not games:
             await interaction.followup.send(
-                "❌ 등록된 게임 설정이 없습니다. `/게임관리`에서 먼저 게임을 추가해주세요."
+                "❌ 등록된 게임 설정이 없습니다. `/게임관리`에서 먼저 게임을 추가해주세요.",
+                ephemeral=True,
             )
             return
 
         if not interaction.user.voice or not interaction.user.voice.channel:
             await interaction.followup.send(
                 "❌ 먼저 음성채널에 입장한 뒤 모집을 시작해주세요."
+                ephemeral=True,
             )
             return
 
@@ -696,6 +698,9 @@ class Recruit(commands.Cog):
 
             if not rows:
                 return
+            
+            visitors = await get_recruit_group_members(voice_channel.id)
+            visitor_text = make_visitor_text(voice_channel.guild, visitors)
 
             for message_id, channel_id in rows:
                 text_channel = voice_channel.guild.get_channel(channel_id)
@@ -705,8 +710,6 @@ class Recruit(commands.Cog):
                         message = await text_channel.fetch_message(message_id)
 
                         old_embed = message.embeds[0] if message.embeds else None
-                        visitors = await get_recruit_group_members(voice_channel.id)
-                        visitor_text = make_visitor_text(voice_channel.guild, visitors)
 
                         embed = make_finished_recruit_embed(
                             old_embed,
