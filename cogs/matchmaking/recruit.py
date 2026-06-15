@@ -130,17 +130,25 @@ async def create_recruit_invite_url(guild: discord.Guild, voice_channel_id: int)
     voice_channel = guild.get_channel(voice_channel_id)
 
     if not isinstance(voice_channel, discord.VoiceChannel):
+        print(f"[모집] 초대 링크 실패: 음성채널이 아님 / voice_channel_id={voice_channel_id} / channel={voice_channel}")
         return None
 
     try:
         invite = await voice_channel.create_invite(
             max_age=43200,
             max_uses=0,
-            unique=False,
+            unique=True,
             reason="모집 음성채널 입장 링크",
         )
+        print(f"[모집] 초대 링크 생성 성공: {invite.url}")
         return invite.url
-    except (discord.Forbidden, discord.HTTPException):
+
+    except discord.Forbidden as e:
+        print(f"[모집] 초대 링크 생성 권한 오류: {e}")
+        return None
+
+    except discord.HTTPException as e:
+        print(f"[모집] 초대 링크 생성 HTTP 오류: {e}")
         return None
 
 
@@ -414,6 +422,14 @@ class RecruitPostView(discord.ui.View):
                     url=invite_url,
                 )
             )
+        else:
+            self.add_item(
+                discord.ui.Button(
+                    label="🎧 입장 링크 생성 실패",
+                    style=discord.ButtonStyle.secondary,
+                    disabled=True,
+                )
+            )
 
         self.add_item(RecruitStartButton())
         self.add_item(RecruitCloseButton())
@@ -558,13 +574,18 @@ class RecruitGameSelect(discord.ui.Select):
 
                 sent_channels.append(target_channel.mention)
 
-            await db.commit()
+        await db.commit()
+
+        await update_recruit_group_messages(
+            interaction.guild,
+            voice_channel.id,
+        )
 
         await interaction.response.edit_message(
             content=f"✅ 모집글을 {' / '.join(sent_channels)} 채널에 올렸습니다.",
             embed=None,
             view=None,
-        )    
+        )
 
 
 class RecruitGameView(discord.ui.View):
@@ -613,11 +634,13 @@ class Recruit(commands.Cog):
             )
 
         if before.channel:
-            await update_recruit_group_messages(
-                member.guild,
-                before.channel.id,
-            )
-            await self.close_recruit_if_voice_empty(before.channel)
+            if len(before.channel.members) == 0:
+                await self.close_recruit_if_voice_empty(before.channel)
+            else:
+                await update_recruit_group_messages(
+                    member.guild,
+                    before.channel.id,
+                )
 
     @app_commands.command(
         name="모집", description="현재 음성채널 기준으로 모집글을 생성합니다."
