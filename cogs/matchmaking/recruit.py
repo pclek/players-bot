@@ -248,6 +248,8 @@ class RecruitStartButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         message_id = interaction.message.id
+        
+        await interaction.response.defer(ephemeral=True)
 
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("""
@@ -258,7 +260,7 @@ class RecruitStartButton(discord.ui.Button):
                 row = await cursor.fetchone()
 
         if not row:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ 모집 정보를 찾을 수 없습니다.",
                 ephemeral=True,
             )
@@ -267,7 +269,7 @@ class RecruitStartButton(discord.ui.Button):
         game_name, host_id, voice_channel_id = row
 
         if interaction.user.id != host_id:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ 모집장만 시작할 수 있습니다.",
                 ephemeral=True,
             )
@@ -315,7 +317,7 @@ class RecruitStartButton(discord.ui.Button):
 
             await db.commit()
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "✅ 연결된 모집글을 모두 시작 처리했습니다.",
             ephemeral=True,
         )
@@ -332,6 +334,8 @@ class RecruitCloseButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         message_id = interaction.message.id
 
+        await interaction.response.defer(ephemeral=True)
+
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("""
             SELECT game_name, host_id, voice_channel_id
@@ -341,7 +345,7 @@ class RecruitCloseButton(discord.ui.Button):
                 row = await cursor.fetchone()
 
         if not row:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ 모집 정보를 찾을 수 없습니다.",
                 ephemeral=True,
             )
@@ -350,7 +354,7 @@ class RecruitCloseButton(discord.ui.Button):
         game_name, host_id, voice_channel_id = row
 
         if interaction.user.id != host_id:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ 모집장만 종료할 수 있습니다.",
                 ephemeral=True,
             )
@@ -398,7 +402,7 @@ class RecruitCloseButton(discord.ui.Button):
 
             await db.commit()
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "✅ 연결된 모집글을 모두 종료했습니다.",
             ephemeral=True,
         )
@@ -457,8 +461,10 @@ class RecruitGameSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         game_name = self.values[0]
 
+        await interaction.response.defer()
+
         if not interaction.user.voice or not interaction.user.voice.channel:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ 먼저 음성채널에 입장한 뒤 모집을 시작해주세요.",
                 ephemeral=True,
             )
@@ -475,7 +481,7 @@ class RecruitGameSelect(discord.ui.Select):
                 existing = await cursor.fetchone()
 
         if existing:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ 이 음성채널에는 이미 진행 중인 모집글이 있습니다.",
                 ephemeral=True,
             )
@@ -490,7 +496,7 @@ class RecruitGameSelect(discord.ui.Select):
                 game = await cursor.fetchone()
 
         if not game:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ 게임 설정을 찾을 수 없습니다.",
                 ephemeral=True,
             )
@@ -502,7 +508,7 @@ class RecruitGameSelect(discord.ui.Select):
         recruit_channel = interaction.guild.get_channel(recruit_channel_id)
 
         if not recruit_channel:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ 모집 채널을 찾을 수 없습니다.",
                 ephemeral=True,
             )
@@ -573,15 +579,14 @@ class RecruitGameSelect(discord.ui.Select):
                 ))
 
                 sent_channels.append(target_channel.mention)
-
-        await db.commit()
+            await db.commit()
 
         await update_recruit_group_messages(
             interaction.guild,
             voice_channel.id,
         )
 
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=f"✅ 모집글을 {' / '.join(sent_channels)} 채널에 올렸습니다.",
             embed=None,
             view=None,
