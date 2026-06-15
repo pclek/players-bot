@@ -129,17 +129,19 @@ def make_recruit_embed(guild, game_name: str, host_id: int, voice_channel_id: in
 async def create_recruit_invite_url(voice_channel: discord.VoiceChannel):
     try:
         invite = await voice_channel.create_invite(
-            max_age=43200,
-            max_uses=0,
+            max_age=300,
+            max_uses=1,
             unique=True,
-            reason="모집 음성채널 입장 링크",
+            reason="모집 음성채널 참가 링크",
         )
         return invite.url
 
-    except discord.Forbidden:
+    except discord.Forbidden as e:
+        print(f"[모집] 초대 링크 권한 오류: {e}")
         return None
 
-    except discord.HTTPException:
+    except discord.HTTPException as e:
+        print(f"[모집] 초대 링크 HTTP 오류: {e}")
         return None
 
 
