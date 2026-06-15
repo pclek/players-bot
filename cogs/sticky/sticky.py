@@ -5,7 +5,12 @@ import aiosqlite
 import inspect
 
 from utils.checks import is_bot_admin
-from cogs.matchmaking.recruit import RecruitPostView
+from cogs.matchmaking.recruit import (
+    RecruitPostView,
+    create_recruit_invite_url,
+    make_recruit_embed,
+    update_recruit_group_messages,
+)
 
 DB_PATH = "database/bot.db"
 
@@ -252,17 +257,14 @@ async def create_recruit_from_sticky(
         if recruit_channel not in target_channels:
             target_channels.append(recruit_channel)
 
-        embed = discord.Embed(
-            title=f"🎮 {game_name} 모집",
-            description=(
-                f"👑 모집장: {interaction.user.mention}\n"
-                f"🎧 음성채널: {voice_channel.mention}\n"
-                f"👥 참여자: `1명`\n\n"
-                f"**참여자 목록**\n"
-                f"- {interaction.user.mention}"
-            ),
-            color=discord.Color.green(),
+        embed, is_full = make_recruit_embed(
+            interaction.guild,
+            game_name,
+            interaction.user.id,
+            voice_channel.id,
         )
+
+        invite_url = await create_recruit_invite_url(voice_channel)
 
         content = role.mention if role else ""
         sent_channels = []
@@ -273,9 +275,10 @@ async def create_recruit_from_sticky(
                     content=content,
                     embed=embed,
                     view=RecruitPostView(
-                        is_full=False,
+                        is_full=is_full,
                         voice_channel_id=voice_channel.id,
                         guild_id=interaction.guild.id,
+                        invite_url=invite_url,
                     ),
                 )
 
@@ -310,6 +313,11 @@ async def create_recruit_from_sticky(
                 sent_channels.append(target_channel.mention)
 
             await db.commit()
+
+            await update_recruit_group_messages(
+                interaction.guild,
+                voice_channel.id,
+            )
 
         await interaction.followup.send(
             f"✅ `{game_name}` 모집글을 {' / '.join(sent_channels)} 채널에 생성했습니다.",
