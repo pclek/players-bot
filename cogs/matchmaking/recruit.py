@@ -664,7 +664,7 @@ class Recruit(commands.Cog):
 
         if not interaction.user.voice or not interaction.user.voice.channel:
             await interaction.followup.send(
-                "❌ 먼저 음성채널에 입장한 뒤 모집을 시작해주세요."
+                "❌ 먼저 음성채널에 입장한 뒤 모집을 시작해주세요.",
                 ephemeral=True,
             )
             return
