@@ -126,13 +126,7 @@ def make_recruit_embed(guild, game_name: str, host_id: int, voice_channel_id: in
     is_full = user_limit > 0 and len(current_members) >= user_limit
     return embed, is_full
 
-async def create_recruit_invite_url(guild: discord.Guild, voice_channel_id: int):
-    voice_channel = guild.get_channel(voice_channel_id)
-
-    if not isinstance(voice_channel, discord.VoiceChannel):
-        print(f"[모집] 초대 링크 실패: 음성채널이 아님 / voice_channel_id={voice_channel_id} / channel={voice_channel}")
-        return None
-
+async def create_recruit_invite_url(voice_channel: discord.VoiceChannel):
     try:
         invite = await voice_channel.create_invite(
             max_age=43200,
@@ -140,15 +134,12 @@ async def create_recruit_invite_url(guild: discord.Guild, voice_channel_id: int)
             unique=True,
             reason="모집 음성채널 입장 링크",
         )
-        print(f"[모집] 초대 링크 생성 성공: {invite.url}")
         return invite.url
 
-    except discord.Forbidden as e:
-        print(f"[모집] 초대 링크 생성 권한 오류: {e}")
+    except discord.Forbidden:
         return None
 
-    except discord.HTTPException as e:
-        print(f"[모집] 초대 링크 생성 HTTP 오류: {e}")
+    except discord.HTTPException:
         return None
 
 
@@ -217,7 +208,11 @@ async def update_recruit_group_messages(guild: discord.Guild, voice_channel_id: 
 
     game_name, host_id = post
     embed, is_full = make_recruit_embed(guild, game_name, host_id, voice_channel_id)
-    invite_url = await create_recruit_invite_url(guild, voice_channel_id)
+    voice_channel = guild.get_channel(voice_channel_id)
+    invite_url = None
+
+    if isinstance(voice_channel, discord.VoiceChannel):
+        invite_url = await create_recruit_invite_url(voice_channel)
 
     for message_id, channel_id in rows:
         channel = guild.get_channel(channel_id)
@@ -529,10 +524,7 @@ class RecruitGameSelect(discord.ui.Select):
             voice_channel.id,
         )
 
-        invite_url = await create_recruit_invite_url(
-            interaction.guild,
-            voice_channel.id,
-        )
+        invite_url = await create_recruit_invite_url(voice_channel)
 
         content = role.mention if role else ""
         sent_channels = []
