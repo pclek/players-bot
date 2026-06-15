@@ -129,10 +129,10 @@ def make_recruit_embed(guild, game_name: str, host_id: int, voice_channel_id: in
 async def create_recruit_invite_url(voice_channel: discord.VoiceChannel):
     try:
         invite = await voice_channel.create_invite(
-            max_age=300,
-            max_uses=1,
+            max_age=43200,
+            max_uses=0,
             unique=True,
-            reason="모집 음성채널 참가 링크",
+            reason="모집 음성채널 입장 링크",
         )
         return invite.url
 
@@ -210,11 +210,6 @@ async def update_recruit_group_messages(guild: discord.Guild, voice_channel_id: 
 
     game_name, host_id = post
     embed, is_full = make_recruit_embed(guild, game_name, host_id, voice_channel_id)
-    voice_channel = guild.get_channel(voice_channel_id)
-    invite_url = None
-
-    if isinstance(voice_channel, discord.VoiceChannel):
-        invite_url = await create_recruit_invite_url(voice_channel)
 
     for message_id, channel_id in rows:
         channel = guild.get_channel(channel_id)
@@ -225,12 +220,6 @@ async def update_recruit_group_messages(guild: discord.Guild, voice_channel_id: 
             message = await channel.fetch_message(message_id)
             await message.edit(
                 embed=embed,
-                view=RecruitPostView(
-                    is_full=is_full,
-                    voice_channel_id=voice_channel_id,
-                    guild_id=guild.id,
-                    invite_url=invite_url,
-                ),
             )
         except discord.HTTPException:
             pass
