@@ -183,6 +183,45 @@ async def add_recruit_visitor(guild: discord.Guild, voice_channel_id: int, user_
 
         await db.commit()
 
+async def sync_recruit_current_members(guild: discord.Guild, voice_channel_id: int):
+    voice_channel = guild.get_channel(voice_channel_id)
+
+    if not isinstance(voice_channel, discord.VoiceChannel):
+        return
+
+    current_members = [
+        member for member in voice_channel.members
+        if not member.bot
+    ]
+
+    if not current_members:
+        return
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT message_id
+        FROM recruit_posts
+        WHERE voice_channel_id = ?
+        """, (voice_channel_id,)) as cursor:
+            rows = await cursor.fetchall()
+
+        if not rows:
+            return
+
+        for (message_id,) in rows:
+            for member in current_members:
+                await db.execute("""
+                INSERT OR IGNORE INTO recruit_members (
+                    message_id,
+                    user_id
+                )
+                VALUES (?, ?)
+                """, (
+                    message_id,
+                    member.id,
+                ))
+
+        await db.commit()
 
 def make_visitor_text(guild: discord.Guild, visitors):
     if not visitors:
@@ -274,6 +313,8 @@ class RecruitStartButton(discord.ui.Button):
             return
 
         voice_channel_id, rows = await get_recruit_group_rows_by_message(message_id)
+        await sync_recruit_current_members(interaction.guild, voice_channel_id)
+
         visitors = await get_recruit_group_members(voice_channel_id)
         visitor_text = make_visitor_text(interaction.guild, visitors)
 
@@ -359,6 +400,8 @@ class RecruitCloseButton(discord.ui.Button):
             return
 
         voice_channel_id, rows = await get_recruit_group_rows_by_message(message_id)
+        await sync_recruit_current_members(interaction.guild, voice_channel_id)
+
         visitors = await get_recruit_group_members(voice_channel_id)
         visitor_text = make_visitor_text(interaction.guild, visitors)
 
@@ -562,16 +605,20 @@ class RecruitGameSelect(discord.ui.Select):
                     voice_channel.id,
                 ))
 
-                await db.execute("""
-                INSERT OR IGNORE INTO recruit_members (
-                    message_id,
-                    user_id
-                )
-                VALUES (?, ?)
-                """, (
-                    message.id,
-                    interaction.user.id,
-                ))
+                for voice_member in voice_channel.members:
+                    if voice_member.bot:
+                        continue
+
+                    await db.execute("""
+                    INSERT OR IGNORE INTO recruit_members (
+                        message_id,
+                        user_id
+                    )
+                    VALUES (?, ?)
+                    """, (
+                        message.id,
+                        voice_member.id,
+                    ))
 
                 sent_channels.append(target_channel.mention)
             await db.commit()
@@ -634,6 +681,12 @@ class Recruit(commands.Cog):
             )
 
         if before.channel:
+            await add_recruit_visitor(
+                member.guild,
+                before.channel.id,
+                member.id,
+            )
+
             if len(before.channel.members) == 0:
                 await self.close_recruit_if_voice_empty(before.channel)
             else:

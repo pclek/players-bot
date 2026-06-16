@@ -107,7 +107,18 @@ class TempVoiceControlView(discord.ui.View):
         super().__init__(timeout=None)
         self.channel_id = channel_id
 
+    def resolve_channel_id(self, interaction: discord.Interaction) -> int:
+        if self.channel_id:
+            return self.channel_id
+
+        if interaction.channel:
+            return interaction.channel.id
+
+        return 0
+
     async def is_owner(self, interaction: discord.Interaction) -> bool:
+        channel_id = self.resolve_channel_id(interaction)
+
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute(
                 """
@@ -115,7 +126,7 @@ class TempVoiceControlView(discord.ui.View):
             FROM tempvoice_channels
             WHERE channel_id = ?
             """,
-                (self.channel_id,),
+                (channel_id,),
             ) as cursor:
                 row = await cursor.fetchone()
 
@@ -134,7 +145,8 @@ class TempVoiceControlView(discord.ui.View):
         return True
 
     def get_channel(self, interaction: discord.Interaction):
-        return interaction.guild.get_channel(self.channel_id)
+        channel_id = self.resolve_channel_id(interaction)
+        return interaction.guild.get_channel(channel_id)
 
     @discord.ui.button(
         label="🔒 잠금", style=discord.ButtonStyle.danger, custom_id="tempvoice_lock"
@@ -152,8 +164,28 @@ class TempVoiceControlView(discord.ui.View):
             )
             return
 
-        await channel.set_permissions(interaction.guild.default_role, connect=False)
-        await interaction.response.send_message("🔒 채널을 잠갔습니다.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            await channel.set_permissions(
+                interaction.guild.default_role,
+                connect=False,
+                reason=f"{interaction.user} 님이 임시채널 잠금",
+            )
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "❌ 봇에게 채널 권한을 수정할 권한이 없습니다.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException as e:
+            await interaction.followup.send(
+                f"❌ 잠금 중 오류가 발생했습니다: `{e}`",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.followup.send("🔒 채널을 잠갔습니다.", ephemeral=True)
 
     @discord.ui.button(
         label="🔓 해제", style=discord.ButtonStyle.success, custom_id="tempvoice_unlock"
@@ -166,10 +198,12 @@ class TempVoiceControlView(discord.ui.View):
 
         channel = self.get_channel(interaction)
         if not channel:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ 채널을 찾을 수 없습니다.", ephemeral=True
             )
             return
+
+        await interaction.response.defer(ephemeral=True)
 
         try:
             await channel.set_permissions(
@@ -178,19 +212,19 @@ class TempVoiceControlView(discord.ui.View):
                 reason=f"{interaction.user} 님이 임시채널 잠금 해제",
             )
         except discord.Forbidden:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ 봇에게 채널 권한을 수정할 권한이 없습니다.",
                 ephemeral=True,
             )
             return
         except discord.HTTPException as e:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"❌ 잠금 해제 중 오류가 발생했습니다: `{e}`",
                 ephemeral=True,
             )
             return
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "🔓 채널 잠금을 해제했습니다.",
             ephemeral=True,
         )
@@ -233,7 +267,7 @@ class TempVoiceControlView(discord.ui.View):
             )
             return
 
-        await interaction.response.send_modal(RenameModal(channel.id))
+        await interaction.response.defer(ephemeral=True)
 
 
 class TempVoiceCore(commands.Cog):

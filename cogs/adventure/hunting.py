@@ -18,6 +18,7 @@ from cogs.adventure.adventure_utils import (
     get_user_attack_bonus,
     get_user_max_hp,
     get_user_level,
+    get_equipment_enhance_level,
     end_user_battle,
 )
 
@@ -647,6 +648,19 @@ class HuntView(discord.ui.View):
         self.finished = False
         self.action_lock = asyncio.Lock()
 
+    async def refresh_equipped_weapon(self):
+        profile = await get_adventure_profile(self.user_id)
+        if not profile:
+            self.weapon_name = "녹슨검"
+            self.weapon_enhance_level = 0
+            return
+
+        self.weapon_name = profile[1] or "녹슨검"
+        self.weapon_enhance_level = await get_equipment_enhance_level(
+            self.user_id,
+            self.weapon_name,
+        )
+
     def make_embed(self, message: str | None = None):
         monster = self.monster
 
@@ -832,6 +846,7 @@ class HuntView(discord.ui.View):
 
             if weapon_durability_text:
                 durability_messages.append(weapon_durability_text)
+                await self.refresh_equipped_weapon()
 
             if player_hit_type == "dodge":
                 log = (

@@ -10,6 +10,7 @@ from cogs.matchmaking.recruit import (
     create_recruit_invite_url,
     make_recruit_embed,
     update_recruit_group_messages,
+    sync_recruit_current_members,
 )
 
 DB_PATH = "database/bot.db"
@@ -299,20 +300,29 @@ async def create_recruit_from_sticky(
                     voice_channel.id,
                 ))
 
-                await db.execute("""
-                INSERT OR IGNORE INTO recruit_members (
-                    message_id,
-                    user_id
-                )
-                VALUES (?, ?)
-                """, (
-                    message.id,
-                    interaction.user.id,
-                ))
+                for voice_member in voice_channel.members:
+                    if voice_member.bot:
+                        continue
+
+                    await db.execute("""
+                    INSERT OR IGNORE INTO recruit_members (
+                        message_id,
+                        user_id
+                    )
+                    VALUES (?, ?)
+                    """, (
+                        message.id,
+                        voice_member.id,
+                    ))
 
                 sent_channels.append(target_channel.mention)
 
             await db.commit()
+
+            await sync_recruit_current_members(
+                interaction.guild,
+                voice_channel.id,
+            )
 
             await update_recruit_group_messages(
                 interaction.guild,

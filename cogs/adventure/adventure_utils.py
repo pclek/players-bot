@@ -467,12 +467,7 @@ async def get_equipped_equipment(user_id: int, item_name: str):
             user_id,
             item_name,
         )) as cursor:
-            row = await cursor.fetchone()
-
-    if row:
-        return row
-
-    return await get_best_equipment_instance(user_id, item_name)
+            return await cursor.fetchone()
 
 
 async def decrease_equipped_durability(
