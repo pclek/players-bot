@@ -183,6 +183,8 @@ async def add_recruit_visitor(guild: discord.Guild, voice_channel_id: int, user_
 
         await db.commit()
 
+        
+
 async def sync_recruit_current_members(guild: discord.Guild, voice_channel_id: int):
     voice_channel = guild.get_channel(voice_channel_id)
 
@@ -623,6 +625,11 @@ class RecruitGameSelect(discord.ui.Select):
                 sent_channels.append(target_channel.mention)
             await db.commit()
 
+        await sync_recruit_current_members(
+            interaction.guild,
+            voice_channel.id,
+        )
+
         await update_recruit_group_messages(
             interaction.guild,
             voice_channel.id,
@@ -646,6 +653,8 @@ async def update_recruit_message(message: discord.Message):
 
     if not voice_channel_id:
         return
+
+    await sync_recruit_current_members(message.guild, voice_channel_id)
 
     await update_recruit_group_messages(message.guild, voice_channel_id)
 
