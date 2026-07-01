@@ -131,14 +131,16 @@ class TempVoiceControlView(discord.ui.View):
                 row = await cursor.fetchone()
 
         if not row:
-            await interaction.response.send_message(
-                "❌ 이 임시채널 정보를 찾을 수 없습니다.", ephemeral=True
+            await interaction.followup.send(
+                "❌ 이 임시채널 정보를 찾을 수 없습니다.",
+                ephemeral=True,
             )
             return False
 
         if interaction.user.id != row[0]:
-            await interaction.response.send_message(
-                "❌ 이 채널의 방장만 사용할 수 있습니다.", ephemeral=True
+            await interaction.followup.send(
+                "❌ 이 채널의 방장만 사용할 수 있습니다.",
+                ephemeral=True,
             )
             return False
 
@@ -154,17 +156,18 @@ class TempVoiceControlView(discord.ui.View):
     async def lock_channel(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
+        await interaction.response.defer(ephemeral=True)
+
         if not await self.is_owner(interaction):
             return
 
         channel = self.get_channel(interaction)
         if not channel:
-            await interaction.response.send_message(
-                "❌ 채널을 찾을 수 없습니다.", ephemeral=True
+            await interaction.followup.send(
+                "❌ 채널을 찾을 수 없습니다.",
+                ephemeral=True,
             )
             return
-
-        await interaction.response.defer(ephemeral=True)
 
         try:
             await channel.set_permissions(
@@ -193,17 +196,18 @@ class TempVoiceControlView(discord.ui.View):
     async def unlock_channel(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
+        await interaction.response.defer(ephemeral=True)
+
         if not await self.is_owner(interaction):
             return
 
         channel = self.get_channel(interaction)
         if not channel:
             await interaction.followup.send(
-                "❌ 채널을 찾을 수 없습니다.", ephemeral=True
+                "❌ 채널을 찾을 수 없습니다.",
+                ephemeral=True,
             )
             return
-
-        await interaction.response.defer(ephemeral=True)
 
         try:
             await channel.set_permissions(
@@ -263,11 +267,12 @@ class TempVoiceControlView(discord.ui.View):
         channel = self.get_channel(interaction)
         if not channel:
             await interaction.response.send_message(
-                "❌ 채널을 찾을 수 없습니다.", ephemeral=True
+                "❌ 채널을 찾을 수 없습니다.",
+                ephemeral=True,
             )
             return
 
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.send_modal(RenameModal(channel.id))
 
 
 class TempVoiceCore(commands.Cog):
@@ -417,13 +422,16 @@ class TempVoiceCore(commands.Cog):
         except discord.HTTPException:
             pass
 
-        await channel.set_permissions(
-            new_owner,
-            manage_channels=True,
-            move_members=True,
-            mute_members=True,
-            deafen_members=True,
-        )
+        try:
+            await channel.set_permissions(
+                new_owner,
+                manage_channels=True,
+                move_members=True,
+                mute_members=True,
+                deafen_members=True,
+            )
+        except discord.HTTPException:
+            return
 
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
