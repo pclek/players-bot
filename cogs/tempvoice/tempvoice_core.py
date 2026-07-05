@@ -212,7 +212,7 @@ class TempVoiceControlView(discord.ui.View):
         try:
             await channel.set_permissions(
                 interaction.guild.default_role,
-                connect=True,
+                connect=None,
                 reason=f"{interaction.user} 님이 임시채널 잠금 해제",
             )
         except discord.Forbidden:
@@ -326,6 +326,10 @@ class TempVoiceCore(commands.Cog):
 
         await new_channel.set_permissions(
             member,
+            view_channel=True,
+            connect=True,
+            send_messages=True,
+            read_message_history=True,
             manage_channels=True,
             move_members=True,
             mute_members=True,
@@ -425,6 +429,10 @@ class TempVoiceCore(commands.Cog):
         try:
             await channel.set_permissions(
                 new_owner,
+                view_channel=True,
+                connect=True,
+                send_messages=True,
+                read_message_history=True,
                 manage_channels=True,
                 move_members=True,
                 mute_members=True,
