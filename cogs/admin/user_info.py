@@ -859,10 +859,112 @@ class AdminUserInfoView(discord.ui.View):
 class AdminUserInfo(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+    @app_commands.command(
+        name="무역할목록",
+        description="추가 역할이 없는 멤버를 조회합니다."
+    )
+    async def no_role_list(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
 
+        if not await is_bot_admin(interaction):
+            await interaction.followup.send("❌ 권한이 없습니다.")
+            return
+
+        members = [
+            m for m in interaction.guild.members
+            if not m.bot and len(m.roles) == 1
+        ]
+
+        if not members:
+            await interaction.followup.send(
+                "✅ 역할이 없는 멤버가 없습니다."
+            )
+            return
+
+        text = "\n".join(
+            f"{i+1}. {m.mention} (`{m}`)"
+            for i, m in enumerate(members[:100])
+        )
+
+        if len(members) > 100:
+            text += f"\n\n...외 {len(members)-100}명"
+
+        embed = discord.Embed(
+            title=f"역할 없는 멤버 ({len(members)}명)",
+            description=text,
+            color=discord.Color.orange()
+        )
+
+        await interaction.followup.send(embed=embed)    
+
+    @app_commands.command(
+        name="무역할지급",
+        description="추가 역할이 없는 멤버들에게 역할을 일괄 지급합니다."
+    )
+    @app_commands.describe(역할="지급할 역할")
+    async def give_role_to_no_role_members(
+        self,
+        interaction: discord.Interaction,
+        역할: discord.Role,
+    ):
+        await interaction.response.defer(ephemeral=True)
+
+        if not await is_bot_admin(interaction):
+            await interaction.followup.send("❌ 권한이 없습니다.")
+            return
+
+        if 역할 >= interaction.guild.me.top_role:
+            await interaction.followup.send(
+                "❌ 봇보다 높거나 같은 위치의 역할은 지급할 수 없습니다.\n"
+                "서버 설정에서 봇 역할을 지급할 역할보다 위로 올려주세요."
+            )
+            return
+
+        members = [
+            m for m in interaction.guild.members
+            if not m.bot and len(m.roles) == 1
+        ]
+
+        if not members:
+            await interaction.followup.send("✅ 역할이 없는 멤버가 없습니다.")
+            return
+
+        success = 0
+        failed = []
+
+        for member in members:
+            try:
+                await member.add_roles(
+                    역할,
+                    reason=f"무역할 멤버 일괄 역할 지급 / 실행자: {interaction.user}"
+                )
+                success += 1
+            except Exception:
+                failed.append(member)
+
+        msg = (
+            f"✅ 무역할 멤버 역할 지급 완료\n\n"
+            f"지급 역할: {역할.mention}\n"
+            f"성공: `{success}`명\n"
+            f"실패: `{len(failed)}`명"
+        )
+
+        if failed:
+            failed_text = "\n".join(
+                f"- {m.mention} (`{m}`)"
+                for m in failed[:20]
+            )
+            msg += f"\n\n실패 목록:\n{failed_text}"
+
+            if len(failed) > 20:
+                msg += f"\n...외 {len(failed) - 20}명"
+
+        await interaction.followup.send(msg)
+                
     @app_commands.command(
         name="유저정보", description="관리자용 유저 정보를 조회합니다."
     )
+    
     @app_commands.describe(유저="조회할 유저")
     async def user_info(self, interaction: discord.Interaction, 유저: discord.Member):
         await interaction.response.defer(ephemeral=True)
