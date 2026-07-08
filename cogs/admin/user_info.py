@@ -900,12 +900,22 @@ class AdminUserInfo(commands.Cog):
     @app_commands.command(
         name="무역할지급",
         description="추가 역할이 없는 멤버들에게 역할을 일괄 지급합니다."
+)
+    @app_commands.describe(
+        역할1="첫 번째 역할",
+        역할2="두 번째 역할(선택)",
+        역할3="세 번째 역할(선택)",
+        역할4="네 번째 역할(선택)",
+        역할5="다섯 번째 역할(선택)",
     )
-    @app_commands.describe(역할="지급할 역할")
     async def give_role_to_no_role_members(
         self,
         interaction: discord.Interaction,
-        역할: discord.Role,
+        역할1: discord.Role,
+        역할2: discord.Role | None = None,
+        역할3: discord.Role | None = None,
+        역할4: discord.Role | None = None,
+        역할5: discord.Role | None = None,
     ):
         await interaction.response.defer(ephemeral=True)
 
@@ -913,12 +923,14 @@ class AdminUserInfo(commands.Cog):
             await interaction.followup.send("❌ 권한이 없습니다.")
             return
 
-        if 역할 >= interaction.guild.me.top_role:
-            await interaction.followup.send(
-                "❌ 봇보다 높거나 같은 위치의 역할은 지급할 수 없습니다.\n"
-                "서버 설정에서 봇 역할을 지급할 역할보다 위로 올려주세요."
-            )
-            return
+        roles = [r for r in [역할1, 역할2, 역할3, 역할4, 역할5] if r is not None]
+
+        for role in roles:
+            if role >= interaction.guild.me.top_role:
+                await interaction.followup.send(
+                    f"❌ **{role.name}** 역할은 봇보다 높거나 같은 위치라 지급할 수 없습니다."
+                )
+                return
 
         members = [
             m for m in interaction.guild.members
@@ -935,16 +947,18 @@ class AdminUserInfo(commands.Cog):
         for member in members:
             try:
                 await member.add_roles(
-                    역할,
+                    *roles,
                     reason=f"무역할 멤버 일괄 역할 지급 / 실행자: {interaction.user}"
                 )
                 success += 1
             except Exception:
                 failed.append(member)
 
+        role_text = ", ".join(r.mention for r in roles)
+
         msg = (
             f"✅ 무역할 멤버 역할 지급 완료\n\n"
-            f"지급 역할: {역할.mention}\n"
+            f"지급 역할: {role_text}\n"
             f"성공: `{success}`명\n"
             f"실패: `{len(failed)}`명"
         )
@@ -957,10 +971,9 @@ class AdminUserInfo(commands.Cog):
             msg += f"\n\n실패 목록:\n{failed_text}"
 
             if len(failed) > 20:
-                msg += f"\n...외 {len(failed) - 20}명"
+                msg += f"\n...외 {len(failed)-20}명"
 
         await interaction.followup.send(msg)
-                
     @app_commands.command(
         name="유저정보", description="관리자용 유저 정보를 조회합니다."
     )
