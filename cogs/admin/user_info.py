@@ -941,12 +941,20 @@ class AdminUserInfo(commands.Cog):
             if r is not None
         ]
 
+
+        me = interaction.guild.me or interaction.guild.get_member(self.bot.user.id)
+
+        if me is None:
+            await interaction.followup.send("❌ 봇 멤버 정보를 가져오지 못했습니다.")
+            return
+
         for role in roles:
-            if role >= interaction.guild.me.top_role:
+            if role >= me.top_role:
                 await interaction.followup.send(
                     f"❌ **{role.name}** 역할은 봇보다 높거나 같은 위치라 지급할 수 없습니다."
                 )
                 return
+
 
         members = [
             m for m in interaction.guild.members
