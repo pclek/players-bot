@@ -14,6 +14,7 @@ from cogs.adventure.adventure_utils import (
     get_adventure_item_count,
     get_adventure_inventory,
     get_user_max_hp,
+    get_user_equipment_instances,
     set_user_hp,
     EQUIPMENT_NAMES,
 )
@@ -777,13 +778,17 @@ class AdminUserInfoView(discord.ui.View):
         await interaction.response.send_modal(
             NumberEditModal(self.target, "레벨", "level")
         )
+
+
     @discord.ui.button(
         label="모험 인벤토리",
         style=discord.ButtonStyle.secondary,
         custom_id="admin_adventure_inventory",
     )
     async def adventure_inventory(
-        self, interaction: discord.Interaction, button: discord.ui.Button
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
     ):
         if not await is_bot_admin(interaction):
             await interaction.response.send_message(
@@ -792,22 +797,82 @@ class AdminUserInfoView(discord.ui.View):
             )
             return
 
-        await ensure_adventure_profile(self.target.id)
+        await ensure_adventure_profile(
+            self.target.id
+        )
 
-        rows = await get_adventure_inventory(self.target.id)
+        inventory_rows = await get_adventure_inventory(
+            self.target.id
+        )
 
-        if not rows:
+        equipment_rows = await get_user_equipment_instances(
+            self.target.id
+        )
+
+        if not inventory_rows and not equipment_rows:
             await interaction.response.send_message(
-                f"📦 {self.target.mention} 님의 모험 인벤토리가 비어 있습니다.",
+                f"📦 {self.target.mention} 님의 "
+                "모험 인벤토리가 비어 있습니다.",
                 ephemeral=True,
             )
             return
 
         lines = []
 
-        for item_name, quantity, category in rows:
+        equipment_names = {
+            row[1]
+            for row in equipment_rows
+        }
+
+        # 광석, 재료, 음식 등 일반 아이템
+        for item_name, quantity, category in inventory_rows:
+            # 장비는 아래에서 개별 표시하므로 여기서는 제외
+            if item_name in equipment_names:
+                continue
+
             category_text = category or "기타"
-            lines.append(f"`{item_name}` x{quantity} / {category_text}")
+
+            lines.append(
+                f"`{item_name}` x{quantity} / {category_text}"
+            )
+
+        # 장비 개별 표시
+        if equipment_rows:
+            if lines:
+                lines.append("")
+
+            lines.append("**⚔️ 장비 목록**")
+
+            for row in equipment_rows:
+                (
+                    equipment_id,
+                    item_name,
+                    durability,
+                    max_durability,
+                    break_count,
+                    is_equipped,
+                    enhance_level,
+                ) = row
+
+                equipped_text = (
+                    " / 장착 중"
+                    if is_equipped
+                    else ""
+                )
+
+                break_text = (
+                    f" / 파괴 {break_count}회"
+                    if break_count > 0
+                    else ""
+                )
+
+                lines.append(
+                    f"`{item_name} +{int(enhance_level or 0)}` "
+                    f"/ 내구도 "
+                    f"`{durability}/{max_durability}`"
+                    f"{break_text}"
+                    f"{equipped_text}"
+                )
 
         chunks = []
         current = ""
@@ -817,7 +882,9 @@ class AdminUserInfoView(discord.ui.View):
                 chunks.append(current)
                 current = line
             else:
-                current += ("\n" if current else "") + line
+                current += (
+                    "\n" if current else ""
+                ) + line
 
         if current:
             chunks.append(current)
@@ -828,7 +895,10 @@ class AdminUserInfoView(discord.ui.View):
             color=discord.Color.blurple(),
         )
 
-        for index, chunk in enumerate(chunks, start=1):
+        for index, chunk in enumerate(
+            chunks,
+            start=1,
+        ):
             embed.add_field(
                 name=f"인벤토리 {index}",
                 value=chunk,

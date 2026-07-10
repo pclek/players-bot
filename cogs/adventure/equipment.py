@@ -3,10 +3,8 @@ from discord.ext import commands
 
 from cogs.adventure.adventure_utils import (
     ensure_adventure_profile,
-    get_adventure_inventory,
-    equip_equipment_instance,
-    get_best_equipment_instance,
-    get_equipment_instance_enhance_level,
+    get_user_equipment_instances,
+    equip_equipment_instance_by_id,
     WEAPON_NAMES,
     ARMOR_NAMES,
 )
@@ -15,24 +13,64 @@ DB_PATH = "database/bot.db"
 
 
 class EquipSelect(discord.ui.Select):
-    def __init__(self, rows):
+    def __init__(
+        self,
+        user_id: int,
+        rows,
+    ):
+        self.user_id = user_id
+
         options = []
 
-        for item_name, quantity, category in rows:
+        for row in rows[:25]:
+            (
+                equipment_id,
+                item_name,
+                durability,
+                max_durability,
+                break_count,
+                is_equipped,
+                enhance_level,
+            ) = row
+
             if item_name in WEAPON_NAMES:
-                label = f"🗡 {item_name}"
-                desc = "가장 상태가 좋은 무기로 장착합니다."
+                emoji = "🗡️"
+                equipment_type = "무기"
+
             elif item_name in ARMOR_NAMES:
-                label = f"🛡 {item_name}"
-                desc = "가장 상태가 좋은 방어구로 장착합니다."
+                emoji = "🛡️"
+                equipment_type = "방어구"
+
             else:
                 continue
 
+            equipped_text = (
+                " · 현재 장착 중"
+                if is_equipped
+                else ""
+            )
+
+            break_text = (
+                f" · 파괴 {break_count}회"
+                if break_count > 0
+                else ""
+            )
+
             options.append(
                 discord.SelectOption(
-                    label=f"{label} x{quantity}"[:100],
-                    value=item_name,
-                    description=desc[:100],
+                    label=(
+                        f"{item_name} #{equipment_id} "
+                        f"+{int(enhance_level or 0)}"
+                    )[:100],
+                    description=(
+                        f"{equipment_type} · "
+                        f"내구도 {durability}/{max_durability}"
+                        f"{break_text}"
+                        f"{equipped_text}"
+                    )[:100],
+                    emoji=emoji,
+                    value=str(equipment_id),
+                    default=bool(is_equipped),
                 )
             )
 
@@ -49,61 +87,61 @@ class EquipSelect(discord.ui.Select):
             placeholder="장착할 장비를 선택하세요.",
             min_values=1,
             max_values=1,
-            options=options[:25],
+            options=options,
         )
 
-    async def callback(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
-        item_name = self.values[0]
+    async def callback(
+        self,
+        interaction: discord.Interaction,
+    ):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "❌ 해당 장비창을 연 사용자만 이용할 수 있습니다.",
+                ephemeral=True,
+            )
+            return
 
-        if item_name == "none":
+        selected_value = self.values[0]
+
+        if selected_value == "none":
             await interaction.response.send_message(
                 "❌ 장착할 수 있는 장비가 없습니다.",
                 ephemeral=True,
             )
             return
 
-        await ensure_adventure_profile(user_id)
+        equipment_id = int(selected_value)
+
+        result = await equip_equipment_instance_by_id(
+            interaction.user.id,
+            equipment_id,
+        )
+
+        if not result:
+            await interaction.response.send_message(
+                "❌ 선택한 장비를 찾을 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        item_name = result["item_name"]
+        enhance_level = result["enhance_level"]
+        durability = result["durability"]
+        max_durability = result["max_durability"]
 
         if item_name in WEAPON_NAMES:
-            equip_type = "무기"
-        elif item_name in ARMOR_NAMES:
-            equip_type = "방어구"
+            equipment_type = "무기"
         else:
-            await interaction.response.send_message(
-                "❌ 장착할 수 없는 아이템입니다.",
-                ephemeral=True,
-            )
-            return
-
-        equipment_id = await equip_equipment_instance(user_id, item_name)
-
-        if not equipment_id:
-            await interaction.response.send_message(
-                "❌ 장착할 장비를 찾을 수 없습니다.",
-                ephemeral=True,
-            )
-            return
-
-        row = await get_best_equipment_instance(user_id, item_name)
-
-        durability_text = ""
-        enhance_level = await get_equipment_instance_enhance_level(user_id, equipment_id)
-
-        if row:
-            _, _, durability, max_durability, break_count, _ = row
-            durability_text = f"\n강화 : `+{enhance_level}`\n내구도 : `{durability}/{max_durability}`"
-
-            if break_count > 0:
-                durability_text += "\n⚠️ 이 장비는 한 번 내구도 0을 겪었습니다."
+            equipment_type = "방어구"
 
         embed = discord.Embed(
             title="✅ 장착 완료",
             description=(
-                f"👤 장착자 : {interaction.user.mention}\n\n"
-                f"{equip_type} `{item_name}` 을(를) 장착했습니다.\n"
-                f"장비 ID : `#{equipment_id}`"
-                f"{durability_text}"
+                f"👤 장착자: {interaction.user.mention}\n\n"
+                f"{equipment_type}: "
+                f"`{item_name} +{enhance_level}`\n"
+                f"장비 ID: `#{equipment_id}`\n"
+                f"내구도: `{durability}/{max_durability}`"
             ),
             color=discord.Color.green(),
         )
@@ -115,9 +153,19 @@ class EquipSelect(discord.ui.Select):
 
 
 class EquipView(discord.ui.View):
-    def __init__(self, rows):
+    def __init__(
+        self,
+        user_id: int,
+        rows,
+    ):
         super().__init__(timeout=60)
-        self.add_item(EquipSelect(rows))
+
+        self.add_item(
+            EquipSelect(
+                user_id=user_id,
+                rows=rows,
+            )
+        )
 
 
 class Equipment(commands.Cog):

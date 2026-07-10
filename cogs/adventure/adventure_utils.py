@@ -520,6 +520,34 @@ async def get_adventure_inventory(user_id: int):
         ORDER BY items.category, ai.item_name
         """, (user_id,)) as cursor:
             return await cursor.fetchall()
+        
+async def get_user_equipment_instances(
+    user_id: int,
+):
+    await ensure_adventure_profile(user_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT
+            equipment_id,
+            item_name,
+            durability,
+            max_durability,
+            break_count,
+            is_equipped,
+            enhance_level
+        FROM adventure_equipment_instances
+        WHERE user_id = ?
+        ORDER BY
+            is_equipped DESC,
+            item_name ASC,
+            enhance_level DESC,
+            durability DESC,
+            equipment_id ASC
+        """, (
+            user_id,
+        )) as cursor:
+            return await cursor.fetchall()        
 
 
 async def get_adventure_profile(user_id: int):
@@ -630,6 +658,89 @@ async def equip_equipment_instance(user_id: int, item_name: str):
 
     return equipment_id
 
+async def equip_equipment_instance_by_id(
+    user_id: int,
+    equipment_id: int,
+):
+    await ensure_adventure_profile(user_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT
+            item_name,
+            durability,
+            max_durability,
+            enhance_level
+        FROM adventure_equipment_instances
+        WHERE user_id = ?
+        AND equipment_id = ?
+        """, (
+            user_id,
+            equipment_id,
+        )) as cursor:
+            row = await cursor.fetchone()
+
+        if not row:
+            return None
+
+        item_name, durability, max_durability, enhance_level = row
+
+        if item_name in WEAPON_NAMES:
+            profile_column = "equipped_weapon"
+            equipment_names = WEAPON_NAMES
+
+        elif item_name in ARMOR_NAMES:
+            profile_column = "equipped_armor"
+            equipment_names = ARMOR_NAMES
+
+        else:
+            return None
+
+        placeholders = ",".join(
+            "?" for _ in equipment_names
+        )
+
+        # 같은 부위의 기존 장비 장착 해제
+        await db.execute(f"""
+        UPDATE adventure_equipment_instances
+        SET is_equipped = 0
+        WHERE user_id = ?
+        AND item_name IN ({placeholders})
+        """, (
+            user_id,
+            *equipment_names,
+        ))
+
+        # 선택한 장비 장착
+        await db.execute("""
+        UPDATE adventure_equipment_instances
+        SET is_equipped = 1
+        WHERE user_id = ?
+        AND equipment_id = ?
+        """, (
+            user_id,
+            equipment_id,
+        ))
+
+        # 기존 프로필 구조 호환을 위해 이름도 저장
+        await db.execute(f"""
+        UPDATE adventure_profiles
+        SET {profile_column} = ?
+        WHERE user_id = ?
+        """, (
+            item_name,
+            user_id,
+        ))
+
+        await db.commit()
+
+    return {
+        "equipment_id": equipment_id,
+        "item_name": item_name,
+        "durability": durability,
+        "max_durability": max_durability,
+        "enhance_level": int(enhance_level or 0),
+    }
 
 async def get_equipped_equipment(user_id: int, item_name: str):
     await ensure_adventure_profile(user_id)

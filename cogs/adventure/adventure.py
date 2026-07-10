@@ -41,6 +41,7 @@ from cogs.adventure.adventure_utils import (
     get_adventure_item_count,
     remove_adventure_item,
     get_adventure_inventory,
+    get_user_equipment_instances,
     is_user_dead,
     format_dead_until,
     get_equipped_equipment,
@@ -657,12 +658,9 @@ class AdventureSelect(discord.ui.Select):
             return
 
         if job_type == "equipment":
-            rows = await get_adventure_inventory(user_id)
-
-            equip_rows = [
-                row for row in rows
-                if row[0] in EQUIPMENT_NAMES
-            ]
+            equip_rows = await get_user_equipment_instances(
+                user_id
+            )
 
             if not equip_rows:
                 await interaction.edit_original_response(
@@ -674,13 +672,20 @@ class AdventureSelect(discord.ui.Select):
 
             embed = discord.Embed(
                 title="🧰 장비 장착",
-                description="장착할 무기 또는 방어구를 선택하세요.",
+                description=(
+                    "장착할 무기 또는 방어구를 선택하세요.\n\n"
+                    "같은 종류의 장비라도 강화수치와 "
+                    "내구도에 따라 따로 표시됩니다."
+                ),
                 color=discord.Color.blurple(),
             )
 
             await interaction.edit_original_response(
                 embed=embed,
-                view=EquipView(equip_rows),
+                view=EquipView(
+                    user_id=user_id,
+                    rows=equip_rows,
+                ),
             )
             return
 
