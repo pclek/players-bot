@@ -9,7 +9,8 @@ from cogs.profile.profile import required_xp, progress_bar, format_voice_time
 from cogs.adventure.adventure_utils import (
     ensure_adventure_profile,
     add_adventure_item,
-    remove_adventure_item,
+    add_enhanced_equipment,
+    remove_adventure_item,    
     get_adventure_item_count,
     get_adventure_inventory,
     get_user_max_hp,
@@ -237,8 +238,18 @@ class NumberEditModal(discord.ui.Modal):
         )
 
 class AdventureItemAmountModal(discord.ui.Modal):
-    def __init__(self, target: discord.Member, mode: str, item_name: str):
-        title = "모험 아이템 추가" if mode == "add" else "모험 아이템 제거"
+    def __init__(
+        self,
+        target: discord.Member,
+        mode: str,
+        item_name: str,
+    ):
+        title = (
+            "모험 아이템 추가"
+            if mode == "add"
+            else "모험 아이템 제거"
+        )
+
         super().__init__(title=title)
 
         self.target = target
@@ -254,7 +265,28 @@ class AdventureItemAmountModal(discord.ui.Modal):
 
         self.add_item(self.amount)
 
-    async def on_submit(self, interaction: discord.Interaction):
+        self.enhance_level = None
+
+        # 장비를 추가할 때만 강화수치 입력창 표시
+        if (
+            mode == "add"
+            and item_name in EQUIPMENT_NAMES
+            and item_name != "녹슨검"
+        ):
+            self.enhance_level = discord.ui.TextInput(
+                label="강화수치",
+                placeholder="0~5 사이 숫자를 입력하세요. 예: 4",
+                required=True,
+                default="0",
+                max_length=1,
+            )
+
+            self.add_item(self.enhance_level)
+
+    async def on_submit(
+        self,
+        interaction: discord.Interaction,
+    ):
         if not await is_bot_admin(interaction):
             await interaction.response.send_message(
                 "❌ 권한이 없습니다.",
@@ -263,7 +295,9 @@ class AdventureItemAmountModal(discord.ui.Modal):
             return
 
         try:
-            amount = int(str(self.amount.value).strip())
+            amount = int(
+                str(self.amount.value).strip()
+            )
         except ValueError:
             await interaction.response.send_message(
                 "❌ 수량은 숫자로 입력해주세요.",
@@ -286,13 +320,84 @@ class AdventureItemAmountModal(discord.ui.Modal):
             )
             return
 
-        await ensure_adventure_profile(self.target.id)
+        await ensure_adventure_profile(
+            self.target.id
+        )
 
         if self.mode == "add":
-            await add_adventure_item(self.target.id, self.item_name, amount)
+            # 무기·방어구 지급
+            if self.item_name in EQUIPMENT_NAMES:
+                if self.item_name == "녹슨검":
+                    await interaction.response.send_message(
+                        "❌ 기본 장비 녹슨검은 "
+                        "관리자 지급 대상에서 제외됩니다.",
+                        ephemeral=True,
+                    )
+                    return
+
+                try:
+                    enhance_level = int(
+                        str(
+                            self.enhance_level.value
+                        ).strip()
+                    )
+                except (
+                    ValueError,
+                    AttributeError,
+                ):
+                    await interaction.response.send_message(
+                        "❌ 강화수치는 숫자로 입력해주세요.",
+                        ephemeral=True,
+                    )
+                    return
+
+                if (
+                    enhance_level < 0
+                    or enhance_level > 5
+                ):
+                    await interaction.response.send_message(
+                        "❌ 강화수치는 0강부터 "
+                        "5강까지만 입력할 수 있습니다.",
+                        ephemeral=True,
+                    )
+                    return
+
+                success = await add_enhanced_equipment(
+                    user_id=self.target.id,
+                    item_name=self.item_name,
+                    quantity=amount,
+                    enhance_level=enhance_level,
+                )
+
+                if not success:
+                    await interaction.response.send_message(
+                        "❌ 강화 장비 지급 중 "
+                        "오류가 발생했습니다.",
+                        ephemeral=True,
+                    )
+                    return
+
+                await interaction.response.send_message(
+                    "✅ 강화 장비를 지급했습니다.\n"
+                    f"대상: {self.target.mention}\n"
+                    f"장비: `{self.item_name} "
+                    f"+{enhance_level}`\n"
+                    f"수량: `{amount}개`\n"
+                    "내구도: `최대`\n"
+                    "장착 상태: `미장착`",
+                    ephemeral=True,
+                )
+                return
+
+            # 일반 모험 아이템 지급
+            await add_adventure_item(
+                self.target.id,
+                self.item_name,
+                amount,
+            )
 
             await interaction.response.send_message(
-                f"✅ 모험 아이템을 추가했습니다.\n"
+                "✅ 모험 아이템을 추가했습니다.\n"
                 f"대상: {self.target.mention}\n"
                 f"아이템: `{self.item_name}`\n"
                 f"수량: `{amount}`",
@@ -307,7 +412,8 @@ class AdventureItemAmountModal(discord.ui.Modal):
 
         if current_count < amount:
             await interaction.response.send_message(
-                f"❌ 보유 수량이 부족해서 제거할 수 없습니다.\n"
+                "❌ 보유 수량이 부족해서 "
+                "제거할 수 없습니다.\n"
                 f"대상: {self.target.mention}\n"
                 f"아이템: `{self.item_name}`\n"
                 f"보유 수량: `{current_count}`\n"
@@ -330,7 +436,7 @@ class AdventureItemAmountModal(discord.ui.Modal):
             return
 
         await interaction.response.send_message(
-            f"✅ 모험 아이템을 제거했습니다.\n"
+            "✅ 모험 아이템을 제거했습니다.\n"
             f"대상: {self.target.mention}\n"
             f"아이템: `{self.item_name}`\n"
             f"수량: `{amount}`",

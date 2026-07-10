@@ -131,13 +131,19 @@ async def add_equipment_instance(
     user_id: int,
     item_name: str,
     quantity: int = 1,
+    enhance_level: int = 0,
 ):
     if quantity <= 0:
         return
 
+    enhance_level = max(0, min(5, int(enhance_level)))
+
     await ensure_adventure_profile(user_id)
 
-    max_durability = EQUIPMENT_MAX_DURABILITY.get(item_name, 100)
+    max_durability = EQUIPMENT_MAX_DURABILITY.get(
+        item_name,
+        100,
+    )
 
     async with aiosqlite.connect(DB_PATH) as db:
         for _ in range(quantity):
@@ -148,14 +154,16 @@ async def add_equipment_instance(
                 durability,
                 max_durability,
                 break_count,
-                is_equipped
+                is_equipped,
+                enhance_level
             )
-            VALUES (?, ?, ?, ?, 0, 0)
+            VALUES (?, ?, ?, ?, 0, 0, ?)
             """, (
                 user_id,
                 item_name,
                 max_durability,
                 max_durability,
+                enhance_level,
             ))
 
         await db.commit()
@@ -293,6 +301,73 @@ async def add_adventure_item(user_id: int, item_name: str, quantity: int = 1):
     if item_name in EQUIPMENT_NAMES:
         await add_equipment_instance(user_id, item_name, quantity)
 
+async def add_enhanced_equipment(
+    user_id: int,
+    item_name: str,
+    quantity: int = 1,
+    enhance_level: int = 0,
+):
+    if quantity <= 0:
+        return False
+
+    if item_name not in EQUIPMENT_NAMES:
+        return False
+
+    if item_name == "녹슨검":
+        return False
+
+    enhance_level = max(
+        0,
+        min(5, int(enhance_level)),
+    )
+
+    await ensure_adventure_profile(user_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        INSERT INTO adventure_inventory (
+            user_id,
+            item_name,
+            quantity
+        )
+        VALUES (?, ?, ?)
+        ON CONFLICT(user_id, item_name)
+        DO UPDATE SET
+            quantity = quantity + excluded.quantity
+        """, (
+            user_id,
+            item_name,
+            quantity,
+        ))
+
+        max_durability = EQUIPMENT_MAX_DURABILITY.get(
+            item_name,
+            100,
+        )
+
+        for _ in range(quantity):
+            await db.execute("""
+            INSERT INTO adventure_equipment_instances (
+                user_id,
+                item_name,
+                durability,
+                max_durability,
+                break_count,
+                is_equipped,
+                enhance_level
+            )
+            VALUES (?, ?, ?, ?, 0, 0, ?)
+            """, (
+                user_id,
+                item_name,
+                max_durability,
+                max_durability,
+                enhance_level,
+            ))
+
+        await db.commit()
+
+    return True
 
 async def remove_adventure_item(user_id: int, item_name: str, quantity: int = 1) -> bool:
     if quantity <= 0:
