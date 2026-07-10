@@ -14,6 +14,8 @@ from cogs.adventure.adventure_utils import (
     equip_equipment_instance,
     get_user_max_hp,
     is_user_in_battle,
+    transfer_equipment_instance,
+    EQUIPMENT_NAMES,
 )
 from cogs.adventure.crafting import RECIPES
 
@@ -1420,13 +1422,6 @@ class AdventureItemGiftButton(discord.ui.Button):
             )
             return
 
-        if self.item_name == equipped_weapon or self.item_name == equipped_armor:
-            await interaction.response.send_message(
-                "❌ 장착 중인 장비는 선물할 수 없습니다.",
-                ephemeral=True,
-            )
-            return
-
         view = discord.ui.View(timeout=60)
         view.add_item(AdventureItemGiftUserSelect(self.item_name))
 
@@ -1463,27 +1458,43 @@ class AdventureItemGiftUserSelect(discord.ui.UserSelect):
             )
             return
 
-        success = await remove_adventure_item(
-            interaction.user.id,
-            self.item_name,
-            1,
-        )
-
-        if not success:
-            await interaction.response.send_message(
-                "❌ 아이템을 찾을 수 없거나 수량이 부족합니다.",
-                ephemeral=True,
+        if self.item_name in EQUIPMENT_NAMES:
+            success = await transfer_equipment_instance(
+                interaction.user.id,
+                target.id,
+                self.item_name,
             )
-            return
 
-        await add_adventure_item(
-            target.id,
-            self.item_name,
-            1,
-        )
+            if not success:
+                await interaction.response.send_message(
+                    "❌ 선물할 수 있는 미장착 장비를 찾을 수 없습니다.",
+                    ephemeral=True,
+                )
+                return
+
+        else:
+            success = await remove_adventure_item(
+                interaction.user.id,
+                self.item_name,
+                1,
+            )
+
+            if not success:
+                await interaction.response.send_message(
+                    "❌ 아이템을 찾을 수 없거나 수량이 부족합니다.",
+                    ephemeral=True,
+                )
+                return
+
+            await add_adventure_item(
+                target.id,
+                self.item_name,
+                1,
+            )
 
         await interaction.response.send_message(
-            f"🎁 {interaction.user.mention} 님이 {target.mention} 님에게 `{self.item_name}` 1개를 선물했습니다.",
+            f"🎁 {interaction.user.mention} 님이 {target.mention} 님에게 "
+            f"`{self.item_name}` 1개를 선물했습니다.",
         )
 
 

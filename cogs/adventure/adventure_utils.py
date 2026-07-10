@@ -160,6 +160,111 @@ async def add_equipment_instance(
 
         await db.commit()
 
+async def transfer_equipment_instance(
+    from_user_id: int,
+    to_user_id: int,
+    item_name: str,
+):
+    if item_name not in EQUIPMENT_NAMES:
+        return False
+
+    if item_name == "녹슨검":
+        return False
+
+    await ensure_adventure_profile(from_user_id)
+    await ensure_adventure_profile(to_user_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        # 선물 가능한 미장착 장비 중 강화수치가 가장 높은 장비를 선택
+        async with db.execute("""
+        SELECT equipment_id
+        FROM adventure_equipment_instances
+        WHERE user_id = ?
+        AND item_name = ?
+        AND is_equipped = 0
+        ORDER BY enhance_level DESC, equipment_id ASC
+        LIMIT 1
+        """, (
+            from_user_id,
+            item_name,
+        )) as cursor:
+            row = await cursor.fetchone()
+
+        if not row:
+            return False
+
+        equipment_id = row[0]
+
+        # 보내는 사람의 통합 인벤토리 수량 확인
+        async with db.execute("""
+        SELECT quantity
+        FROM adventure_inventory
+        WHERE user_id = ?
+        AND item_name = ?
+        """, (
+            from_user_id,
+            item_name,
+        )) as cursor:
+            inventory_row = await cursor.fetchone()
+
+        if not inventory_row or inventory_row[0] <= 0:
+            return False
+
+        sender_quantity = inventory_row[0]
+
+        # 보내는 사람 인벤토리에서 1개 차감
+        if sender_quantity == 1:
+            await db.execute("""
+            DELETE FROM adventure_inventory
+            WHERE user_id = ?
+            AND item_name = ?
+            """, (
+                from_user_id,
+                item_name,
+            ))
+        else:
+            await db.execute("""
+            UPDATE adventure_inventory
+            SET quantity = quantity - 1
+            WHERE user_id = ?
+            AND item_name = ?
+            """, (
+                from_user_id,
+                item_name,
+            ))
+
+        # 받는 사람 인벤토리에 1개 추가
+        await db.execute("""
+        INSERT INTO adventure_inventory (
+            user_id,
+            item_name,
+            quantity
+        )
+        VALUES (?, ?, 1)
+        ON CONFLICT(user_id, item_name)
+        DO UPDATE SET quantity = quantity + 1
+        """, (
+            to_user_id,
+            item_name,
+        ))
+
+        # 장비 인스턴스 자체의 소유자만 변경
+        # 강화수치, 내구도, 파괴횟수는 그대로 유지됨
+        await db.execute("""
+        UPDATE adventure_equipment_instances
+        SET user_id = ?,
+            is_equipped = 0
+        WHERE equipment_id = ?
+        AND user_id = ?
+        """, (
+            to_user_id,
+            equipment_id,
+            from_user_id,
+        ))
+
+        await db.commit()
+
+    return True
 
 async def add_adventure_item(user_id: int, item_name: str, quantity: int = 1):
     if quantity <= 0:

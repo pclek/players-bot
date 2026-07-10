@@ -12,6 +12,11 @@ from cogs.adventure.crafting import (
     material_text as cooking_material_text,
 )
 
+from cogs.adventure.alchemy import (
+    AlchemyView,
+    make_alchemy_embed,
+)
+
 from cogs.adventure.blacksmith import (
     BlacksmithMenuView,
     make_blacksmith_embed,
@@ -26,6 +31,7 @@ from cogs.adventure.blacksmith import (
 )
 from cogs.adventure.equipment import EquipView
 from cogs.profile.profile import get_attendance_day_key
+
 
 from cogs.adventure.adventure_utils import (
     ensure_adventure_profile,
@@ -476,6 +482,12 @@ class AdventureSelect(discord.ui.Select):
                 value="crafting",
             ),
             discord.SelectOption(
+                label="연금술",
+                description="하위 광석을 상위 광석으로 변환합니다.",
+                emoji="⚗️",
+                value="alchemy",
+            ),
+            discord.SelectOption(
                 label="대장간",
                 description="제련, 장비 제작, 수리를 진행합니다.",
                 emoji="⚒️",
@@ -621,6 +633,17 @@ class AdventureSelect(discord.ui.Select):
             await interaction.edit_original_response(
                 embed=embed,
                 view=CraftView(recipe_keys),
+            )
+            return
+        
+        if job_type == "alchemy":
+            embed = await make_alchemy_embed(
+                user_id
+            )
+
+            await interaction.edit_original_response(
+                embed=embed,
+                view=AlchemyView(user_id),
             )
             return
 
