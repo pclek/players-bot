@@ -12,6 +12,7 @@ from cogs.adventure.adventure_utils import (
     is_user_dead,
     format_dead_until,
     equip_equipment_instance,
+    get_equipment_instance_enhance_level,
     get_user_max_hp,
     is_user_in_battle,
     transfer_equipment_instance,
@@ -20,6 +21,126 @@ from cogs.adventure.adventure_utils import (
 from cogs.adventure.crafting import RECIPES
 
 DB_PATH = "database/bot.db"
+
+async def get_inventory_equipment_instances(
+    user_id: int,
+):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT
+            equipment_id,
+            item_name,
+            durability,
+            max_durability,
+            break_count,
+            is_equipped,
+            enhance_level
+        FROM adventure_equipment_instances
+        WHERE user_id = ?
+        ORDER BY
+            is_equipped DESC,
+            item_name ASC,
+            enhance_level DESC,
+            durability DESC,
+            equipment_id ASC
+        """, (
+            user_id,
+        )) as cursor:
+            return await cursor.fetchall()
+
+
+async def equip_inventory_equipment_by_id(
+    user_id: int,
+    equipment_id: int,
+):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT
+            item_name,
+            durability,
+            max_durability,
+            break_count,
+            enhance_level
+        FROM adventure_equipment_instances
+        WHERE user_id = ?
+        AND equipment_id = ?
+        """, (
+            user_id,
+            equipment_id,
+        )) as cursor:
+            row = await cursor.fetchone()
+
+        if not row:
+            return None
+
+        (
+            item_name,
+            durability,
+            max_durability,
+            break_count,
+            enhance_level,
+        ) = row
+
+        if item_name in WEAPON_NAMES:
+            profile_column = "equipped_weapon"
+            same_type_names = WEAPON_NAMES
+            equip_type = "무기"
+
+        elif item_name in ARMOR_NAMES:
+            profile_column = "equipped_armor"
+            same_type_names = ARMOR_NAMES
+            equip_type = "방어구"
+
+        else:
+            return None
+
+        placeholders = ",".join(
+            "?" for _ in same_type_names
+        )
+
+        # 같은 부위 기존 장비 해제
+        await db.execute(f"""
+        UPDATE adventure_equipment_instances
+        SET is_equipped = 0
+        WHERE user_id = ?
+        AND item_name IN ({placeholders})
+        """, (
+            user_id,
+            *same_type_names,
+        ))
+
+        # 선택한 장비 장착
+        await db.execute("""
+        UPDATE adventure_equipment_instances
+        SET is_equipped = 1
+        WHERE user_id = ?
+        AND equipment_id = ?
+        """, (
+            user_id,
+            equipment_id,
+        ))
+
+        # 기존 프로필 구조와 호환되도록 이름도 저장
+        await db.execute(f"""
+        UPDATE adventure_profiles
+        SET {profile_column} = ?
+        WHERE user_id = ?
+        """, (
+            item_name,
+            user_id,
+        ))
+
+        await db.commit()
+
+    return {
+        "equipment_id": equipment_id,
+        "item_name": item_name,
+        "equip_type": equip_type,
+        "durability": durability,
+        "max_durability": max_durability,
+        "break_count": int(break_count or 0),
+        "enhance_level": int(enhance_level or 0),
+    }
 
 SHOP_STICKY_COOLDOWN_MINUTES = 30
 INVENTORY_FOOD_COOLDOWN_HOURS = 2
@@ -1050,14 +1171,67 @@ class AdventureInventoryCategorySelect(discord.ui.Select):
 
         filtered_rows = []
 
-        for item_name, quantity, category in self.rows:
-            if item_name == "녹슨검":
-                continue
+        if selected_group in ("무기", "방어구"):
+            equipment_rows = await get_inventory_equipment_instances(
+                interaction.user.id
+            )
 
-            group = get_inventory_group(item_name, category)
+            for equipment_row in equipment_rows:
+                (
+                    equipment_id,
+                    item_name,
+                    durability,
+                    max_durability,
+                    break_count,
+                    is_equipped,
+                    enhance_level,
+                ) = equipment_row
 
-            if group == selected_group:
-                filtered_rows.append((item_name, quantity, category))
+                if item_name == "녹슨검":
+                    continue
+
+                if (
+                    selected_group == "무기"
+                    and item_name not in WEAPON_NAMES
+                ):
+                    continue
+
+                if (
+                    selected_group == "방어구"
+                    and item_name not in ARMOR_NAMES
+                ):
+                    continue
+
+                filtered_rows.append(
+                    (
+                        equipment_id,
+                        item_name,
+                        durability,
+                        max_durability,
+                        break_count,
+                        is_equipped,
+                        enhance_level,
+                    )
+                )
+
+        else:
+            for item_name, quantity, category in self.rows:
+                if item_name == "녹슨검":
+                    continue
+
+                group = get_inventory_group(
+                    item_name,
+                    category
+                )
+
+                if group == selected_group:
+                    filtered_rows.append(
+                        (
+                            item_name,
+                            quantity,
+                            category,
+                        )
+                    )
 
         embed = discord.Embed(
             title=f"🎒 모험 인벤토리 - {INVENTORY_CATEGORY_LABELS.get(selected_group, selected_group)}",
@@ -1070,6 +1244,221 @@ class AdventureInventoryCategorySelect(discord.ui.Select):
             view=AdventureInventoryManageView(filtered_rows, self.profile),
         )
 
+class AdventureEquipmentSelect(discord.ui.Select):
+    def __init__(
+        self,
+        equipment_rows,
+    ):
+        options = []
+
+        for equipment_row in equipment_rows[:25]:
+            (
+                equipment_id,
+                item_name,
+                durability,
+                max_durability,
+                break_count,
+                is_equipped,
+                enhance_level,
+            ) = equipment_row
+
+            if item_name in WEAPON_NAMES:
+                emoji = "🗡️"
+                category_text = "무기"
+            elif item_name in ARMOR_NAMES:
+                emoji = "🛡️"
+                category_text = "방어구"
+            else:
+                continue
+
+            description_parts = [
+                category_text,
+                f"내구도 {durability}/{max_durability}",
+            ]
+
+            if break_count:
+                description_parts.append(
+                    f"파괴 {break_count}회"
+                )
+
+            if is_equipped:
+                description_parts.append(
+                    "현재 장착 중"
+                )
+
+            options.append(
+                discord.SelectOption(
+                    label=(
+                        f"{item_name} "
+                        f"+{int(enhance_level or 0)}"
+                    )[:100],
+                    value=str(equipment_id),
+                    description=(
+                        " · ".join(description_parts)
+                    )[:100],
+                    emoji=emoji,
+                )
+            )
+
+        if not options:
+            options.append(
+                discord.SelectOption(
+                    label="선택 가능한 장비 없음",
+                    value="none",
+                    description="관리 가능한 장비가 없습니다.",
+                )
+            )
+
+        super().__init__(
+            placeholder="관리할 장비를 선택하세요.",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(
+        self,
+        interaction: discord.Interaction,
+    ):
+        selected_value = self.values[0]
+
+        if selected_value == "none":
+            await interaction.response.send_message(
+                "❌ 관리 가능한 장비가 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        equipment_id = int(selected_value)
+
+        equipment_rows = (
+            await get_inventory_equipment_instances(
+                interaction.user.id
+            )
+        )
+
+        selected_row = next(
+            (
+                row
+                for row in equipment_rows
+                if row[0] == equipment_id
+            ),
+            None,
+        )
+
+        if not selected_row:
+            await interaction.response.send_message(
+                "❌ 선택한 장비를 찾을 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        (
+            equipment_id,
+            item_name,
+            durability,
+            max_durability,
+            break_count,
+            is_equipped,
+            enhance_level,
+        ) = selected_row
+
+        view = discord.ui.View(timeout=60)
+
+        view.add_item(
+            AdventureEquipmentEquipButton(
+                equipment_id
+            )
+        )
+
+        embed = discord.Embed(
+            title="🎒 장비 관리",
+            description=(
+                f"장비: `{item_name} "
+                f"+{int(enhance_level or 0)}`\n"
+                f"장비 ID: `#{equipment_id}`\n"
+                f"내구도: "
+                f"`{durability}/{max_durability}`"
+            ),
+            color=discord.Color.blurple(),
+        )
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=view,
+        )
+
+
+class AdventureEquipmentEquipButton(
+    discord.ui.Button
+):
+    def __init__(
+        self,
+        equipment_id: int,
+    ):
+        super().__init__(
+            label="장착",
+            style=discord.ButtonStyle.blurple,
+        )
+
+        self.equipment_id = equipment_id
+
+    async def callback(
+        self,
+        interaction: discord.Interaction,
+    ):
+        result = await equip_inventory_equipment_by_id(
+            interaction.user.id,
+            self.equipment_id,
+        )
+
+        if not result:
+            await interaction.response.send_message(
+                "❌ 선택한 장비를 찾을 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        status_text = ""
+
+        if result["break_count"] > 0:
+            status_text = (
+                f"\n파괴 횟수: "
+                f"`{result['break_count']}회`"
+            )
+
+        await interaction.response.edit_message(
+            content=(
+                f"✅ {result['equip_type']} "
+                f"`{result['item_name']} "
+                f"+{result['enhance_level']}`을(를) "
+                "장착했습니다.\n"
+                f"장비 ID: "
+                f"`#{result['equipment_id']}`\n"
+                f"내구도: "
+                f"`{result['durability']}/"
+                f"{result['max_durability']}`"
+                f"{status_text}"
+            ),
+            embed=None,
+            view=None,
+        )
+
+
+class AdventureEquipmentManageView(
+    discord.ui.View
+):
+    def __init__(
+        self,
+        equipment_rows,
+    ):
+        super().__init__(timeout=60)
+
+        self.add_item(
+            AdventureEquipmentSelect(
+                equipment_rows
+            )
+        )
 
 class AdventureInventorySelect(discord.ui.Select):
     def __init__(self, rows, profile):
@@ -1707,24 +2096,90 @@ class Shop(commands.Cog):
                 f"`{status_text}`"
             )
             
-        adventure_rows = await get_adventure_inventory(interaction.user.id)
+        adventure_rows = await get_adventure_inventory(
+            interaction.user.id
+        )
+
+        equipment_rows = await get_inventory_equipment_instances(
+            interaction.user.id
+        )
 
         adventure_lines = []
 
+        # 일반 재료, 음식, 광석만 표시
         for item_name, quantity, category in adventure_rows:
+            if item_name in WEAPON_NAMES or item_name in ARMOR_NAMES:
+                continue
 
             category_text = category if category else "기타"
 
             heal_amount = FOOD_HEALS.get(item_name)
 
             if heal_amount:
-                heal_text = "전체 회복" if heal_amount >= 999 else f"HP {heal_amount} 회복"
-                adventure_lines.append(
-                    f"`{category_text}` {item_name} x{quantity} · ❤️ {heal_text}"
+                heal_text = (
+                    "전체 회복"
+                    if heal_amount >= 999
+                    else f"HP {heal_amount} 회복"
                 )
+
+                adventure_lines.append(
+                    f"`{category_text}` "
+                    f"{item_name} x{quantity} "
+                    f"· ❤️ {heal_text}"
+                )
+
             else:
                 adventure_lines.append(
-                    f"`{category_text}` {item_name} x{quantity}"
+                    f"`{category_text}` "
+                    f"{item_name} x{quantity}"
+                )
+
+        # 장비는 개별 인스턴스로 표시
+        if equipment_rows:
+            adventure_lines.append("")
+            adventure_lines.append("**⚔️ 장비**")
+
+            for equipment_row in equipment_rows:
+                (
+                    equipment_id,
+                    item_name,
+                    durability,
+                    max_durability,
+                    break_count,
+                    is_equipped,
+                    enhance_level,
+                ) = equipment_row
+
+                if item_name in WEAPON_NAMES:
+                    category_text = "무기"
+                elif item_name in ARMOR_NAMES:
+                    category_text = "방어구"
+                else:
+                    continue
+
+                status_parts = []
+
+                if is_equipped:
+                    status_parts.append("장착 중")
+
+                if break_count:
+                    status_parts.append(
+                        f"파괴 {break_count}회"
+                    )
+
+                status_text = ""
+
+                if status_parts:
+                    status_text = (
+                        " · " + " / ".join(status_parts)
+                    )
+
+                adventure_lines.append(
+                    f"`{category_text}` "
+                    f"{item_name} `+{int(enhance_level or 0)}` "
+                    f"· 내구도 "
+                    f"`{durability}/{max_durability}`"
+                    f"{status_text}"
                 )
 
         description = ""
