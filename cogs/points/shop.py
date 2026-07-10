@@ -13,9 +13,12 @@ from cogs.adventure.adventure_utils import (
     format_dead_until,
     equip_equipment_instance,
     get_equipment_instance_enhance_level,
+    remove_equipment_instance,
     get_user_max_hp,
     is_user_in_battle,
     transfer_equipment_instance,
+    cleanup_orphan_equipment_instances,
+    transfer_equipment_instance_by_id,
     EQUIPMENT_NAMES,
 )
 from cogs.adventure.crafting import RECIPES
@@ -25,6 +28,10 @@ DB_PATH = "database/bot.db"
 async def get_inventory_equipment_instances(
     user_id: int,
 ):
+    await cleanup_orphan_equipment_instances(
+        user_id
+    )
+
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("""
         SELECT
@@ -835,6 +842,131 @@ class AdventureShopView(discord.ui.View):
         super().__init__(timeout=60)
         self.add_item(AdventureShopSelect(rows, user_id))
 
+class AdventureEquipmentDiscardButton(
+    discord.ui.Button
+):
+    def __init__(
+        self,
+        equipment_id: int,
+        item_name: str,
+        enhance_level: int,
+    ):
+        super().__init__(
+            label="버리기",
+            style=discord.ButtonStyle.red,
+        )
+
+        self.equipment_id = equipment_id
+        self.item_name = item_name
+        self.enhance_level = enhance_level
+
+    async def callback(
+        self,
+        interaction: discord.Interaction,
+    ):
+        if self.item_name == "녹슨검":
+            await interaction.response.send_message(
+                "❌ 기본 무기는 버릴 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        view = discord.ui.View(timeout=60)
+
+        view.add_item(
+            AdventureEquipmentDiscardConfirmButton(
+                equipment_id=self.equipment_id,
+                item_name=self.item_name,
+                enhance_level=self.enhance_level,
+            )
+        )
+
+        view.add_item(
+            AdventureItemDiscardCancelButton()
+        )
+
+        await interaction.response.edit_message(
+            content=(
+                f"⚠️ `{self.item_name} "
+                f"+{self.enhance_level}`을(를) "
+                "정말 버릴까요?"
+            ),
+            embed=None,
+            view=view,
+        )
+
+class AdventureEquipmentDiscardConfirmButton(
+    discord.ui.Button
+):
+    def __init__(
+        self,
+        equipment_id: int,
+        item_name: str,
+        enhance_level: int,
+    ):
+        super().__init__(
+            label="버리기 확인",
+            style=discord.ButtonStyle.red,
+        )
+
+        self.equipment_id = equipment_id
+        self.item_name = item_name
+        self.enhance_level = enhance_level
+
+    async def callback(
+        self,
+        interaction: discord.Interaction,
+    ):
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                """
+                SELECT is_equipped
+                FROM adventure_equipment_instances
+                WHERE equipment_id = ?
+                AND user_id = ?
+                """,
+                (
+                    self.equipment_id,
+                    interaction.user.id,
+                ),
+            ) as cursor:
+                row = await cursor.fetchone()
+
+        if not row:
+            await interaction.response.send_message(
+                "❌ 해당 장비를 찾을 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        if row[0]:
+            await interaction.response.send_message(
+                "❌ 장착 중인 장비는 버릴 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        removed_name = await remove_equipment_instance(
+            user_id=interaction.user.id,
+            equipment_id=self.equipment_id,
+        )
+
+        if not removed_name:
+            await interaction.response.send_message(
+                "❌ 장비를 삭제하지 못했습니다.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.edit_message(
+            content=(
+                f"🗑 `{self.item_name} "
+                f"+{self.enhance_level}`을(를) "
+                "버렸습니다."
+            ),
+            embed=None,
+            view=None,
+        )        
 
 WEAPON_NAMES = [
     "녹슨검",
@@ -1239,10 +1371,186 @@ class AdventureInventoryCategorySelect(discord.ui.Select):
             color=discord.Color.blurple(),
         )
 
+        if selected_group in ("무기", "방어구"):
+            view = AdventureEquipmentManageView(
+                filtered_rows
+            )
+        else:
+            view = AdventureInventoryManageView(
+                filtered_rows,
+                self.profile,
+            )
+
         await interaction.response.edit_message(
             embed=embed,
-            view=AdventureInventoryManageView(filtered_rows, self.profile),
+            view=view,
         )
+
+class AdventureEquipmentGiftButton(
+    discord.ui.Button
+):
+    def __init__(
+        self,
+        equipment_id: int,
+        item_name: str,
+        enhance_level: int,
+    ):
+        super().__init__(
+            label="선물하기",
+            style=discord.ButtonStyle.green,
+            emoji="🎁",
+        )
+
+        self.equipment_id = equipment_id
+        self.item_name = item_name
+        self.enhance_level = enhance_level
+
+    async def callback(
+        self,
+        interaction: discord.Interaction,
+    ):
+        if self.item_name == "녹슨검":
+            await interaction.response.send_message(
+                "❌ 기본 무기는 선물할 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                """
+                SELECT is_equipped
+                FROM adventure_equipment_instances
+                WHERE user_id = ?
+                AND equipment_id = ?
+                """,
+                (
+                    interaction.user.id,
+                    self.equipment_id,
+                ),
+            ) as cursor:
+                row = await cursor.fetchone()
+
+        if not row:
+            await interaction.response.send_message(
+                "❌ 해당 장비를 찾을 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        if row[0]:
+            await interaction.response.send_message(
+                "❌ 장착 중인 장비는 선물할 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        view = discord.ui.View(timeout=60)
+
+        view.add_item(
+            AdventureEquipmentGiftUserSelect(
+                equipment_id=self.equipment_id,
+                item_name=self.item_name,
+                enhance_level=self.enhance_level,
+            )
+        )
+
+        await interaction.response.edit_message(
+            content=(
+                f"🎁 `{self.item_name} "
+                f"+{self.enhance_level}`을(를) "
+                "선물할 멤버를 선택하세요."
+            ),
+            embed=None,
+            view=view,
+        )
+
+
+class AdventureEquipmentGiftUserSelect(
+    discord.ui.UserSelect
+):
+    def __init__(
+        self,
+        equipment_id: int,
+        item_name: str,
+        enhance_level: int,
+    ):
+        super().__init__(
+            placeholder="선물할 멤버 선택",
+            min_values=1,
+            max_values=1,
+        )
+
+        self.equipment_id = equipment_id
+        self.item_name = item_name
+        self.enhance_level = enhance_level
+
+    async def callback(
+        self,
+        interaction: discord.Interaction,
+    ):
+        target = self.values[0]
+
+        if target.bot:
+            await interaction.response.send_message(
+                "❌ 봇에게는 선물할 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        if target.id == interaction.user.id:
+            await interaction.response.send_message(
+                "❌ 자기 자신에게는 선물할 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer()
+
+        try:
+            success, result = (
+                await transfer_equipment_instance_by_id(
+                    from_user_id=interaction.user.id,
+                    to_user_id=target.id,
+                    equipment_id=self.equipment_id,
+                )
+            )
+
+        except Exception as error:
+            print(
+                "[장비 선물 오류] "
+                f"sender={interaction.user.id}, "
+                f"target={target.id}, "
+                f"equipment_id={self.equipment_id}, "
+                f"error={error}"
+            )
+
+            success = False
+            result = "장비 선물 처리 중 오류가 발생했습니다."
+
+        if not success:
+            await interaction.edit_original_response(
+                content=f"❌ {result}",
+                embed=None,
+                view=None,
+            )
+            return
+
+        await interaction.edit_original_response(
+            content=(
+                f"🎁 {interaction.user.mention} 님이 "
+                f"{target.mention} 님에게\n"
+                f"`{result['item_name']} "
+                f"+{result['enhance_level']}`을(를) "
+                "선물했습니다.\n"
+                f"내구도: "
+                f"`{result['durability']}/"
+                f"{result['max_durability']}`"
+            ),
+            embed=None,
+            view=None,
+        )
+
 
 class AdventureEquipmentSelect(discord.ui.Select):
     def __init__(
@@ -1368,6 +1676,21 @@ class AdventureEquipmentSelect(discord.ui.Select):
         view.add_item(
             AdventureEquipmentEquipButton(
                 equipment_id
+            )
+        )
+
+        view.add_item(
+            AdventureEquipmentDiscardButton(
+                equipment_id=equipment_id,
+                item_name=item_name,
+                enhance_level=int(enhance_level or 0),
+            )
+        )
+        view.add_item(
+            AdventureEquipmentGiftButton(
+                equipment_id=equipment_id,
+                item_name=item_name,
+                enhance_level=int(enhance_level or 0),
             )
         )
 

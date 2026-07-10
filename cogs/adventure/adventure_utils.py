@@ -274,6 +274,166 @@ async def transfer_equipment_instance(
 
     return True
 
+async def transfer_equipment_instance_by_id(
+    from_user_id: int,
+    to_user_id: int,
+    equipment_id: int,
+):
+    await ensure_adventure_profile(from_user_id)
+    await ensure_adventure_profile(to_user_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+
+            async with db.execute(
+                """
+                SELECT
+                    item_name,
+                    is_equipped,
+                    enhance_level,
+                    durability,
+                    max_durability
+                FROM adventure_equipment_instances
+                WHERE user_id = ?
+                AND equipment_id = ?
+                """,
+                (
+                    from_user_id,
+                    equipment_id,
+                ),
+            ) as cursor:
+                equipment_row = await cursor.fetchone()
+
+            if not equipment_row:
+                await db.rollback()
+                return False, "장비를 찾을 수 없습니다."
+
+            (
+                item_name,
+                is_equipped,
+                enhance_level,
+                durability,
+                max_durability,
+            ) = equipment_row
+
+            if item_name == "녹슨검":
+                await db.rollback()
+                return False, "기본 무기는 선물할 수 없습니다."
+
+            if is_equipped:
+                await db.rollback()
+                return False, "장착 중인 장비는 선물할 수 없습니다."
+
+            async with db.execute(
+                """
+                SELECT quantity
+                FROM adventure_inventory
+                WHERE user_id = ?
+                AND item_name = ?
+                """,
+                (
+                    from_user_id,
+                    item_name,
+                ),
+            ) as cursor:
+                inventory_row = await cursor.fetchone()
+
+            if (
+                not inventory_row
+                or int(inventory_row[0]) <= 0
+            ):
+                await db.rollback()
+                return (
+                    False,
+                    "인벤토리 수량과 장비 정보가 일치하지 않습니다.",
+                )
+
+            sender_quantity = int(
+                inventory_row[0]
+            )
+
+            if sender_quantity == 1:
+                await db.execute(
+                    """
+                    DELETE FROM adventure_inventory
+                    WHERE user_id = ?
+                    AND item_name = ?
+                    """,
+                    (
+                        from_user_id,
+                        item_name,
+                    ),
+                )
+            else:
+                await db.execute(
+                    """
+                    UPDATE adventure_inventory
+                    SET quantity = quantity - 1
+                    WHERE user_id = ?
+                    AND item_name = ?
+                    """,
+                    (
+                        from_user_id,
+                        item_name,
+                    ),
+                )
+
+            await db.execute(
+                """
+                INSERT INTO adventure_inventory (
+                    user_id,
+                    item_name,
+                    quantity
+                )
+                VALUES (?, ?, 1)
+                ON CONFLICT(user_id, item_name)
+                DO UPDATE SET
+                    quantity = quantity + 1
+                """,
+                (
+                    to_user_id,
+                    item_name,
+                ),
+            )
+
+            cursor = await db.execute(
+                """
+                UPDATE adventure_equipment_instances
+                SET user_id = ?,
+                    is_equipped = 0
+                WHERE user_id = ?
+                AND equipment_id = ?
+                AND is_equipped = 0
+                """,
+                (
+                    to_user_id,
+                    from_user_id,
+                    equipment_id,
+                ),
+            )
+
+            if cursor.rowcount != 1:
+                await db.rollback()
+                return False, "장비 이전에 실패했습니다."
+
+            await db.commit()
+
+        except Exception:
+            await db.rollback()
+            raise
+
+    return (
+        True,
+        {
+            "equipment_id": equipment_id,
+            "item_name": item_name,
+            "enhance_level": int(enhance_level or 0),
+            "durability": int(durability),
+            "max_durability": int(max_durability),
+        },
+    )
+
 async def add_adventure_item(user_id: int, item_name: str, quantity: int = 1):
     if quantity <= 0:
         return
@@ -520,11 +680,123 @@ async def get_adventure_inventory(user_id: int):
         ORDER BY items.category, ai.item_name
         """, (user_id,)) as cursor:
             return await cursor.fetchall()
-        
+
+async def cleanup_orphan_equipment_instances(
+    user_id: int,
+):
+    """
+    adventure_inventory의 장비 수량보다
+    equipment_instances가 더 많은 경우,
+    초과 장비 인스턴스를 삭제합니다.
+
+    유지 우선순위:
+    1. 장착 중인 장비
+    2. 강화수치가 높은 장비
+    3. 내구도가 높은 장비
+    4. 먼저 생성된 장비
+    """
+    await ensure_adventure_profile(user_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        # 사용자가 가진 장비 인스턴스의 장비 이름 목록
+        async with db.execute(
+            """
+            SELECT DISTINCT item_name
+            FROM adventure_equipment_instances
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ) as cursor:
+            equipment_names = [
+                row[0]
+                for row in await cursor.fetchall()
+            ]
+
+        for item_name in equipment_names:
+            # 기본 녹슨검은 인벤토리 수량과 무관하게 1개 유지
+            if item_name == "녹슨검":
+                allowed_quantity = 1
+            else:
+                async with db.execute(
+                    """
+                    SELECT quantity
+                    FROM adventure_inventory
+                    WHERE user_id = ?
+                    AND item_name = ?
+                    """,
+                    (
+                        user_id,
+                        item_name,
+                    ),
+                ) as cursor:
+                    inventory_row = await cursor.fetchone()
+
+                allowed_quantity = (
+                    int(inventory_row[0])
+                    if inventory_row
+                    else 0
+                )
+
+            # 유지할 장비를 우선순위대로 조회
+            async with db.execute(
+                """
+                SELECT equipment_id
+                FROM adventure_equipment_instances
+                WHERE user_id = ?
+                AND item_name = ?
+                ORDER BY
+                    is_equipped DESC,
+                    enhance_level DESC,
+                    durability DESC,
+                    equipment_id ASC
+                """,
+                (
+                    user_id,
+                    item_name,
+                ),
+            ) as cursor:
+                instance_rows = await cursor.fetchall()
+
+            instance_ids = [
+                int(row[0])
+                for row in instance_rows
+            ]
+
+            # 인벤토리 수량을 초과한 인스턴스
+            delete_ids = instance_ids[
+                allowed_quantity:
+            ]
+
+            if not delete_ids:
+                continue
+
+            placeholders = ",".join(
+                "?"
+                for _ in delete_ids
+            )
+
+            await db.execute(
+                f"""
+                DELETE FROM adventure_equipment_instances
+                WHERE user_id = ?
+                AND equipment_id IN ({placeholders})
+                """,
+                (
+                    user_id,
+                    *delete_ids,
+                ),
+            )
+
+        await db.commit()
+
 async def get_user_equipment_instances(
     user_id: int,
 ):
     await ensure_adventure_profile(user_id)
+
+    await cleanup_orphan_equipment_instances(
+        user_id
+    )
 
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("""
