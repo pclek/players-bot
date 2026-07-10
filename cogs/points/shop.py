@@ -12,11 +12,9 @@ from cogs.adventure.adventure_utils import (
     is_user_dead,
     format_dead_until,
     equip_equipment_instance,
-    get_equipment_instance_enhance_level,
     remove_equipment_instance,
     get_user_max_hp,
     is_user_in_battle,
-    transfer_equipment_instance,
     cleanup_orphan_equipment_instances,
     transfer_equipment_instance_by_id,
     EQUIPMENT_NAMES,
@@ -2143,7 +2141,6 @@ class AdventureItemGiftButton(discord.ui.Button):
             view=view,
         )
 
-
 class AdventureItemGiftUserSelect(discord.ui.UserSelect):
     def __init__(self, item_name: str):
         super().__init__(
@@ -2151,9 +2148,13 @@ class AdventureItemGiftUserSelect(discord.ui.UserSelect):
             min_values=1,
             max_values=1,
         )
+
         self.item_name = item_name
 
-    async def callback(self, interaction: discord.Interaction):
+    async def callback(
+        self,
+        interaction: discord.Interaction,
+    ):
         target = self.values[0]
 
         if target.bot:
@@ -2170,45 +2171,43 @@ class AdventureItemGiftUserSelect(discord.ui.UserSelect):
             )
             return
 
+        # 장비는 장비 전용 선물 화면에서만 처리
         if self.item_name in EQUIPMENT_NAMES:
-            success = await transfer_equipment_instance(
-                interaction.user.id,
-                target.id,
-                self.item_name,
+            await interaction.response.send_message(
+                "❌ 장비는 장비 목록에서 개별 장비를 선택해 "
+                "선물해주세요.",
+                ephemeral=True,
             )
+            return
 
-            if not success:
-                await interaction.response.send_message(
-                    "❌ 선물할 수 있는 미장착 장비를 찾을 수 없습니다.",
-                    ephemeral=True,
-                )
-                return
-
-        else:
-            success = await remove_adventure_item(
-                interaction.user.id,
-                self.item_name,
-                1,
-            )
-
-            if not success:
-                await interaction.response.send_message(
-                    "❌ 아이템을 찾을 수 없거나 수량이 부족합니다.",
-                    ephemeral=True,
-                )
-                return
-
-            await add_adventure_item(
-                target.id,
-                self.item_name,
-                1,
-            )
-
-        await interaction.response.send_message(
-            f"🎁 {interaction.user.mention} 님이 {target.mention} 님에게 "
-            f"`{self.item_name}` 1개를 선물했습니다.",
+        success = await remove_adventure_item(
+            interaction.user.id,
+            self.item_name,
+            1,
         )
 
+        if not success:
+            await interaction.response.send_message(
+                "❌ 아이템을 찾을 수 없거나 수량이 부족합니다.",
+                ephemeral=True,
+            )
+            return
+
+        await add_adventure_item(
+            target.id,
+            self.item_name,
+            1,
+        )
+
+        await interaction.response.edit_message(
+            content=(
+                f"🎁 {interaction.user.mention} 님이 "
+                f"{target.mention} 님에게 "
+                f"`{self.item_name}` 1개를 선물했습니다."
+            ),
+            embed=None,
+            view=None,
+        )
 
 class AdventureInventoryManageView(discord.ui.View):
     def __init__(self, rows, profile):

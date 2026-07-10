@@ -582,7 +582,6 @@ async def remove_adventure_item(user_id: int, item_name: str, quantity: int = 1)
 
     return True
 
-
 async def remove_equipment_instance(
     user_id: int,
     equipment_id: int,
@@ -590,63 +589,112 @@ async def remove_equipment_instance(
     await ensure_adventure_profile(user_id)
 
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("""
-        SELECT item_name, is_equipped
-        FROM adventure_equipment_instances
-        WHERE equipment_id = ?
-        AND user_id = ?
-        """, (
-            equipment_id,
-            user_id,
-        )) as cursor:
-            row = await cursor.fetchone()
+        try:
+            await db.execute("BEGIN IMMEDIATE")
 
-        if not row:
-            return None
+            async with db.execute(
+                """
+                SELECT
+                    item_name,
+                    is_equipped
+                FROM adventure_equipment_instances
+                WHERE equipment_id = ?
+                AND user_id = ?
+                """,
+                (
+                    equipment_id,
+                    user_id,
+                ),
+            ) as cursor:
+                row = await cursor.fetchone()
 
-        item_name, is_equipped = row
+            if not row:
+                await db.rollback()
+                return None
 
-        await db.execute("""
-        DELETE FROM adventure_equipment_instances
-        WHERE equipment_id = ?
-        AND user_id = ?
-        """, (
-            equipment_id,
-            user_id,
-        ))
+            item_name, is_equipped = row
 
-        if item_name in WEAPON_NAMES:
-            if item_name != "녹슨검":
-                await remove_adventure_item(user_id, item_name, 1)
-
-            if is_equipped:
-                await db.execute("""
-                UPDATE adventure_profiles
-                SET equipped_weapon = '녹슨검'
-                WHERE user_id = ?
-                """, (user_id,))
-
-                await db.execute("""
-                UPDATE adventure_equipment_instances
-                SET is_equipped = 1
-                WHERE user_id = ?
-                AND item_name = '녹슨검'
-                """, (user_id,))
-
-        elif item_name in ARMOR_NAMES:
-            await remove_adventure_item(user_id, item_name, 1)
+            if item_name == "녹슨검":
+                await db.rollback()
+                return None
 
             if is_equipped:
-                await db.execute("""
-                UPDATE adventure_profiles
-                SET equipped_armor = ''
-                WHERE user_id = ?
-                """, (user_id,))
+                await db.rollback()
+                return None
 
-        await db.commit()
+            # 선택한 장비 인스턴스 삭제
+            cursor = await db.execute(
+                """
+                DELETE FROM adventure_equipment_instances
+                WHERE equipment_id = ?
+                AND user_id = ?
+                AND is_equipped = 0
+                """,
+                (
+                    equipment_id,
+                    user_id,
+                ),
+            )
+
+            if cursor.rowcount != 1:
+                await db.rollback()
+                return None
+
+            # 통합 인벤토리 수량 확인
+            async with db.execute(
+                """
+                SELECT quantity
+                FROM adventure_inventory
+                WHERE user_id = ?
+                AND item_name = ?
+                """,
+                (
+                    user_id,
+                    item_name,
+                ),
+            ) as cursor:
+                inventory_row = await cursor.fetchone()
+
+            if not inventory_row:
+                await db.rollback()
+                return None
+
+            current_quantity = int(inventory_row[0])
+
+            # 이름별 총수량도 1개 차감
+            if current_quantity <= 1:
+                await db.execute(
+                    """
+                    DELETE FROM adventure_inventory
+                    WHERE user_id = ?
+                    AND item_name = ?
+                    """,
+                    (
+                        user_id,
+                        item_name,
+                    ),
+                )
+            else:
+                await db.execute(
+                    """
+                    UPDATE adventure_inventory
+                    SET quantity = quantity - 1
+                    WHERE user_id = ?
+                    AND item_name = ?
+                    """,
+                    (
+                        user_id,
+                        item_name,
+                    ),
+                )
+
+            await db.commit()
+
+        except Exception:
+            await db.rollback()
+            raise
 
     return item_name
-
 
 async def get_adventure_item_count(user_id: int, item_name: str) -> int:
     await ensure_adventure_profile(user_id)
