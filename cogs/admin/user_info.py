@@ -16,6 +16,7 @@ from cogs.adventure.adventure_utils import (
     get_user_max_hp,
     get_user_equipment_instances,
     set_user_hp,
+    sync_equipment_inventory,
     EQUIPMENT_NAMES,
 )
 
@@ -909,6 +910,41 @@ class AdminUserInfoView(discord.ui.View):
             embed=embed,
             ephemeral=True,
         )
+
+    @discord.ui.button(
+        label="장비 동기화",
+        style=discord.ButtonStyle.danger,
+    )
+    async def sync_equipment(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+
+        if not await is_bot_admin(interaction):
+            await interaction.response.send_message(
+                "권한이 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        result = await sync_equipment_inventory(
+            self.target.id
+        )
+
+        if not result:
+            text = "장비가 없습니다."
+
+        else:
+            text = "\n".join(
+                f"{k} x{v}"
+                for k, v in result.items()
+            )
+
+        await interaction.response.send_message(
+            f"✅ 장비 인벤토리를 동기화했습니다.\n\n{text}",
+            ephemeral=True,
+        )    
 
     @discord.ui.button(
         label="모험 아이템 +",

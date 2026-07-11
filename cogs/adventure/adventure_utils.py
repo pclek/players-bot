@@ -1594,3 +1594,65 @@ async def end_user_battle(user_id: int):
         WHERE user_id = ?
         """, (user_id,))
         await db.commit()
+
+async def sync_equipment_inventory(user_id: int):
+    """
+    equipment_instances를 기준으로
+    adventure_inventory의 장비 수량을 다시 맞춘다.
+    """
+
+    await ensure_adventure_profile(user_id)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+
+        # 실제 장비 개수
+        async with db.execute("""
+        SELECT
+            item_name,
+            COUNT(*)
+        FROM adventure_equipment_instances
+        WHERE user_id = ?
+        GROUP BY item_name
+        """, (user_id,)) as cursor:
+
+            equipment_counts = {
+                row[0]: row[1]
+                for row in await cursor.fetchall()
+            }
+
+        # inventory의 장비 삭제
+        placeholders = ",".join(
+            "?"
+            for _ in EQUIPMENT_NAMES
+        )
+
+        await db.execute(f"""
+        DELETE FROM adventure_inventory
+        WHERE user_id = ?
+        AND item_name IN ({placeholders})
+        """,
+        (
+            user_id,
+            *EQUIPMENT_NAMES,
+        ))
+
+        # 다시 삽입
+        for item_name, count in equipment_counts.items():
+
+            await db.execute("""
+            INSERT INTO adventure_inventory(
+                user_id,
+                item_name,
+                quantity
+            )
+            VALUES(?, ?, ?)
+            """,
+            (
+                user_id,
+                item_name,
+                count,
+            ))
+
+        await db.commit()
+
+    return equipment_counts
