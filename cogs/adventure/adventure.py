@@ -835,6 +835,8 @@ def get_job_name(job_type: str) -> str:
         return "요리"
     if job_type == "blacksmith":
         return "대장간"
+    if job_type == "alchemy":
+        return "연금술"
     if job_type == "equipment":
         return "장착"
     return "알 수 없음"
@@ -1220,6 +1222,12 @@ class Adventure(commands.Cog):
         embed.add_field(
             name="⚒️ 대장간",
             value="제련, 장비 제작, 수리를 진행합니다.",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="⚗️ 연금술",
+            value="하위 광석을 상위 광석으로 변환합니다.",
             inline=False,
         )
 
