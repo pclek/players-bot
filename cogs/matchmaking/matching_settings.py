@@ -7,15 +7,6 @@ from utils.checks import is_bot_admin
 
 DB_PATH = "database/bot.db"
 
-async def ensure_matching_announcement_table():
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS matching_announcement_channels (
-            guild_id INTEGER PRIMARY KEY,
-            channel_id INTEGER NOT NULL
-        )
-        """)
-        await db.commit()
 
 def make_matching_settings_embed():
     return discord.Embed(
@@ -116,50 +107,6 @@ class WaitingRoomRemoveSelect(discord.ui.ChannelSelect):
             view=view,
         )
 
-class MatchingAnnouncementChannelSelect(discord.ui.ChannelSelect):
-    def __init__(self):
-        super().__init__(
-            placeholder="매칭 알림을 표시할 채널을 선택하세요.",
-            channel_types=[
-                discord.ChannelType.text,
-                discord.ChannelType.news,
-            ],
-            min_values=1,
-            max_values=1,
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        channel = self.values[0]
-
-        await ensure_matching_announcement_table()
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("""
-            INSERT INTO matching_announcement_channels (
-                guild_id,
-                channel_id
-            )
-            VALUES (?, ?)
-            ON CONFLICT(guild_id)
-            DO UPDATE SET channel_id = excluded.channel_id
-            """, (
-                interaction.guild.id,
-                channel.id,
-            ))
-
-            await db.commit()
-
-        view = discord.ui.View(timeout=60)
-        view.add_item(MatchingSettingsBackButton())
-
-        await interaction.response.edit_message(
-            content=(
-                f"✅ 매칭 알림 채널을 {channel.mention}으로 설정했습니다.\n"
-                "앞으로 새 매칭 대기열이 해당 채널에 표시됩니다."
-            ),
-            embed=None,
-            view=view,
-        )
 
 class MatchingSettingsSelect(discord.ui.Select):
     def __init__(self):
@@ -178,11 +125,6 @@ class MatchingSettingsSelect(discord.ui.Select):
                 label="대기실 목록 조회",
                 description="현재 등록된 매칭 대기실 목록을 확인합니다.",
                 value="list",
-            ),
-            discord.SelectOption(
-                label="매칭 알림 채널 설정",
-                description="매칭 대기열이 표시될 채널을 설정합니다.",
-                value="announcement",
             ),
         ]
 
@@ -215,18 +157,6 @@ class MatchingSettingsSelect(discord.ui.Select):
 
             await interaction.response.edit_message(
                 content="➖ 제거할 매칭 대기실 음성채널을 선택하세요.",
-                embed=None,
-                view=view,
-            )
-            return
-        
-        if selected == "announcement":
-            view = discord.ui.View(timeout=60)
-            view.add_item(MatchingAnnouncementChannelSelect())
-            view.add_item(MatchingSettingsBackButton())
-
-            await interaction.response.edit_message(
-                content="📢 매칭 대기열을 표시할 채널을 선택하세요.",
                 embed=None,
                 view=view,
             )
@@ -309,9 +239,6 @@ class MatchingSettingsView(discord.ui.View):
 class MatchingSettings(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-
-    async def cog_load(self):
-        await ensure_matching_announcement_table()
 
     @app_commands.command(name="매칭설정", description="매칭 대기실을 관리합니다.")
     async def matching_settings(self, interaction: discord.Interaction):

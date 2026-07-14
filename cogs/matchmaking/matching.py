@@ -24,14 +24,6 @@ async def ensure_matching_tables():
             status TEXT DEFAULT 'queue'
         )
         """)
-
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS matching_waiting_room_names (
-            channel_id INTEGER PRIMARY KEY,
-            original_name TEXT NOT NULL
-        )
-        """)
-
         await db.commit()
 
 
@@ -136,165 +128,6 @@ async def is_waiting_room(channel_id: int) -> bool:
 
     return row is not None
 
-async def save_original_waiting_room_name(
-    channel: discord.VoiceChannel,
-):
-    """
-    매칭이 처음 시작될 때 대기실의 원래 이름을 저장합니다.
-    이미 저장되어 있다면 덮어쓰지 않습니다.
-    """
-    await ensure_matching_tables()
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-        INSERT OR IGNORE INTO matching_waiting_room_names (
-            channel_id,
-            original_name
-        )
-        VALUES (?, ?)
-        """, (
-            channel.id,
-            channel.name,
-        ))
-
-        await db.commit()
-
-
-async def get_original_waiting_room_name(
-    channel_id: int,
-) -> str | None:
-    await ensure_matching_tables()
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("""
-        SELECT original_name
-        FROM matching_waiting_room_names
-        WHERE channel_id = ?
-        """, (channel_id,)) as cursor:
-            row = await cursor.fetchone()
-
-    if not row:
-        return None
-
-    return row[0]
-
-
-async def get_waiting_room_active_games(
-    channel_id: int,
-):
-    """
-    해당 매칭 대기실에서 진행 중인 게임을
-    처음 매칭이 생성된 순서대로 가져옵니다.
-    """
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("""
-        SELECT game_name, MIN(rowid) AS first_queue_row
-        FROM matching_queue
-        WHERE voice_channel_id = ?
-        GROUP BY game_name
-        ORDER BY first_queue_row ASC
-        """, (channel_id,)) as cursor:
-            return await cursor.fetchall()
-
-
-async def update_waiting_room_name(
-    channel: discord.VoiceChannel,
-):
-    """
-    활성 매칭 목록에 따라 매칭 대기실 이름을 갱신합니다.
-
-    예:
-    롤
-    롤 외 1개
-    롤 외 2개
-    """
-    if not await is_waiting_room(channel.id):
-        return
-
-    active_games = await get_waiting_room_active_games(channel.id)
-
-    if active_games:
-        await save_original_waiting_room_name(channel)
-
-        first_game = active_games[0][0]
-        extra_count = len(active_games) - 1
-
-        if extra_count > 0:
-            new_name = f"{first_game} 외 {extra_count}개 매칭중"
-        else:
-            new_name = f"{first_game} 매칭중"
-
-    else:
-        original_name = await get_original_waiting_room_name(channel.id)
-
-        if not original_name:
-            return
-
-        new_name = original_name
-
-    # 이름이 실제로 달라질 때만 디스코드에 수정 요청합니다.
-    if channel.name == new_name:
-        return
-
-    try:
-        await channel.edit(
-            name=new_name[:100],
-            reason="매칭 대기열 상태에 따른 채널 이름 변경",
-        )
-
-    except discord.Forbidden:
-        print(
-            f"[Matching] 채널 이름 변경 권한 없음: "
-            f"{channel.name} ({channel.id})"
-        )
-
-    except discord.HTTPException as e:
-        print(
-            f"[Matching] 채널 이름 변경 실패: "
-            f"{channel.name} ({channel.id}) / {e}"
-        )
-
-
-async def update_all_waiting_room_names(
-    guild: discord.Guild,
-):
-    """
-    서버에 등록된 모든 매칭 대기실 이름을 갱신합니다.
-    """
-    waiting_rooms = await get_waiting_room_channels(guild)
-
-    for waiting_room in waiting_rooms:
-        await update_waiting_room_name(waiting_room)
-
-async def get_matching_announcement_channel(
-    guild: discord.Guild,
-) -> discord.TextChannel | None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS matching_announcement_channels (
-            guild_id INTEGER PRIMARY KEY,
-            channel_id INTEGER NOT NULL
-        )
-        """)
-
-        async with db.execute("""
-        SELECT channel_id
-        FROM matching_announcement_channels
-        WHERE guild_id = ?
-        """, (guild.id,)) as cursor:
-            row = await cursor.fetchone()
-
-        await db.commit()
-
-    if not row:
-        return None
-
-    channel = guild.get_channel(row[0])
-
-    if isinstance(channel, discord.TextChannel):
-        return channel
-
-    return None
 
 async def get_queue_members(game_name: str):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -590,8 +423,6 @@ class MatchingQueueView(discord.ui.View):
             ))
             await db.commit()
 
-        await update_all_waiting_room_names(interaction.guild)    
-
         await process_queue_message(
             bot=interaction.client,
             guild=interaction.guild,
@@ -651,8 +482,6 @@ class MatchingQueueView(discord.ui.View):
                     waiting_room_url,
                 ),
             )
-
-        await update_all_waiting_room_names(interaction.guild)
 
         await interaction.response.send_message(
             "✅ 매칭 큐 참가를 취소했습니다.",
@@ -721,8 +550,6 @@ class MatchingGameSelect(discord.ui.Select):
 
             await db.commit()
 
-        await update_all_waiting_room_names(interaction.guild)
-
         members = await cleanup_queue_members(interaction.guild, game_name)
 
         try:
@@ -758,68 +585,23 @@ class MatchingGameSelect(discord.ui.Select):
             match_size,
         )
 
-        waiting_room_url = await create_waiting_room_invite_url(
-            interaction.guild
-        )
-
-        announcement_channel = await get_matching_announcement_channel(
-            interaction.guild
-        )
-
-        if not announcement_channel:
-            await interaction.response.send_message(
-                (
-                    "❌ 매칭 알림 채널이 설정되어 있지 않습니다.\n"
-                    "`/매칭설정`에서 **매칭 알림 채널 설정**을 먼저 해주세요."
-                ),
-                ephemeral=True,
-            )
-            return
-
-        try:
-            message = await announcement_channel.send(
-                content="🎮 새로운 매칭이 등록되었습니다.",
-                embed=embed,
-                view=MatchingQueueView(
-                    game_name,
-                    match_size,
-                    waiting_room_url,
-                ),
-            )
-
-        except discord.Forbidden:
-            await interaction.response.send_message(
-                (
-                    f"❌ {announcement_channel.mention} 채널에 메시지를 보낼 권한이 없습니다.\n"
-                    "봇에게 `채널 보기`, `메시지 보내기`, `링크 첨부` 권한을 부여해주세요."
-                ),
-                ephemeral=True,
-            )
-            return
-
-        except discord.HTTPException:
-            await interaction.response.send_message(
-                "❌ 매칭 알림 메시지를 전송하는 중 오류가 발생했습니다.",
-                ephemeral=True,
-            )
-            return
-
-        await save_queue_post(
-            message.id,
-            message.channel.id,
-            game_name,
-            match_size,
-        )
+        waiting_room_url = await create_waiting_room_invite_url(interaction.guild)
 
         await interaction.response.send_message(
-            (
-                f"✅ `{game_name}` 매칭 큐에 참가했습니다.\n"
-                f"매칭 대기열이 {announcement_channel.mention}에 등록되었습니다."
-            ),
-            ephemeral=True,
+            content=f"✅ `{game_name}` 매칭 큐에 참가했습니다.",
+            embed=embed,
+            view=MatchingQueueView(game_name, match_size, waiting_room_url),
         )
 
         try:
+            message = await interaction.original_response()
+            await save_queue_post(
+                message.id,
+                message.channel.id,
+                game_name,
+                match_size,
+            )
+
             await process_queue_message(
                 bot=interaction.client,
                 guild=interaction.guild,
@@ -828,7 +610,7 @@ class MatchingGameSelect(discord.ui.Select):
                 match_size=match_size,
                 interaction=None,
             )
-        except discord.HTTPException:
+        except Exception:
             pass
 
 
@@ -926,8 +708,6 @@ async def process_queue_message(
         )
         await delete_queue_post_record(message.id)
 
-        await update_all_waiting_room_names(guild)
-
         if interaction and not interaction.response.is_done():
             await interaction.response.send_message(
                 "✅ 매칭 큐 상태가 갱신되었습니다.",
@@ -957,7 +737,6 @@ async def process_queue_message(
                 ))
 
             await db.commit()
-        await update_all_waiting_room_names(guild)
 
         invite_url = None
 
@@ -1036,17 +815,8 @@ class Matching(commands.Cog):
         await ensure_matching_tables()
         await ensure_sticky_schema()
 
-        self.bot.add_view(make_sticky_view("matching"))    
-
-    @commands.Cog.listener()
-    async def on_ready(self):
-        for guild in self.bot.guilds:
-            await update_all_waiting_room_names(guild)
-
-    async def ensure_waiting_room_sticky(
-        self,
-        channel: discord.VoiceChannel,
-    ):
+    async def ensure_waiting_room_sticky(self, channel: discord.VoiceChannel):
+        """매칭 대기실의 음성채널 전용 채팅 하단에 /매칭 스티키를 유지합니다."""
         if channel.id in self.matching_sticky_channels:
             return
 
@@ -1070,7 +840,6 @@ class Matching(commands.Cog):
 
                 if row:
                     sticky_id, old_message_id = row
-
                     await db.execute(
                         """
                         UPDATE sticky_messages
@@ -1086,19 +855,13 @@ class Matching(commands.Cog):
                             sticky_id,
                         ),
                     )
-
                 else:
                     old_message_id = None
-
                     cursor = await db.execute(
                         """
                         INSERT INTO sticky_messages (
-                            channel_id,
-                            title,
-                            message,
-                            recruit_button,
-                            button_actions,
-                            last_message_id
+                            channel_id, title, message, recruit_button,
+                            button_actions, last_message_id
                         )
                         VALUES (?, ?, ?, 0, 'matching', NULL)
                         """,
@@ -1108,18 +871,14 @@ class Matching(commands.Cog):
                             self.MATCHING_STICKY_TEXT,
                         ),
                     )
-
                     sticky_id = cursor.lastrowid
 
                 await db.commit()
 
             if old_message_id:
                 try:
-                    old_message = await channel.fetch_message(
-                        old_message_id
-                    )
+                    old_message = await channel.fetch_message(old_message_id)
                     await old_message.delete()
-
                 except discord.HTTPException:
                     pass
 
@@ -1128,7 +887,7 @@ class Matching(commands.Cog):
                     self.MATCHING_STICKY_TITLE,
                     self.MATCHING_STICKY_TEXT,
                 ),
-                view=make_sticky_view("matching"),
+                view=make_sticky_view('matching'),
             )
 
             async with aiosqlite.connect(DB_PATH) as db:
@@ -1138,24 +897,14 @@ class Matching(commands.Cog):
                     SET last_message_id = ?
                     WHERE id = ?
                     """,
-                    (
-                        new_message.id,
-                        sticky_id,
-                    ),
+                    (new_message.id, sticky_id),
                 )
-
                 await db.commit()
 
         except (discord.Forbidden, discord.HTTPException) as e:
-            print(
-                f"[MatchingSticky] 채널 {channel.id} 전송 실패: {e}"
-            )
-
+            print(f"[MatchingSticky] 채널 {channel.id} 전송 실패: {e}")
         except aiosqlite.Error as e:
-            print(
-                f"[MatchingSticky] DB 처리 실패: {e}"
-            )
-
+            print(f"[MatchingSticky] DB 처리 실패: {e}")
         finally:
             self.matching_sticky_channels.discard(channel.id)
 
@@ -1205,13 +954,11 @@ class Matching(commands.Cog):
 
         if before.channel == after.channel:
             return
-        if (
-            after.channel
-            and await is_waiting_room(after.channel.id)
-        ):
-            await self.ensure_waiting_room_sticky(
-                after.channel
-            )
+
+        # 등록된 매칭 대기실에 입장하면 음성채널 전용 채팅에
+        # /매칭 버튼 스티키를 즉시 생성하거나 하단으로 다시 올립니다.
+        if after.channel and await is_waiting_room(after.channel.id):
+            await self.ensure_waiting_room_sticky(after.channel)
 
         if before.channel is None:
             return
@@ -1219,21 +966,7 @@ class Matching(commands.Cog):
         if not await is_waiting_room(before.channel.id):
             return
 
-        # 매칭 대기실 A에서 매칭 대기실 B로 이동한 경우
         if after.channel and await is_waiting_room(after.channel.id):
-            async with aiosqlite.connect(DB_PATH) as db:
-                await db.execute("""
-                UPDATE matching_queue
-                SET voice_channel_id = ?
-                WHERE user_id = ?
-                """, (
-                    after.channel.id,
-                    member.id,
-                ))
-
-                await db.commit()
-
-            await update_all_waiting_room_names(member.guild)
             return
 
         await remove_user_from_all_queues(member.id)
@@ -1266,8 +999,6 @@ class Matching(commands.Cog):
                 )
             except discord.HTTPException:
                 await delete_queue_post_record(message_id)
-
-        await update_all_waiting_room_names(member.guild)        
 
     @app_commands.command(name="매칭", description="게임 매칭 큐에 참가합니다.")
     async def matching(self, interaction: discord.Interaction):
