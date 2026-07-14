@@ -1036,16 +1036,12 @@ class Matching(commands.Cog):
         await ensure_matching_tables()
         await ensure_sticky_schema()
 
-    @commands.Cog.listener()
-    async def on_ready(self):
-        for guild in self.bot.guilds:
-            await update_all_waiting_room_names(guild)
+        self.bot.add_view(make_sticky_view("matching"))    
 
     @commands.Cog.listener()
     async def on_ready(self):
         for guild in self.bot.guilds:
             await update_all_waiting_room_names(guild)
-
 
     async def ensure_waiting_room_sticky(
         self,
