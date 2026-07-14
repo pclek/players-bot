@@ -3,6 +3,12 @@ from discord import app_commands
 from discord.ext import commands
 import aiosqlite
 
+from cogs.sticky.sticky import (
+    ensure_sticky_schema,
+    make_sticky_embed,
+    make_sticky_view,
+)
+
 DB_PATH = "database/bot.db"
 
 
@@ -795,11 +801,135 @@ async def process_queue_message(
 
 
 class Matching(commands.Cog):
+    MATCHING_STICKY_TITLE = "🎮 매칭 안내"
+    MATCHING_STICKY_TEXT = (
+        "아래 **⚔️ 매칭** 버튼을 누르거나 `/매칭` 명령어를 사용해 "
+        "게임 매칭 대기열에 참가할 수 있습니다."
+    )
+
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.matching_sticky_channels = set()
 
     async def cog_load(self):
         await ensure_matching_tables()
+        await ensure_sticky_schema()
+
+    async def ensure_waiting_room_sticky(
+        self,
+        channel: discord.VoiceChannel,
+    ):
+        if channel.id in self.matching_sticky_channels:
+            return
+
+        self.matching_sticky_channels.add(channel.id)
+
+        try:
+            await ensure_sticky_schema()
+
+            async with aiosqlite.connect(DB_PATH) as db:
+                async with db.execute(
+                    """
+                    SELECT id, last_message_id
+                    FROM sticky_messages
+                    WHERE channel_id = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (channel.id,),
+                ) as cursor:
+                    row = await cursor.fetchone()
+
+                if row:
+                    sticky_id, old_message_id = row
+
+                    await db.execute(
+                        """
+                        UPDATE sticky_messages
+                        SET title = ?,
+                            message = ?,
+                            recruit_button = 0,
+                            button_actions = 'matching'
+                        WHERE id = ?
+                        """,
+                        (
+                            self.MATCHING_STICKY_TITLE,
+                            self.MATCHING_STICKY_TEXT,
+                            sticky_id,
+                        ),
+                    )
+
+                else:
+                    old_message_id = None
+
+                    cursor = await db.execute(
+                        """
+                        INSERT INTO sticky_messages (
+                            channel_id,
+                            title,
+                            message,
+                            recruit_button,
+                            button_actions,
+                            last_message_id
+                        )
+                        VALUES (?, ?, ?, 0, 'matching', NULL)
+                        """,
+                        (
+                            channel.id,
+                            self.MATCHING_STICKY_TITLE,
+                            self.MATCHING_STICKY_TEXT,
+                        ),
+                    )
+
+                    sticky_id = cursor.lastrowid
+
+                await db.commit()
+
+            if old_message_id:
+                try:
+                    old_message = await channel.fetch_message(
+                        old_message_id
+                    )
+                    await old_message.delete()
+
+                except discord.HTTPException:
+                    pass
+
+            new_message = await channel.send(
+                embed=make_sticky_embed(
+                    self.MATCHING_STICKY_TITLE,
+                    self.MATCHING_STICKY_TEXT,
+                ),
+                view=make_sticky_view("matching"),
+            )
+
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute(
+                    """
+                    UPDATE sticky_messages
+                    SET last_message_id = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        new_message.id,
+                        sticky_id,
+                    ),
+                )
+
+                await db.commit()
+
+        except (discord.Forbidden, discord.HTTPException) as e:
+            print(
+                f"[MatchingSticky] 채널 {channel.id} 전송 실패: {e}"
+            )
+
+        except aiosqlite.Error as e:
+            print(
+                f"[MatchingSticky] DB 처리 실패: {e}"
+            )
+
+        finally:
+            self.matching_sticky_channels.discard(channel.id)
 
     @commands.Cog.listener()
     async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel):
@@ -847,6 +977,13 @@ class Matching(commands.Cog):
 
         if before.channel == after.channel:
             return
+        if (
+            after.channel
+            and await is_waiting_room(after.channel.id)
+        ):
+            await self.ensure_waiting_room_sticky(
+                after.channel
+            )
 
         if before.channel is None:
             return
