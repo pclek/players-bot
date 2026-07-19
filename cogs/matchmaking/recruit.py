@@ -49,6 +49,11 @@ def make_finished_recruit_embed(
         ),
         color=color,
     )
+    if old_embed and old_embed.thumbnail:
+        thumbnail_url = old_embed.thumbnail.url
+
+        if thumbnail_url:
+            embed.set_thumbnail(url=thumbnail_url)
 
     return embed
 
@@ -111,6 +116,13 @@ def make_recruit_embed(guild, game_name: str, host_id: int, voice_channel_id: in
         ),
         color=discord.Color.green(),
     )
+
+    host = guild.get_member(host_id)
+
+    if host:
+        embed.set_thumbnail(
+            url=host.display_avatar.url
+        )
 
     is_full = user_limit > 0 and len(current_members) >= user_limit
     return embed, is_full
