@@ -122,7 +122,6 @@ def make_recruit_members_embed(
     voice_channel_id: int,
 ):
     voice_channel = guild.get_channel(voice_channel_id)
-    user_limit = voice_channel.user_limit if voice_channel else 0
 
     current_members = []
 
@@ -141,16 +140,9 @@ def make_recruit_members_embed(
     return discord.Embed(
         title=f"👥 {game_name} 참여자 목록",
         description=(
-            f"👑 모집장: <@{host_id}>\n"
-            f"🎧 음성채널: <#{voice_channel_id}>\n"
-            f"👥 현재 참여자: `{len(current_members)}"
-            f"{f'/{user_limit}' if user_limit else ''}명`\n\n"
-            f"**현재 음성채널 참여자**\n"
-            + (
-                "\n".join(member_lines)
-                if member_lines
-                else "없음"
-            )
+            "\n".join(member_lines)
+            if member_lines
+            else "현재 참여자가 없습니다."
         ),
         color=discord.Color.blurple(),
     )
@@ -704,90 +696,166 @@ class RecruitMembersButton(discord.ui.Button):
 
         await interaction.response.send_message(
             embed=embed,
-            view=RecruitMembersPrivateView(
-                game_name=game_name,
-                host_id=host_id,
-                voice_channel_id=voice_channel_id,
+            ephemeral=True,
+        )
+
+
+class RecruitMemoModal(discord.ui.Modal):
+    def __init__(
+        self,
+        voice_channel_id: int,
+        role_id: int | None,
+        current_memo: str = "",
+    ):
+        super().__init__(title="파티 모집 메모")
+
+        self.voice_channel_id = voice_channel_id
+        self.role_id = role_id
+
+        self.memo = discord.ui.TextInput(
+            label="메모",
+            placeholder="예: 2자리 / 초보 환영 / 9시 출발",
+            default=current_memo[:200],
+            required=False,
+            max_length=200,
+            style=discord.TextStyle.short,
+        )
+
+        self.add_item(self.memo)
+
+    async def on_submit(
+        self,
+        interaction: discord.Interaction,
+    ):
+        memo = self.memo.value.strip()
+
+        role = (
+            interaction.guild.get_role(self.role_id)
+            if self.role_id
+            else None
+        )
+
+        content = role.mention if role else ""
+
+        if memo:
+            content = f"{content} [{memo}]".strip()
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                """
+                SELECT message_id, channel_id
+                FROM recruit_posts
+                WHERE voice_channel_id = ?
+                """,
+                (self.voice_channel_id,),
+            ) as cursor:
+                rows = await cursor.fetchall()
+
+        updated_count = 0
+
+        for message_id, channel_id in rows:
+            channel = interaction.guild.get_channel(
+                channel_id
+            )
+
+            if not channel:
+                continue
+
+            try:
+                message = await channel.fetch_message(
+                    message_id
+                )
+
+                await message.edit(
+                    content=content
+                )
+
+                updated_count += 1
+
+            except discord.HTTPException:
+                pass
+
+        await interaction.response.send_message(
+            (
+                "✅ 모집 메모를 수정했습니다. "
+                f"({updated_count}개 모집글)"
             ),
             ephemeral=True,
         )
 
-class RecruitMembersRefreshButton(discord.ui.Button):
-    def __init__(
-        self,
-        game_name: str,
-        host_id: int,
-        voice_channel_id: int,
-    ):
-        super().__init__(
-            label="🔄 새로고침",
-            style=discord.ButtonStyle.secondary,
-        )
 
-        self.game_name = game_name
-        self.host_id = host_id
-        self.voice_channel_id = voice_channel_id
-
-    async def callback(self, interaction: discord.Interaction):
-        embed = make_recruit_members_embed(
-            interaction.guild,
-            self.game_name,
-            self.host_id,
-            self.voice_channel_id,
-        )
-
-        await interaction.response.edit_message(
-            embed=embed,
-            view=RecruitMembersPrivateView(
-                game_name=self.game_name,
-                host_id=self.host_id,
-                voice_channel_id=self.voice_channel_id,
-            ),
-        )
-
-
-class RecruitMembersBackButton(discord.ui.Button):
+class RecruitMemoButton(discord.ui.Button):
     def __init__(self):
         super().__init__(
-            label="↩️ 돌아가기",
-            style=discord.ButtonStyle.primary,
+            label="📝 메모",
+            style=discord.ButtonStyle.secondary,
+            custom_id="recruit_memo",
         )
 
-    async def callback(self, interaction: discord.Interaction):
-        embed = discord.Embed(
-            title="👥 참여자 목록",
-            description=(
-                "참여자 목록 화면을 닫았습니다.\n\n"
-                "원래 모집글은 변경되지 않았으며 "
-                "채널에 그대로 표시되어 있습니다."
-            ),
-            color=discord.Color.dark_grey(),
-        )
-
-        await interaction.response.edit_message(
-            embed=embed,
-            view=None,
-        )
-
-
-class RecruitMembersPrivateView(discord.ui.View):
-    def __init__(
+    async def callback(
         self,
-        game_name: str,
-        host_id: int,
-        voice_channel_id: int,
+        interaction: discord.Interaction,
     ):
-        super().__init__(timeout=300)
+        message_id = interaction.message.id
 
-        self.add_item(
-            RecruitMembersRefreshButton(
-                game_name=game_name,
-                host_id=host_id,
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                """
+                SELECT game_name, host_id, voice_channel_id
+                FROM recruit_posts
+                WHERE message_id = ?
+                """,
+                (message_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+
+        if not row:
+            await interaction.response.send_message(
+                "❌ 모집 정보를 찾을 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        game_name, host_id, voice_channel_id = row
+
+        if interaction.user.id != host_id:
+            await interaction.response.send_message(
+                "❌ 모집장만 메모를 수정할 수 있습니다.",
+                ephemeral=True,
+            )
+            return
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                """
+                SELECT role_id
+                FROM game_settings
+                WHERE game_name = ?
+                """,
+                (game_name,),
+            ) as cursor:
+                game_row = await cursor.fetchone()
+
+        role_id = game_row[0] if game_row else None
+
+        current_memo = ""
+        content = interaction.message.content or ""
+
+        if "[" in content and content.rstrip().endswith("]"):
+            current_memo = (
+                content.rsplit("[", 1)[1]
+                .rsplit("]", 1)[0]
+                .strip()
+            )
+
+        await interaction.response.send_modal(
+            RecruitMemoModal(
                 voice_channel_id=voice_channel_id,
+                role_id=role_id,
+                current_memo=current_memo,
             )
         )
 
-        self.add_item(RecruitMembersBackButton())
 
 class RecruitPostView(discord.ui.View):
     def __init__(
@@ -817,8 +885,8 @@ class RecruitPostView(discord.ui.View):
             )
 
         self.add_item(RecruitMembersButton())
+        self.add_item(RecruitMemoButton())
         self.add_item(RecruitStartButton())
-        self.add_item(RecruitCloseButton())
 
 class RecruitGameSelect(discord.ui.Select):
     def __init__(self, games):
