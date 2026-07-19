@@ -366,24 +366,7 @@ async def update_recruit_group_messages(guild: discord.Guild, voice_channel_id: 
         try:
             message = await channel.fetch_message(message_id)
 
-            current_embed = message.embeds[0] if message.embeds else None
-
-            showing_members = (
-                current_embed is not None
-                and current_embed.title == f"👥 {game_name} 참여자 목록"
-            )
-
-            if showing_members:
-                updated_embed = make_recruit_members_embed(
-                    guild,
-                    game_name,
-                    host_id,
-                    voice_channel_id,
-                )
-            else:
-                updated_embed = embed
-
-            await message.edit(embed=updated_embed)
+            await message.edit(embed=embed)
 
         except discord.HTTPException:
             pass
@@ -684,7 +667,7 @@ class RecruitCloseButton(discord.ui.Button):
 class RecruitMembersButton(discord.ui.Button):
     def __init__(self):
         super().__init__(
-            label="👥 참여자 목록 보기",
+            label="👥 참여자 목록",
             style=discord.ButtonStyle.secondary,
             custom_id="recruit_members",
         )
@@ -719,89 +702,92 @@ class RecruitMembersButton(discord.ui.Button):
             voice_channel_id,
         )
 
-        await interaction.response.edit_message(
+        await interaction.response.send_message(
             embed=embed,
-            view=RecruitMembersView(),
+            view=RecruitMembersPrivateView(
+                game_name=game_name,
+                host_id=host_id,
+                voice_channel_id=voice_channel_id,
+            ),
+            ephemeral=True,
         )
 
-
-class RecruitBackButton(discord.ui.Button):
-    def __init__(self):
+class RecruitMembersRefreshButton(discord.ui.Button):
+    def __init__(
+        self,
+        game_name: str,
+        host_id: int,
+        voice_channel_id: int,
+    ):
         super().__init__(
-            label="↩️ 돌아가기",
-            style=discord.ButtonStyle.primary,
-            custom_id="recruit_back",
+            label="🔄 새로고침",
+            style=discord.ButtonStyle.secondary,
         )
+
+        self.game_name = game_name
+        self.host_id = host_id
+        self.voice_channel_id = voice_channel_id
 
     async def callback(self, interaction: discord.Interaction):
-        message_id = interaction.message.id
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute(
-                """
-                SELECT game_name, host_id, voice_channel_id
-                FROM recruit_posts
-                WHERE message_id = ?
-                """,
-                (message_id,),
-            ) as cursor:
-                row = await cursor.fetchone()
-
-        if not row:
-            await interaction.response.send_message(
-                "❌ 모집 정보를 찾을 수 없습니다.",
-                ephemeral=True,
-            )
-            return
-
-        game_name, host_id, voice_channel_id = row
-
-        embed, is_full = make_recruit_embed(
+        embed = make_recruit_members_embed(
             interaction.guild,
-            game_name,
-            host_id,
-            voice_channel_id,
+            self.game_name,
+            self.host_id,
+            self.voice_channel_id,
         )
-
-        invite_url = None
-
-        for action_row in interaction.message.components:
-            for component in action_row.children:
-                if getattr(component, "url", None):
-                    invite_url = component.url
-                    break
-
-            if invite_url:
-                break
-
-        if not invite_url:
-            voice_channel = interaction.guild.get_channel(
-                voice_channel_id
-            )
-
-            if isinstance(
-                voice_channel,
-                discord.VoiceChannel,
-            ):
-                invite_url = await create_recruit_invite_url(
-                    voice_channel
-                )
 
         await interaction.response.edit_message(
             embed=embed,
-            view=RecruitPostView(
-                is_full=is_full,
-                voice_channel_id=voice_channel_id,
-                guild_id=interaction.guild.id,
-                invite_url=invite_url,
+            view=RecruitMembersPrivateView(
+                game_name=self.game_name,
+                host_id=self.host_id,
+                voice_channel_id=self.voice_channel_id,
             ),
         )
 
 
-class RecruitMembersView(discord.ui.View):
+class RecruitMembersBackButton(discord.ui.Button):
     def __init__(self):
-        super().__init__(timeout=None)
-        self.add_item(RecruitBackButton())
+        super().__init__(
+            label="↩️ 돌아가기",
+            style=discord.ButtonStyle.primary,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="👥 참여자 목록",
+            description=(
+                "참여자 목록 화면을 닫았습니다.\n\n"
+                "원래 모집글은 변경되지 않았으며 "
+                "채널에 그대로 표시되어 있습니다."
+            ),
+            color=discord.Color.dark_grey(),
+        )
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=None,
+        )
+
+
+class RecruitMembersPrivateView(discord.ui.View):
+    def __init__(
+        self,
+        game_name: str,
+        host_id: int,
+        voice_channel_id: int,
+    ):
+        super().__init__(timeout=300)
+
+        self.add_item(
+            RecruitMembersRefreshButton(
+                game_name=game_name,
+                host_id=host_id,
+                voice_channel_id=voice_channel_id,
+            )
+        )
+
+        self.add_item(RecruitMembersBackButton())
 
 class RecruitPostView(discord.ui.View):
     def __init__(
