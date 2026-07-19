@@ -32,33 +32,22 @@ def make_finished_recruit_embed(
     title: str,
     status_text: str,
     color: discord.Color,
-    visitor_text: str = "없음",
 ):
-    if old_embed:
-        embed = old_embed.copy()
-    else:
-        embed = discord.Embed(color=color)
+    host_line = "👑 모집장: 알 수 없음"
 
-    embed.title = title
-    embed.color = color
+    if old_embed and old_embed.description:
+        for line in old_embed.description.splitlines():
+            if line.startswith("👑 모집장:"):
+                host_line = line
+                break
 
-    old_description = embed.description or "모집 정보가 남아있지 않습니다."
-
-    if "━━━━━━━━━━━━━━━━━━" in old_description:
-        old_description = old_description.split("━━━━━━━━━━━━━━━━━━")[0].rstrip()
-
-    if "\n\n**현재 참여자 목록**" in old_description:
-        old_description = old_description.split("\n\n**현재 참여자 목록**")[0].rstrip()
-
-    if "\n\n**참여자 목록**" in old_description:
-        old_description = old_description.split("\n\n**참여자 목록**")[0].rstrip()
-
-    embed.description = (
-        f"{old_description}\n\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"{status_text}\n\n"
-        f"**방문자 목록**\n"
-        f"{visitor_text}"
+    embed = discord.Embed(
+        title=title,
+        description=(
+            f"{host_line}\n\n"
+            f"{status_text}"
+        ),
+        color=color,
     )
 
     return embed
@@ -281,6 +270,71 @@ def make_visitor_text(guild: discord.Guild, visitors):
 
     return "\n".join(lines)
 
+async def save_finished_guestbook(
+    message_ids: list[int],
+    visitors,
+):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS recruit_guestbooks (
+                message_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                PRIMARY KEY (message_id, user_id)
+            )
+            """
+        )
+
+        for message_id in message_ids:
+            await db.execute(
+                """
+                DELETE FROM recruit_guestbooks
+                WHERE message_id = ?
+                """,
+                (message_id,),
+            )
+
+            for (user_id,) in visitors:
+                await db.execute(
+                    """
+                    INSERT OR IGNORE INTO recruit_guestbooks (
+                        message_id,
+                        user_id
+                    )
+                    VALUES (?, ?)
+                    """,
+                    (
+                        message_id,
+                        user_id,
+                    ),
+                )
+
+        await db.commit()
+
+
+async def get_finished_guestbook(message_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS recruit_guestbooks (
+                message_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                PRIMARY KEY (message_id, user_id)
+            )
+            """
+        )
+
+        async with db.execute(
+            """
+            SELECT user_id
+            FROM recruit_guestbooks
+            WHERE message_id = ?
+            ORDER BY rowid
+            """,
+            (message_id,),
+        ) as cursor:
+            return await cursor.fetchall()
+
 async def update_recruit_group_messages(guild: discord.Guild, voice_channel_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("""
@@ -334,6 +388,115 @@ async def update_recruit_group_messages(guild: discord.Guild, voice_channel_id: 
         except discord.HTTPException:
             pass
 
+class FinishedGuestbookBackButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="↩️ 돌아가기",
+            style=discord.ButtonStyle.secondary,
+            custom_id="finished_guestbook_back",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="📖 방명록",
+            description=(
+                "방명록 보기를 눌러 해당 모집에 방문했던 "
+                "멤버를 확인할 수 있습니다."
+            ),
+            color=discord.Color.dark_grey(),
+        )
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=FinishedGuestbookReturnView(
+                interaction.message.id
+            ),
+        )
+
+
+class FinishedGuestbookReturnButton(discord.ui.Button):
+    def __init__(self, recruit_message_id: int):
+        super().__init__(
+            label="📖 방명록 다시 보기",
+            style=discord.ButtonStyle.primary,
+        )
+
+        self.recruit_message_id = recruit_message_id
+
+    async def callback(self, interaction: discord.Interaction):
+        visitors = await get_finished_guestbook(
+            self.recruit_message_id
+        )
+
+        visitor_text = make_visitor_text(
+            interaction.guild,
+            visitors,
+        )
+
+        embed = discord.Embed(
+            title="📖 방문자 목록",
+            description=visitor_text,
+            color=discord.Color.blurple(),
+        )
+
+        await interaction.response.edit_message(
+            embed=embed,
+            view=FinishedGuestbookPrivateView(),
+        )
+
+
+class FinishedGuestbookPrivateView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=300)
+        self.add_item(FinishedGuestbookBackButton())
+
+
+class FinishedGuestbookReturnView(discord.ui.View):
+    def __init__(self, recruit_message_id: int):
+        super().__init__(timeout=300)
+        self.add_item(
+            FinishedGuestbookReturnButton(
+                recruit_message_id
+            )
+        )
+
+
+class FinishedGuestbookButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="📖 방명록 보기",
+            style=discord.ButtonStyle.secondary,
+            custom_id="finished_guestbook",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        visitors = await get_finished_guestbook(
+            interaction.message.id
+        )
+
+        visitor_text = make_visitor_text(
+            interaction.guild,
+            visitors,
+        )
+
+        embed = discord.Embed(
+            title="📖 방문자 목록",
+            description=visitor_text,
+            color=discord.Color.blurple(),
+        )
+
+        await interaction.response.send_message(
+            embed=embed,
+            view=FinishedGuestbookPrivateView(),
+            ephemeral=True,
+        )
+
+
+class FinishedRecruitView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(FinishedGuestbookButton())
+
 class RecruitStartButton(discord.ui.Button):
     def __init__(self):
         super().__init__(
@@ -374,8 +537,14 @@ class RecruitStartButton(discord.ui.Button):
         voice_channel_id, rows = await get_recruit_group_rows_by_message(message_id)
         await sync_recruit_current_members(interaction.guild, voice_channel_id)
 
-        visitors = await get_recruit_group_members(voice_channel_id)
-        visitor_text = make_visitor_text(interaction.guild, visitors)
+        visitors = await get_recruit_group_members(
+            voice_channel_id
+        )
+
+        await save_finished_guestbook(
+            [group_message_id for group_message_id, _ in rows],
+            visitors,
+        )
 
         for group_message_id, channel_id in rows:
             channel = interaction.guild.get_channel(channel_id)
@@ -391,13 +560,12 @@ class RecruitStartButton(discord.ui.Button):
                     f"🚀 {game_name} 시작",
                     "모집장이 게임 시작을 눌러 모집이 종료되었습니다.",
                     discord.Color.blue(),
-                    visitor_text,
                 )
 
                 await message.edit(
                     content="",
                     embed=embed,
-                    view=None,
+                    view=FinishedRecruitView(),
                 )
             except discord.HTTPException:
                 pass
@@ -461,8 +629,14 @@ class RecruitCloseButton(discord.ui.Button):
         voice_channel_id, rows = await get_recruit_group_rows_by_message(message_id)
         await sync_recruit_current_members(interaction.guild, voice_channel_id)
 
-        visitors = await get_recruit_group_members(voice_channel_id)
-        visitor_text = make_visitor_text(interaction.guild, visitors)
+        visitors = await get_recruit_group_members(
+            voice_channel_id
+        )
+
+        await save_finished_guestbook(
+            [group_message_id for group_message_id, _ in rows],
+            visitors,
+        )
 
         for group_message_id, channel_id in rows:
             channel = interaction.guild.get_channel(channel_id)
@@ -935,8 +1109,14 @@ class Recruit(commands.Cog):
             if not rows:
                 return
             
-            visitors = await get_recruit_group_members(voice_channel.id)
-            visitor_text = make_visitor_text(voice_channel.guild, visitors)
+            visitors = await get_recruit_group_members(
+                voice_channel.id
+            )
+
+            await save_finished_guestbook(
+                [message_id for message_id, _ in rows],
+                visitors,
+            )
 
             for message_id, channel_id in rows:
                 text_channel = voice_channel.guild.get_channel(channel_id)
@@ -950,15 +1130,14 @@ class Recruit(commands.Cog):
                         embed = make_finished_recruit_embed(
                             old_embed,
                             "🔒 모집 종료",
-                            "음성채널이 비어 모집이 자동 종료되었습니다.",
+                            "모집장이 모집 종료를 눌러 모집이 종료되었습니다.",
                             discord.Color.dark_grey(),
-                            visitor_text,
                         )
 
                         await message.edit(
                             content="",
                             embed=embed,
-                            view=None
+                            view=FinishedRecruitView(),
                         )
 
                     except discord.HTTPException:
