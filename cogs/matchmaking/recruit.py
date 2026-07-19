@@ -475,8 +475,8 @@ class FinishedRecruitView(discord.ui.View):
 class RecruitStartButton(discord.ui.Button):
     def __init__(self):
         super().__init__(
-            label="시작",
-            style=discord.ButtonStyle.primary,
+            label="모집 종료",
+            style=discord.ButtonStyle.danger,
             custom_id="recruit_start",
         )
 
@@ -532,9 +532,9 @@ class RecruitStartButton(discord.ui.Button):
 
                 embed = make_finished_recruit_embed(
                     old_embed,
-                    f"🚀 {game_name} 시작",
-                    "모집장이 게임 시작을 눌러 모집이 종료되었습니다.",
-                    discord.Color.blue(),
+                    f"🔒 {game_name} 모집 종료"
+                    "모집장이 모집 종료 버튼을 눌러 모집이 종료되었습니다.",
+                    discord.Color.dark_grey(),
                 )
 
                 await message.edit(
@@ -738,7 +738,7 @@ class RecruitMemoModal(discord.ui.Modal):
         content = role.mention if role else ""
 
         if memo:
-            content = f"{content} [{memo}]".strip()
+            content = f"{content} **[ {memo} ]**".strip()content = f"{content} [{memo}]".strip()
 
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute(
