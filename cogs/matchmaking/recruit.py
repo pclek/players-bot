@@ -735,7 +735,7 @@ class RecruitMemoModal(discord.ui.Modal):
         content = role.mention if role else ""
 
         if memo:
-            content = f"{content} **[ {memo} ]**".strip()
+            content = f"{content} **{memo}**".strip()
 
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute(
