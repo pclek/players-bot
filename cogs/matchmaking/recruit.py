@@ -714,7 +714,7 @@ class RecruitMemoModal(discord.ui.Modal):
 
         self.memo = discord.ui.TextInput(
             label="메모",
-            placeholder="예: 2자리 / 초보 환영 / 9시 출발",
+            placeholder="예: 칼바람 / 2자리 / 초보 환영",
             default=current_memo[:200],
             required=False,
             max_length=200,
@@ -723,10 +723,7 @@ class RecruitMemoModal(discord.ui.Modal):
 
         self.add_item(self.memo)
 
-    async def on_submit(
-        self,
-        interaction: discord.Interaction,
-    ):
+    async def on_submit(self, interaction: discord.Interaction):
         memo = self.memo.value.strip()
 
         role = (
@@ -738,7 +735,7 @@ class RecruitMemoModal(discord.ui.Modal):
         content = role.mention if role else ""
 
         if memo:
-            content = f"{content} **[ {memo} ]**".strip()content = f"{content} [{memo}]".strip()
+            content = f"{content} **[ {memo} ]**".strip()
 
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute(
@@ -754,32 +751,21 @@ class RecruitMemoModal(discord.ui.Modal):
         updated_count = 0
 
         for message_id, channel_id in rows:
-            channel = interaction.guild.get_channel(
-                channel_id
-            )
+            channel = interaction.guild.get_channel(channel_id)
 
             if not channel:
                 continue
 
             try:
-                message = await channel.fetch_message(
-                    message_id
-                )
-
-                await message.edit(
-                    content=content
-                )
-
+                message = await channel.fetch_message(message_id)
+                await message.edit(content=content)
                 updated_count += 1
 
             except discord.HTTPException:
                 pass
 
         await interaction.response.send_message(
-            (
-                "✅ 모집 메모를 수정했습니다. "
-                f"({updated_count}개 모집글)"
-            ),
+            f"✅ 모집 메모를 수정했습니다. ({updated_count}개 모집글)",
             ephemeral=True,
         )
 
@@ -792,10 +778,7 @@ class RecruitMemoButton(discord.ui.Button):
             custom_id="recruit_memo",
         )
 
-    async def callback(
-        self,
-        interaction: discord.Interaction,
-    ):
+    async def callback(self, interaction: discord.Interaction):
         message_id = interaction.message.id
 
         async with aiosqlite.connect(DB_PATH) as db:
@@ -841,10 +824,10 @@ class RecruitMemoButton(discord.ui.Button):
         current_memo = ""
         content = interaction.message.content or ""
 
-        if "[" in content and content.rstrip().endswith("]"):
+        if "[" in content and "]" in content:
             current_memo = (
                 content.rsplit("[", 1)[1]
-                .rsplit("]", 1)[0]
+                .split("]", 1)[0]
                 .strip()
             )
 
