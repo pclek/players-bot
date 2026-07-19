@@ -774,7 +774,7 @@ class RecruitMemoButton(discord.ui.Button):
     def __init__(self):
         super().__init__(
             label="📝 메모",
-            style=discord.ButtonStyle.secondary,
+            style=discord.ButtonStyle.success,
             custom_id="recruit_memo",
         )
 
