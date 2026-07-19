@@ -53,6 +53,11 @@ def make_finished_recruit_embed(
     if "\n\n**참여자 목록**" in old_description:
         old_description = old_description.split("\n\n**참여자 목록**")[0].rstrip()
 
+    if "\n\n**현재 음성채널 참여자**" in old_description:
+        old_description = old_description.split(
+            "\n\n**현재 음성채널 참여자**"
+        )[0].rstrip()
+
     embed.description = (
         f"{old_description}\n\n"
         f"━━━━━━━━━━━━━━━━━━\n"
@@ -99,16 +104,25 @@ async def get_recruit_group_members(voice_channel_id: int):
             return await cursor.fetchall()
 
 
-def make_recruit_embed(guild, game_name: str, host_id: int, voice_channel_id: int):
+def get_current_voice_members(guild: discord.Guild, voice_channel_id: int):
     voice_channel = guild.get_channel(voice_channel_id)
+
+    if not isinstance(voice_channel, discord.VoiceChannel):
+        return None, []
+
+    current_members = [
+        member for member in voice_channel.members
+        if not member.bot
+    ]
+    return voice_channel, current_members
+
+
+def make_recruit_embed(guild, game_name: str, host_id: int, voice_channel_id: int):
+    voice_channel, current_members = get_current_voice_members(
+        guild,
+        voice_channel_id,
+    )
     user_limit = voice_channel.user_limit if voice_channel else 0
-
-    current_members = []
-
-    if voice_channel:
-        current_members = [member for member in voice_channel.members if not member.bot]
-
-    member_lines = [f"- {member.mention}" for member in current_members]
 
     embed = discord.Embed(
         title=f"🎮 {game_name} 모집",
@@ -116,15 +130,53 @@ def make_recruit_embed(guild, game_name: str, host_id: int, voice_channel_id: in
             f"👑 모집장: <@{host_id}>\n"
             f"🎧 음성채널: <#{voice_channel_id}>\n"
             f"👥 현재 참여자: `{len(current_members)}"
-            f"{f'/{user_limit}' if user_limit else ''}명`\n\n"
-            f"**현재 참여자 목록**\n"
-            + ("\n".join(member_lines) if member_lines else "없음")
+            f"{f'/{user_limit}' if user_limit else ''}명`"
         ),
         color=discord.Color.green(),
     )
 
     is_full = user_limit > 0 and len(current_members) >= user_limit
     return embed, is_full
+
+
+def make_recruit_members_embed(
+    guild: discord.Guild,
+    game_name: str,
+    host_id: int,
+    voice_channel_id: int,
+):
+    voice_channel, current_members = get_current_voice_members(
+        guild,
+        voice_channel_id,
+    )
+    user_limit = voice_channel.user_limit if voice_channel else 0
+
+    member_lines = [
+        f"`{index}.` {member.mention}"
+        for index, member in enumerate(current_members, start=1)
+    ]
+
+    embed = discord.Embed(
+        title=f"👥 {game_name} 참여자 목록",
+        description=(
+            f"👑 모집장: <@{host_id}>\n"
+            f"🎧 음성채널: <#{voice_channel_id}>\n"
+            f"👥 현재 참여자: `{len(current_members)}"
+            f"{f'/{user_limit}' if user_limit else ''}명`\n\n"
+            f"**현재 음성채널 참여자**\n"
+            + ("\n".join(member_lines) if member_lines else "없음")
+        ),
+        color=discord.Color.blurple(),
+    )
+    return embed
+
+
+def message_is_showing_recruit_members(message: discord.Message):
+    for action_row in message.components:
+        for component in action_row.children:
+            if getattr(component, "custom_id", None) == "recruit_back":
+                return True
+    return False
 
 async def create_recruit_invite_url(voice_channel: discord.VoiceChannel):
     print(f"[모집] invite 생성 시도")
@@ -262,7 +314,18 @@ async def update_recruit_group_messages(guild: discord.Guild, voice_channel_id: 
         return
 
     game_name, host_id = post
-    embed, is_full = make_recruit_embed(guild, game_name, host_id, voice_channel_id)
+    main_embed, is_full = make_recruit_embed(
+        guild,
+        game_name,
+        host_id,
+        voice_channel_id,
+    )
+    members_embed = make_recruit_members_embed(
+        guild,
+        game_name,
+        host_id,
+        voice_channel_id,
+    )
 
     for message_id, channel_id in rows:
         channel = guild.get_channel(channel_id)
@@ -271,9 +334,12 @@ async def update_recruit_group_messages(guild: discord.Guild, voice_channel_id: 
 
         try:
             message = await channel.fetch_message(message_id)
-            await message.edit(
-                embed=embed,
+            embed = (
+                members_embed
+                if message_is_showing_recruit_members(message)
+                else main_embed
             )
+            await message.edit(embed=embed)
         except discord.HTTPException:
             pass
 
@@ -451,6 +517,105 @@ class RecruitCloseButton(discord.ui.Button):
         )
 
 
+class RecruitMembersButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="👥 참여자 목록 보기",
+            style=discord.ButtonStyle.secondary,
+            custom_id="recruit_members",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        message_id = interaction.message.id
+        await interaction.response.defer()
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+            SELECT game_name, host_id, voice_channel_id
+            FROM recruit_posts
+            WHERE message_id = ?
+            """, (message_id,)) as cursor:
+                row = await cursor.fetchone()
+
+        if not row:
+            await interaction.followup.send(
+                "❌ 모집 정보를 찾을 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        game_name, host_id, voice_channel_id = row
+        embed = make_recruit_members_embed(
+            interaction.guild,
+            game_name,
+            host_id,
+            voice_channel_id,
+        )
+
+        await interaction.edit_original_response(
+            embed=embed,
+            view=RecruitMembersView(),
+        )
+
+
+class RecruitBackButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="↩️ 돌아가기",
+            style=discord.ButtonStyle.primary,
+            custom_id="recruit_back",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        message_id = interaction.message.id
+        await interaction.response.defer()
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+            SELECT game_name, host_id, voice_channel_id
+            FROM recruit_posts
+            WHERE message_id = ?
+            """, (message_id,)) as cursor:
+                row = await cursor.fetchone()
+
+        if not row:
+            await interaction.followup.send(
+                "❌ 모집 정보를 찾을 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        game_name, host_id, voice_channel_id = row
+        voice_channel = interaction.guild.get_channel(voice_channel_id)
+        invite_url = None
+
+        if isinstance(voice_channel, discord.VoiceChannel):
+            invite_url = await create_recruit_invite_url(voice_channel)
+
+        embed, is_full = make_recruit_embed(
+            interaction.guild,
+            game_name,
+            host_id,
+            voice_channel_id,
+        )
+
+        await interaction.edit_original_response(
+            embed=embed,
+            view=RecruitPostView(
+                is_full=is_full,
+                voice_channel_id=voice_channel_id,
+                guild_id=interaction.guild.id,
+                invite_url=invite_url,
+            ),
+        )
+
+
+class RecruitMembersView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(RecruitBackButton())
+
+
 class RecruitPostView(discord.ui.View):
     def __init__(
         self,
@@ -478,6 +643,7 @@ class RecruitPostView(discord.ui.View):
                 )
             )
 
+        self.add_item(RecruitMembersButton())
         self.add_item(RecruitStartButton())
         self.add_item(RecruitCloseButton())
 
@@ -663,7 +829,8 @@ class Recruit(commands.Cog):
         self.bot = bot
 
     async def cog_load(self):
-        pass
+        self.bot.add_view(RecruitPostView())
+        self.bot.add_view(RecruitMembersView())
 
     @commands.Cog.listener()
     async def on_voice_state_update(
