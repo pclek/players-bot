@@ -532,7 +532,7 @@ class RecruitStartButton(discord.ui.Button):
 
                 embed = make_finished_recruit_embed(
                     old_embed,
-                    f"🔒 {game_name} 모집 종료"
+                    f"🔒 {game_name} 모집 종료",
                     "모집장이 모집 종료 버튼을 눌러 모집이 종료되었습니다.",
                     discord.Color.dark_grey(),
                 )
@@ -559,7 +559,7 @@ class RecruitStartButton(discord.ui.Button):
             await db.commit()
 
         await interaction.followup.send(
-            "✅ 연결된 모집글을 모두 시작 처리했습니다.",
+            "✅ 연결된 모집글을 모두 종료했습니다.",
             ephemeral=True,
         )
 
