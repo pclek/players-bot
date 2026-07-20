@@ -956,9 +956,6 @@ class Sticky(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if message.author.bot:
-            return
-
         if not message.guild:
             return
 
@@ -966,6 +963,7 @@ class Sticky(commands.Cog):
 
         channel_id = message.channel.id
 
+        # 스티키를 재전송하고 있는 동안 발생한 메시지는 무시
         if channel_id in self.processing_channels:
             return
 
@@ -999,6 +997,15 @@ class Sticky(commands.Cog):
             rows = rows[:1]
 
         if not rows:
+            return
+
+        # 방금 올라온 메시지가 현재 스티키 자체라면 무시
+        current_sticky_message_id = rows[0][5]
+
+        if (
+            current_sticky_message_id
+            and message.id == current_sticky_message_id
+        ):
             return
 
         self.processing_channels.add(channel_id)
