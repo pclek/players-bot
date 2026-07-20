@@ -342,39 +342,39 @@ async def create_recruit_from_sticky(
             ephemeral=True,
         )
 
-class ShopTypeButton(discord.ui.Button):
+class StickyShopButton(discord.ui.Button):
     def __init__(self, shop_type: str):
-        if shop_type == "adventure":
-            label = "🧭 모험상점"
-            style = discord.ButtonStyle.green
-            custom_id = "sticky_shop:adventure"
-
-        else:
-            label = "🎨 역할상점"
-            style = discord.ButtonStyle.blurple
-            custom_id = "sticky_shop:role"
-
-        super().__init__(
-            label=label,
-            style=style,
-            custom_id=custom_id,
-        )
-
         self.shop_type = shop_type
 
-    async def callback(
-        self,
-        interaction: discord.Interaction,
-    ):
+        if shop_type == "adventure":
+            super().__init__(
+                label="🧭 모험상점",
+                style=discord.ButtonStyle.green,
+                custom_id="sticky_shop:adventure",
+            )
+        else:
+            super().__init__(
+                label="🎨 역할상점",
+                style=discord.ButtonStyle.blurple,
+                custom_id="sticky_shop:role",
+            )
+
+    async def callback(self, interaction: discord.Interaction):
         if self.shop_type == "adventure":
             cog = interaction.client.get_cog("Shop")
 
-            if not cog or not hasattr(
-                cog,
-                "send_adventure_shop",
-            ):
+            # Cog 이름이 달라도 함수가 있는 Cog를 다시 찾음
+            if cog is None:
+                for loaded_cog in interaction.client.cogs.values():
+                    if hasattr(loaded_cog, "send_adventure_shop"):
+                        cog = loaded_cog
+                        break
+
+            if cog is None or not hasattr(cog, "send_adventure_shop"):
                 await interaction.response.send_message(
-                    "❌ 모험상점을 불러올 수 없습니다.",
+                    "❌ 모험상점 기능이 로드되지 않았습니다.\n"
+                    "`cogs/points/shop.py`의 `send_adventure_shop()`과 "
+                    "Cog 로드 상태를 확인해주세요.",
                     ephemeral=True,
                 )
                 return
@@ -384,30 +384,23 @@ class ShopTypeButton(discord.ui.Button):
 
         cog = interaction.client.get_cog("RoleShop")
 
-        if not cog or not hasattr(
-            cog,
-            "send_role_shop",
-        ):
+        # Cog 이름이 달라도 함수가 있는 Cog를 다시 찾음
+        if cog is None:
+            for loaded_cog in interaction.client.cogs.values():
+                if hasattr(loaded_cog, "send_role_shop"):
+                    cog = loaded_cog
+                    break
+
+        if cog is None or not hasattr(cog, "send_role_shop"):
             await interaction.response.send_message(
-                "❌ 역할상점을 불러올 수 없습니다.",
+                "❌ 역할상점 기능이 로드되지 않았습니다.\n"
+                "`cogs/shop/role_shop.py`와 Cog 로드 상태를 확인해주세요.",
                 ephemeral=True,
             )
             return
 
         await cog.send_role_shop(interaction)
-
-class ShopTypeView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=60)
-
-        self.add_item(
-            ShopTypeButton("adventure")
-        )
-
-        self.add_item(
-            ShopTypeButton("role")
-        )
-
+        
 class StickyActionButton(discord.ui.Button):
     def __init__(self, action: str):
         label, style = get_button_label_and_style(action)
@@ -420,19 +413,6 @@ class StickyActionButton(discord.ui.Button):
         self.action = action
 
     async def callback(self, interaction: discord.Interaction):
-        if self.action == "shop":
-            embed = discord.Embed(
-                title="🏪 상점 선택",
-                description="이용할 상점을 선택하세요.",
-                color=discord.Color.blurple(),
-            )
-
-            await interaction.response.send_message(
-                embed=embed,
-                view=ShopTypeView(),
-                ephemeral=True,
-            )
-            return        
         if self.action == "recruit":
             await create_recruit_from_sticky(interaction)
             return
@@ -461,9 +441,36 @@ class StickyButtonView(discord.ui.View):
         if button_actions is None:
             button_actions = list(BUTTON_LABELS.keys())
 
-        for action in button_actions[:5]:
-            if is_supported_action(action):
-                self.add_item(StickyActionButton(action))
+        added_count = 0
+
+        for action in button_actions:
+            if not is_supported_action(action):
+                continue
+
+            # 기존 상점 버튼 하나를
+            # 모험상점, 역할상점 버튼 두 개로 나눔
+            if action == "shop":
+                if added_count < 5:
+                    self.add_item(
+                        StickyShopButton("adventure")
+                    )
+                    added_count += 1
+
+                if added_count < 5:
+                    self.add_item(
+                        StickyShopButton("role")
+                    )
+                    added_count += 1
+
+                continue
+
+            if added_count >= 5:
+                break
+
+            self.add_item(
+                StickyActionButton(action)
+            )
+            added_count += 1
 
 
 def make_sticky_view(button_actions: str | None, recruit_button: int = 0):

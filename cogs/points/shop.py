@@ -2217,117 +2217,18 @@ class AdventureInventoryManageView(discord.ui.View):
 class Shop(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-async def send_adventure_shop(
-    self,
-    interaction: discord.Interaction,
-):
-    if await is_user_in_battle(interaction.user.id):
-        await interaction.response.send_message(
-            "⚔️ 전투 중에는 모험상점을 이용할 수 없습니다.",
-            ephemeral=True,
-        )
-        return
-
-    await interaction.response.defer(ephemeral=True)
-
-    today_key = get_attendance_day_key()
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("""
-        SELECT
-            asi.id,
-            asi.item_name,
-            asi.price,
-            asi.stock,
-            asi.user_limit,
-            COALESCE(asp.quantity, 0)
-        FROM adventure_shop_items asi
-
-        LEFT JOIN adventure_shop_purchases asp
-        ON asi.id = asp.shop_item_id
-        AND asp.user_id = ?
-        AND asp.purchase_date = ?
-
-        WHERE asi.enabled = 1
-        AND asi.stock > 0
-
-        ORDER BY asi.id
-        """, (
-            interaction.user.id,
-            today_key,
-        )) as cursor:
-            adventure_rows = await cursor.fetchall()
-
-    if not adventure_rows:
-        await interaction.followup.send(
-            "❌ 현재 판매 중인 모험상품이 없습니다.",
-            ephemeral=True,
-        )
-        return
-
-    lines = []
-
-    for (
-        shop_id,
-        item_name,
-        price,
-        stock,
-        user_limit,
-        purchased_count,
-    ) in adventure_rows:
-
-        if user_limit > 0:
-            limit_text = (
-                f"오늘 `{purchased_count}/{user_limit}`"
-            )
-        else:
-            limit_text = "무제한"
-
-        lines.append(
-            f"🧭 **{item_name}**\n"
-            f"└ 💰 `{price}P`　"
-            f"📦 재고 `{stock}개`　"
-            f"🧾 {limit_text}"
-        )
-
-    embed = discord.Embed(
-        title="🧭 모험상점",
-        description="\n\n".join(lines),
-        color=discord.Color.green(),
-    )
-
-    embed.set_footer(
-        text="아래 드롭다운에서 모험상품을 구매할 수 있습니다."
-    )
-
-    await interaction.followup.send(
-        embed=embed,
-        view=AdventureShopView(
-            adventure_rows,
-            interaction.user.id,
-        ),
-        ephemeral=True,
-    )        
-    @app_commands.command(name="상점", description="포인트 상점을 확인합니다.")
-    async def shop(self, interaction: discord.Interaction):
+    async def send_adventure_shop(
+        self,
+        interaction: discord.Interaction,
+    ):
         if await is_user_in_battle(interaction.user.id):
             await interaction.response.send_message(
-                "⚔️ 전투 중에는 상점을 이용할 수 없습니다.",
+                "⚔️ 전투 중에는 모험상점을 이용할 수 없습니다.",
                 ephemeral=True,
             )
             return
-        
-        await interaction.response.defer(ephemeral=True)
 
-        async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute("""
-            SELECT id, name, description, price, stock
-            FROM shop_items
-            WHERE is_active = 1
-            AND stock > 0
-            ORDER BY id
-            """) as cursor:
-                rows = await cursor.fetchall()
+        await interaction.response.defer(ephemeral=True)
 
         today_key = get_attendance_day_key()
 
@@ -2341,12 +2242,15 @@ async def send_adventure_shop(
                 asi.user_limit,
                 COALESCE(asp.quantity, 0)
             FROM adventure_shop_items asi
+
             LEFT JOIN adventure_shop_purchases asp
             ON asi.id = asp.shop_item_id
             AND asp.user_id = ?
             AND asp.purchase_date = ?
+
             WHERE asi.enabled = 1
             AND asi.stock > 0
+
             ORDER BY asi.id
             """, (
                 interaction.user.id,
@@ -2354,304 +2258,400 @@ async def send_adventure_shop(
             )) as cursor:
                 adventure_rows = await cursor.fetchall()
 
-        if not rows and not adventure_rows:
+        if not adventure_rows:
             await interaction.followup.send(
-                "❌ 현재 판매중인 상품이 없습니다.",
+                "❌ 현재 판매 중인 모험상품이 없습니다.",
                 ephemeral=True,
             )
             return
-
-        embeds = []
-        views = []
-
-        if rows:
-            shop_embed, rows = await make_shop_embed(interaction.guild)
-            embeds.append(shop_embed)
-            views.append(ShopView(rows))
-
-        if adventure_rows:
-            lines = []
-
-            for shop_id, item_name, price, stock, user_limit, purchased_count in adventure_rows:
-                if user_limit > 0:
-                    limit_text = f"오늘 `{purchased_count}/{user_limit}`"
-                else:
-                    limit_text = "무제한"
-
-                lines.append(
-                    f"🧭 **{item_name}**\n"
-                    f"└ 💰 `{price}P`　📦 재고 `{stock}개`　🧾 {limit_text}"
-                )
-
-            adventure_embed = discord.Embed(
-                title="🧭 모험상품 상점",
-                description="\n\n".join(lines),
-                color=discord.Color.green(),
-            )
-
-            adventure_embed.set_footer(text="아래 드롭다운에서 모험상품을 구매할 수 있습니다.")
-
-            embeds.append(adventure_embed)
-            views.append(AdventureShopView(adventure_rows, interaction.user.id))
-
-        for index, embed in enumerate(embeds):
-            await interaction.followup.send(
-                embed=embed,
-                view=views[index],
-                ephemeral=True,
-            )
-
-    @commands.Cog.listener()
-    async def on_message(self, message: discord.Message):
-        if message.author.bot:
-            return
-
-        if not message.guild:
-            return
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute("""
-            SELECT shop_channel_id, shop_message_id, shop_last_sticky_at
-            FROM shop_settings
-            WHERE guild_id = ?
-            """, (message.guild.id,)) as cursor:
-                row = await cursor.fetchone()
-
-        if not row:
-            return
-
-        shop_channel_id, shop_message_id, shop_last_sticky_at = row
-
-        if not shop_channel_id:
-            return
-
-        if message.channel.id != shop_channel_id:
-            return
-
-        now = datetime.now()
-
-        if shop_last_sticky_at:
-            try:
-                last_time = datetime.fromisoformat(shop_last_sticky_at)
-
-                if now - last_time < timedelta(minutes=SHOP_STICKY_COOLDOWN_MINUTES):
-                    return
-            except ValueError:
-                pass
-
-        if shop_message_id:
-            try:
-                old_message = await message.channel.fetch_message(shop_message_id)
-                await old_message.delete()
-            except discord.HTTPException:
-                pass
-
-        point_embed, rows = await make_shop_embed(message.guild)
-        adventure_embed, adventure_rows = await make_adventure_shop_embed(message.guild)
-
-        new_message = await message.channel.send(
-            embeds=[
-                point_embed,
-                adventure_embed,
-            ]
-        )
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("""
-            UPDATE shop_settings
-            SET shop_message_id = ?,
-                shop_last_sticky_at = ?
-            WHERE guild_id = ?
-            """, (
-                new_message.id,
-                now.isoformat(),
-                message.guild.id,
-            ))
-
-            await db.commit()        
-    @app_commands.command(name="인벤토리", description="구매한 상품 목록을 확인합니다.")
-    async def inventory(self, interaction: discord.Interaction):
-
-        if await is_user_in_battle(interaction.user.id):
-            await interaction.response.send_message(
-                "⚔️ 전투 중에는 인벤토리를 사용할 수 없습니다.",
-                ephemeral=True,
-            )
-            return
-
-        await interaction.response.defer(ephemeral=True)
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute("""
-            SELECT id, item_name, status, purchased_at
-            FROM inventory
-            WHERE user_id = ?
-            AND status NOT IN ('used', 'canceled', 'discarded')
-            ORDER BY id DESC
-            """, (interaction.user.id,)) as cursor:
-                rows = await cursor.fetchall()
-
 
         lines = []
 
-        for inventory_id, item_name, status, purchased_at in rows[:20]:
-            if status == "pending":
-                status_text = "⏳ 지급 대기"
-            elif status == "completed":
-                status_text = "✅ 지급 완료"
-            elif status == "used":
-                status_text = "🎁 사용 완료"
+        for (
+            shop_id,
+            item_name,
+            price,
+            stock,
+            user_limit,
+            purchased_count,
+        ) in adventure_rows:
+
+            if user_limit > 0:
+                limit_text = (
+                    f"오늘 `{purchased_count}/{user_limit}`"
+                )
             else:
-                status_text = "❌ 취소됨"
+                limit_text = "무제한"
 
             lines.append(
-                f"📦 **{item_name}**\n"
-                f"`{status_text}`"
+                f"🧭 **{item_name}**\n"
+                f"└ 💰 `{price}P`　"
+                f"📦 재고 `{stock}개`　"
+                f"🧾 {limit_text}"
             )
-            
-        adventure_rows = await get_adventure_inventory(
-            interaction.user.id
-        )
-
-        equipment_rows = await get_inventory_equipment_instances(
-            interaction.user.id
-        )
-
-        adventure_lines = []
-
-        # 일반 재료, 음식, 광석만 표시
-        for item_name, quantity, category in adventure_rows:
-            if item_name in WEAPON_NAMES or item_name in ARMOR_NAMES:
-                continue
-
-            category_text = category if category else "기타"
-
-            heal_amount = FOOD_HEALS.get(item_name)
-
-            if heal_amount:
-                heal_text = (
-                    "전체 회복"
-                    if heal_amount >= 999
-                    else f"HP {heal_amount} 회복"
-                )
-
-                adventure_lines.append(
-                    f"`{category_text}` "
-                    f"{item_name} x{quantity} "
-                    f"· ❤️ {heal_text}"
-                )
-
-            else:
-                adventure_lines.append(
-                    f"`{category_text}` "
-                    f"{item_name} x{quantity}"
-                )
-
-        # 장비는 개별 인스턴스로 표시
-        if equipment_rows:
-            adventure_lines.append("")
-            adventure_lines.append("**⚔️ 장비**")
-
-            for equipment_row in equipment_rows:
-                (
-                    equipment_id,
-                    item_name,
-                    durability,
-                    max_durability,
-                    break_count,
-                    is_equipped,
-                    enhance_level,
-                ) = equipment_row
-
-                if item_name in WEAPON_NAMES:
-                    category_text = "무기"
-                elif item_name in ARMOR_NAMES:
-                    category_text = "방어구"
-                else:
-                    continue
-
-                status_parts = []
-
-                if is_equipped:
-                    status_parts.append("장착 중")
-
-                if break_count:
-                    status_parts.append(
-                        f"파괴 {break_count}회"
-                    )
-
-                status_text = ""
-
-                if status_parts:
-                    status_text = (
-                        " · " + " / ".join(status_parts)
-                    )
-
-                adventure_lines.append(
-                    f"`{category_text}` "
-                    f"{item_name} `+{int(enhance_level or 0)}` "
-                    f"· 내구도 "
-                    f"`{durability}/{max_durability}`"
-                    f"{status_text}"
-                )
-
-        description = ""
-
-        if lines:
-            description += "## 🛒 상점 인벤토리\n"
-            description += "\n\n".join(lines)
-
-        if adventure_lines:
-            if description:
-                description += "\n\n━━━━━━━━━━━━━━━━━━\n\n"
-
-            description += "## 🧭 모험 인벤토리\n"
-            description += "\n".join(adventure_lines[:30])
-
-        if not description:
-            description = "📦 인벤토리가 비어있습니다."
 
         embed = discord.Embed(
-            title="🎒 내 인벤토리",
-            description=description,
-            color=discord.Color.blurple(),
+            title="🧭 모험상점",
+            description="\n\n".join(lines),
+            color=discord.Color.green(),
         )
 
-        embed.set_thumbnail(
-            url=interaction.user.display_avatar.url)
-
-        manage_view = None
-
-        if rows or adventure_rows:
-            adventure_profile = await get_adventure_profile(interaction.user.id)
-            manage_view = CombinedInventoryManageView(
-                rows,
-                adventure_rows,
-                adventure_profile,
-            )
+        embed.set_footer(
+            text="아래 드롭다운에서 모험상품을 구매할 수 있습니다."
+        )
 
         await interaction.followup.send(
             embed=embed,
-            view=manage_view,
+            view=AdventureShopView(
+                adventure_rows,
+                interaction.user.id,
+            ),
             ephemeral=True,
-        )
+        )        
+        @app_commands.command(name="상점", description="포인트 상점을 확인합니다.")
+        async def shop(self, interaction: discord.Interaction):
+            if await is_user_in_battle(interaction.user.id):
+                await interaction.response.send_message(
+                    "⚔️ 전투 중에는 상점을 이용할 수 없습니다.",
+                    ephemeral=True,
+                )
+                return
+            
+            await interaction.response.defer(ephemeral=True)
 
-    @commands.Cog.listener()
-    async def on_member_remove(self, member: discord.Member):
-        async with aiosqlite.connect(DB_PATH) as db:
-            # 인벤토리 삭제
-            await db.execute("""
-            DELETE FROM inventory
-            WHERE user_id = ?
-            """, (member.id,))
+            async with aiosqlite.connect(DB_PATH) as db:
+                async with db.execute("""
+                SELECT id, name, description, price, stock
+                FROM shop_items
+                WHERE is_active = 1
+                AND stock > 0
+                ORDER BY id
+                """) as cursor:
+                    rows = await cursor.fetchall()
 
-            # 구매 로그 삭제
-            await db.execute("""
-            DELETE FROM shop_purchase_logs
-            WHERE buyer_id = ?
-            """, (member.id,))
+            today_key = get_attendance_day_key()
 
-            await db.commit()    
+            async with aiosqlite.connect(DB_PATH) as db:
+                async with db.execute("""
+                SELECT
+                    asi.id,
+                    asi.item_name,
+                    asi.price,
+                    asi.stock,
+                    asi.user_limit,
+                    COALESCE(asp.quantity, 0)
+                FROM adventure_shop_items asi
+                LEFT JOIN adventure_shop_purchases asp
+                ON asi.id = asp.shop_item_id
+                AND asp.user_id = ?
+                AND asp.purchase_date = ?
+                WHERE asi.enabled = 1
+                AND asi.stock > 0
+                ORDER BY asi.id
+                """, (
+                    interaction.user.id,
+                    today_key,
+                )) as cursor:
+                    adventure_rows = await cursor.fetchall()
+
+            if not rows and not adventure_rows:
+                await interaction.followup.send(
+                    "❌ 현재 판매중인 상품이 없습니다.",
+                    ephemeral=True,
+                )
+                return
+
+            embeds = []
+            views = []
+
+            if rows:
+                shop_embed, rows = await make_shop_embed(interaction.guild)
+                embeds.append(shop_embed)
+                views.append(ShopView(rows))
+
+            if adventure_rows:
+                lines = []
+
+                for shop_id, item_name, price, stock, user_limit, purchased_count in adventure_rows:
+                    if user_limit > 0:
+                        limit_text = f"오늘 `{purchased_count}/{user_limit}`"
+                    else:
+                        limit_text = "무제한"
+
+                    lines.append(
+                        f"🧭 **{item_name}**\n"
+                        f"└ 💰 `{price}P`　📦 재고 `{stock}개`　🧾 {limit_text}"
+                    )
+
+                adventure_embed = discord.Embed(
+                    title="🧭 모험상품 상점",
+                    description="\n\n".join(lines),
+                    color=discord.Color.green(),
+                )
+
+                adventure_embed.set_footer(text="아래 드롭다운에서 모험상품을 구매할 수 있습니다.")
+
+                embeds.append(adventure_embed)
+                views.append(AdventureShopView(adventure_rows, interaction.user.id))
+
+            for index, embed in enumerate(embeds):
+                await interaction.followup.send(
+                    embed=embed,
+                    view=views[index],
+                    ephemeral=True,
+                )
+
+        @commands.Cog.listener()
+        async def on_message(self, message: discord.Message):
+            if message.author.bot:
+                return
+
+            if not message.guild:
+                return
+
+            async with aiosqlite.connect(DB_PATH) as db:
+                async with db.execute("""
+                SELECT shop_channel_id, shop_message_id, shop_last_sticky_at
+                FROM shop_settings
+                WHERE guild_id = ?
+                """, (message.guild.id,)) as cursor:
+                    row = await cursor.fetchone()
+
+            if not row:
+                return
+
+            shop_channel_id, shop_message_id, shop_last_sticky_at = row
+
+            if not shop_channel_id:
+                return
+
+            if message.channel.id != shop_channel_id:
+                return
+
+            now = datetime.now()
+
+            if shop_last_sticky_at:
+                try:
+                    last_time = datetime.fromisoformat(shop_last_sticky_at)
+
+                    if now - last_time < timedelta(minutes=SHOP_STICKY_COOLDOWN_MINUTES):
+                        return
+                except ValueError:
+                    pass
+
+            if shop_message_id:
+                try:
+                    old_message = await message.channel.fetch_message(shop_message_id)
+                    await old_message.delete()
+                except discord.HTTPException:
+                    pass
+
+            point_embed, rows = await make_shop_embed(message.guild)
+            adventure_embed, adventure_rows = await make_adventure_shop_embed(message.guild)
+
+            new_message = await message.channel.send(
+                embeds=[
+                    point_embed,
+                    adventure_embed,
+                ]
+            )
+
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("""
+                UPDATE shop_settings
+                SET shop_message_id = ?,
+                    shop_last_sticky_at = ?
+                WHERE guild_id = ?
+                """, (
+                    new_message.id,
+                    now.isoformat(),
+                    message.guild.id,
+                ))
+
+                await db.commit()        
+        @app_commands.command(name="인벤토리", description="구매한 상품 목록을 확인합니다.")
+        async def inventory(self, interaction: discord.Interaction):
+
+            if await is_user_in_battle(interaction.user.id):
+                await interaction.response.send_message(
+                    "⚔️ 전투 중에는 인벤토리를 사용할 수 없습니다.",
+                    ephemeral=True,
+                )
+                return
+
+            await interaction.response.defer(ephemeral=True)
+
+            async with aiosqlite.connect(DB_PATH) as db:
+                async with db.execute("""
+                SELECT id, item_name, status, purchased_at
+                FROM inventory
+                WHERE user_id = ?
+                AND status NOT IN ('used', 'canceled', 'discarded')
+                ORDER BY id DESC
+                """, (interaction.user.id,)) as cursor:
+                    rows = await cursor.fetchall()
+
+
+            lines = []
+
+            for inventory_id, item_name, status, purchased_at in rows[:20]:
+                if status == "pending":
+                    status_text = "⏳ 지급 대기"
+                elif status == "completed":
+                    status_text = "✅ 지급 완료"
+                elif status == "used":
+                    status_text = "🎁 사용 완료"
+                else:
+                    status_text = "❌ 취소됨"
+
+                lines.append(
+                    f"📦 **{item_name}**\n"
+                    f"`{status_text}`"
+                )
+                
+            adventure_rows = await get_adventure_inventory(
+                interaction.user.id
+            )
+
+            equipment_rows = await get_inventory_equipment_instances(
+                interaction.user.id
+            )
+
+            adventure_lines = []
+
+            # 일반 재료, 음식, 광석만 표시
+            for item_name, quantity, category in adventure_rows:
+                if item_name in WEAPON_NAMES or item_name in ARMOR_NAMES:
+                    continue
+
+                category_text = category if category else "기타"
+
+                heal_amount = FOOD_HEALS.get(item_name)
+
+                if heal_amount:
+                    heal_text = (
+                        "전체 회복"
+                        if heal_amount >= 999
+                        else f"HP {heal_amount} 회복"
+                    )
+
+                    adventure_lines.append(
+                        f"`{category_text}` "
+                        f"{item_name} x{quantity} "
+                        f"· ❤️ {heal_text}"
+                    )
+
+                else:
+                    adventure_lines.append(
+                        f"`{category_text}` "
+                        f"{item_name} x{quantity}"
+                    )
+
+            # 장비는 개별 인스턴스로 표시
+            if equipment_rows:
+                adventure_lines.append("")
+                adventure_lines.append("**⚔️ 장비**")
+
+                for equipment_row in equipment_rows:
+                    (
+                        equipment_id,
+                        item_name,
+                        durability,
+                        max_durability,
+                        break_count,
+                        is_equipped,
+                        enhance_level,
+                    ) = equipment_row
+
+                    if item_name in WEAPON_NAMES:
+                        category_text = "무기"
+                    elif item_name in ARMOR_NAMES:
+                        category_text = "방어구"
+                    else:
+                        continue
+
+                    status_parts = []
+
+                    if is_equipped:
+                        status_parts.append("장착 중")
+
+                    if break_count:
+                        status_parts.append(
+                            f"파괴 {break_count}회"
+                        )
+
+                    status_text = ""
+
+                    if status_parts:
+                        status_text = (
+                            " · " + " / ".join(status_parts)
+                        )
+
+                    adventure_lines.append(
+                        f"`{category_text}` "
+                        f"{item_name} `+{int(enhance_level or 0)}` "
+                        f"· 내구도 "
+                        f"`{durability}/{max_durability}`"
+                        f"{status_text}"
+                    )
+
+            description = ""
+
+            if lines:
+                description += "## 🛒 상점 인벤토리\n"
+                description += "\n\n".join(lines)
+
+            if adventure_lines:
+                if description:
+                    description += "\n\n━━━━━━━━━━━━━━━━━━\n\n"
+
+                description += "## 🧭 모험 인벤토리\n"
+                description += "\n".join(adventure_lines[:30])
+
+            if not description:
+                description = "📦 인벤토리가 비어있습니다."
+
+            embed = discord.Embed(
+                title="🎒 내 인벤토리",
+                description=description,
+                color=discord.Color.blurple(),
+            )
+
+            embed.set_thumbnail(
+                url=interaction.user.display_avatar.url)
+
+            manage_view = None
+
+            if rows or adventure_rows:
+                adventure_profile = await get_adventure_profile(interaction.user.id)
+                manage_view = CombinedInventoryManageView(
+                    rows,
+                    adventure_rows,
+                    adventure_profile,
+                )
+
+            await interaction.followup.send(
+                embed=embed,
+                view=manage_view,
+                ephemeral=True,
+            )
+
+        @commands.Cog.listener()
+        async def on_member_remove(self, member: discord.Member):
+            async with aiosqlite.connect(DB_PATH) as db:
+                # 인벤토리 삭제
+                await db.execute("""
+                DELETE FROM inventory
+                WHERE user_id = ?
+                """, (member.id,))
+
+                # 구매 로그 삭제
+                await db.execute("""
+                DELETE FROM shop_purchase_logs
+                WHERE buyer_id = ?
+                """, (member.id,))
+
+                await db.commit()    
 
 
 async def setup(bot: commands.Bot):
