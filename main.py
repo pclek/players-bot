@@ -49,6 +49,7 @@ async def setup_hook():
     await bot.load_extension("cogs.matchmaking.matching")
     await bot.load_extension("cogs.sticky.sticky")
     await bot.load_extension("cogs.shop.shop_admin")
+    await bot.load_extension("cogs.shop.role_shop")
     await bot.load_extension("cogs.points.shop")
     await bot.load_extension("cogs.punish.inactive_role")
     await bot.load_extension("cogs.adventure.adventure")
