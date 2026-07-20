@@ -2217,6 +2217,97 @@ class AdventureInventoryManageView(discord.ui.View):
 class Shop(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+async def send_adventure_shop(
+    self,
+    interaction: discord.Interaction,
+):
+    if await is_user_in_battle(interaction.user.id):
+        await interaction.response.send_message(
+            "⚔️ 전투 중에는 모험상점을 이용할 수 없습니다.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    today_key = get_attendance_day_key()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT
+            asi.id,
+            asi.item_name,
+            asi.price,
+            asi.stock,
+            asi.user_limit,
+            COALESCE(asp.quantity, 0)
+        FROM adventure_shop_items asi
+
+        LEFT JOIN adventure_shop_purchases asp
+        ON asi.id = asp.shop_item_id
+        AND asp.user_id = ?
+        AND asp.purchase_date = ?
+
+        WHERE asi.enabled = 1
+        AND asi.stock > 0
+
+        ORDER BY asi.id
+        """, (
+            interaction.user.id,
+            today_key,
+        )) as cursor:
+            adventure_rows = await cursor.fetchall()
+
+    if not adventure_rows:
+        await interaction.followup.send(
+            "❌ 현재 판매 중인 모험상품이 없습니다.",
+            ephemeral=True,
+        )
+        return
+
+    lines = []
+
+    for (
+        shop_id,
+        item_name,
+        price,
+        stock,
+        user_limit,
+        purchased_count,
+    ) in adventure_rows:
+
+        if user_limit > 0:
+            limit_text = (
+                f"오늘 `{purchased_count}/{user_limit}`"
+            )
+        else:
+            limit_text = "무제한"
+
+        lines.append(
+            f"🧭 **{item_name}**\n"
+            f"└ 💰 `{price}P`　"
+            f"📦 재고 `{stock}개`　"
+            f"🧾 {limit_text}"
+        )
+
+    embed = discord.Embed(
+        title="🧭 모험상점",
+        description="\n\n".join(lines),
+        color=discord.Color.green(),
+    )
+
+    embed.set_footer(
+        text="아래 드롭다운에서 모험상품을 구매할 수 있습니다."
+    )
+
+    await interaction.followup.send(
+        embed=embed,
+        view=AdventureShopView(
+            adventure_rows,
+            interaction.user.id,
+        ),
+        ephemeral=True,
+    )        
     @app_commands.command(name="상점", description="포인트 상점을 확인합니다.")
     async def shop(self, interaction: discord.Interaction):
         if await is_user_in_battle(interaction.user.id):
