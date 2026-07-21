@@ -66,6 +66,7 @@ TIER_CONFIG = {
 TOTAL_STOCK_COUNT = sum(cfg["count"] for cfg in TIER_CONFIG.values())
 
 DAILY_BUY_LIMIT = 5000
+STOCK_STICKY_COOLDOWN_MINUTES = 30
 NEWS_EVENT_CHANCE = 0.08
 MERGE_CHANCE = 0.05
 DELIST_CHANCE = 0.03
@@ -202,6 +203,17 @@ async def ensure_stock_tables():
             event_channel_id INTEGER
         )
         """)
+
+        for column in (
+            "sticky_channel_id INTEGER",
+            "sticky_message_id INTEGER",
+            "sticky_last_posted_at TEXT",
+            "portfolio_channel_id INTEGER",
+        ):
+            try:
+                await db.execute(f"ALTER TABLE stock_market_settings ADD COLUMN {column}")
+            except aiosqlite.OperationalError:
+                pass
 
         await db.execute("""
         CREATE TABLE IF NOT EXISTS stock_market_schedule (

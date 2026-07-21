@@ -9,6 +9,13 @@ from cogs.stocks.stock_market import run_daily_stock_cycle
 from cogs.stocks.stock_utils import DB_PATH, ensure_stock_tables
 
 
+THREAD_CHANNEL_TYPES = [
+    discord.ChannelType.text,
+    discord.ChannelType.public_thread,
+    discord.ChannelType.private_thread,
+]
+
+
 class StockEventChannelSelect(discord.ui.ChannelSelect):
     def __init__(self):
         super().__init__(
@@ -43,6 +50,78 @@ class StockEventChannelSelect(discord.ui.ChannelSelect):
         )
 
 
+class StockStickyChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self):
+        super().__init__(
+            placeholder="주식시장 스티키 게시 채널/스레드 선택",
+            channel_types=THREAD_CHANNEL_TYPES,
+            min_values=1,
+            max_values=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        channel = self.values[0]
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+            INSERT INTO stock_market_settings (
+                guild_id,
+                sticky_channel_id,
+                sticky_message_id,
+                sticky_last_posted_at
+            )
+            VALUES (?, ?, NULL, NULL)
+            ON CONFLICT(guild_id) DO UPDATE SET
+                sticky_channel_id = excluded.sticky_channel_id,
+                sticky_message_id = NULL,
+                sticky_last_posted_at = NULL
+            """, (
+                interaction.guild.id,
+                channel.id,
+            ))
+
+            await db.commit()
+
+        await interaction.response.edit_message(
+            content=f"✅ 주식시장 스티키 채널을 {channel.mention}(으)로 설정했습니다.",
+            view=None,
+        )
+
+
+class StockPortfolioChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self):
+        super().__init__(
+            placeholder="내정보 공개 게시 채널/스레드 선택",
+            channel_types=THREAD_CHANNEL_TYPES,
+            min_values=1,
+            max_values=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        channel = self.values[0]
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+            INSERT INTO stock_market_settings (
+                guild_id,
+                portfolio_channel_id
+            )
+            VALUES (?, ?)
+            ON CONFLICT(guild_id) DO UPDATE SET
+                portfolio_channel_id = excluded.portfolio_channel_id
+            """, (
+                interaction.guild.id,
+                channel.id,
+            ))
+
+            await db.commit()
+
+        await interaction.response.edit_message(
+            content=f"✅ 내정보 공개 게시 채널을 {channel.mention}(으)로 설정했습니다.",
+            view=None,
+        )
+
+
 class StockAdminRunNowButton(discord.ui.Button):
     def __init__(self):
         super().__init__(
@@ -70,6 +149,8 @@ class StockAdminView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=60)
         self.add_item(StockEventChannelSelect())
+        self.add_item(StockStickyChannelSelect())
+        self.add_item(StockPortfolioChannelSelect())
         self.add_item(StockAdminRunNowButton())
 
 
@@ -80,7 +161,7 @@ class StockAdmin(commands.Cog):
     async def cog_load(self):
         await ensure_stock_tables()
 
-    @app_commands.command(name="주식시장관리", description="주식시장 이벤트 알림 채널을 설정합니다.")
+    @app_commands.command(name="주식시장관리", description="주식시장 채널 설정을 관리합니다.")
     async def stock_admin(self, interaction: discord.Interaction):
         if not await is_bot_admin(interaction):
             await interaction.response.send_message(
@@ -91,21 +172,37 @@ class StockAdmin(commands.Cog):
 
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("""
-            SELECT event_channel_id
+            SELECT event_channel_id, sticky_channel_id, portfolio_channel_id
             FROM stock_market_settings
             WHERE guild_id = ?
             """, (interaction.guild.id,)) as cursor:
                 row = await cursor.fetchone()
 
-        current_text = "설정 안 됨"
+        event_text, sticky_text, portfolio_text = "설정 안 됨", "설정 안 됨", "설정 안 됨"
 
-        if row and row[0]:
-            channel = interaction.guild.get_channel(row[0])
-            if channel:
-                current_text = channel.mention
+        if row:
+            event_channel_id, sticky_channel_id, portfolio_channel_id = row
+
+            if event_channel_id:
+                channel = interaction.guild.get_channel(event_channel_id)
+                if channel:
+                    event_text = channel.mention
+
+            if sticky_channel_id:
+                channel = interaction.guild.get_channel_or_thread(sticky_channel_id)
+                if channel:
+                    sticky_text = channel.mention
+
+            if portfolio_channel_id:
+                channel = interaction.guild.get_channel_or_thread(portfolio_channel_id)
+                if channel:
+                    portfolio_text = channel.mention
 
         await interaction.response.send_message(
-            f"📊 **주식시장 관리**\n현재 알림 채널: {current_text}",
+            f"📊 **주식시장 관리**\n"
+            f"이벤트 알림 채널: {event_text}\n"
+            f"스티키 게시 채널: {sticky_text}\n"
+            f"내정보 공개 게시 채널: {portfolio_text}",
             view=StockAdminView(),
             ephemeral=True,
         )

@@ -1,5 +1,5 @@
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import aiosqlite
 import discord
@@ -17,6 +17,7 @@ from cogs.stocks.stock_utils import (
     NEWS_NEGATIVE_TEMPLATES,
     NEWS_POSITIVE_TEMPLATES,
     REVERSION_DOWN_PROB,
+    STOCK_STICKY_COOLDOWN_MINUTES,
     TIER_CONFIG,
     TIER_EMOJI,
     TIER_ORDER,
@@ -192,38 +193,47 @@ def build_market_embed(stocks, last_updated_text: str | None) -> discord.Embed:
     return embed
 
 
-def build_portfolio_embed(user: discord.abc.User, holdings, points: int) -> discord.Embed:
+def build_portfolio_embed(user: discord.abc.User, holdings) -> discord.Embed:
     embed = discord.Embed(
-        title=f"💼 {user.display_name}님의 자산",
+        title=f"📊 {user.display_name}님의 보유 현황",
         color=discord.Color.blurple(),
     )
 
-    total_value = points
-
     if not holdings:
         embed.description = "보유 중인 종목이 없습니다."
-    else:
-        lines = []
+        return embed
 
-        for stock_id, name, tier, quantity, avg_buy_price, current_price, trading_halted, status in holdings:
-            value = quantity * current_price
-            profit = (current_price - avg_buy_price) * quantity
-            total_value += value
+    lines = []
+    total_value = 0
+    total_profit = 0
 
-            profit_text = f"+{profit:,}P" if profit >= 0 else f"{profit:,}P"
-            halt_text = " ⛔" if trading_halted else ""
-            status_text = " (상장폐지됨)" if status != "active" else ""
+    for stock_id, name, tier, quantity, avg_buy_price, current_price, trading_halted, status in holdings:
+        value = quantity * current_price
+        cost_basis = quantity * avg_buy_price
+        profit = value - cost_basis
+        profit_pct = (profit / cost_basis * 100) if cost_basis > 0 else 0.0
 
-            lines.append(
-                f"**{name}**{halt_text}{status_text}\n"
-                f"└ 보유 `{quantity:,}주` · 평단 `{avg_buy_price:,}P` · "
-                f"평가금액 `{value:,}P` · 평가손익 `{profit_text}`"
-            )
+        total_value += value
+        total_profit += profit
 
-        embed.description = "\n\n".join(lines)
+        color_code = "31" if profit > 0 else "34" if profit < 0 else "30"
+        arrow = "▲" if profit > 0 else "▼" if profit < 0 else "➖"
+        status_suffix = " ⛔거래정지" if trading_halted else (" (상장폐지됨)" if status != "active" else "")
 
-    embed.add_field(name="💰 보유 포인트", value=f"`{points:,}P`", inline=True)
-    embed.add_field(name="💼 총자산", value=f"`{total_value:,}P`", inline=True)
+        lines.append(
+            f"\x1b[0;{color_code}m{name} — {quantity:,}주 × {current_price:,}P = {value:,}P{status_suffix}\n"
+            f"평단가 {avg_buy_price:,}P | {arrow}{profit:+,}P ({profit_pct:+.1f}%)\x1b[0m"
+        )
+
+    embed.description = "```ansi\n" + "\n\n".join(lines) + "\n```"
+
+    profit_text = f"{total_profit:+,}P"
+
+    embed.add_field(
+        name="총 평가액",
+        value=f"`{total_value:,}P` (수익 `{profit_text}`)",
+        inline=False,
+    )
 
     return embed
 
@@ -577,6 +587,7 @@ class StockBuyButton(discord.ui.Button):
         super().__init__(
             label="매수",
             style=discord.ButtonStyle.green,
+            custom_id="stock_market:buy",
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -605,6 +616,7 @@ class StockSellButton(discord.ui.Button):
         super().__init__(
             label="매도",
             style=discord.ButtonStyle.red,
+            custom_id="stock_market:sell",
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -632,21 +644,51 @@ class StockPortfolioButton(discord.ui.Button):
         super().__init__(
             label="내정보",
             style=discord.ButtonStyle.blurple,
+            custom_id="stock_market:portfolio",
         )
 
     async def callback(self, interaction: discord.Interaction):
         holdings = await get_user_holdings(interaction.user.id)
-        points = await get_user_points(interaction.user.id)
+        embed = build_portfolio_embed(interaction.user, holdings)
+
+        portfolio_channel_id = None
+
+        if interaction.guild:
+            async with aiosqlite.connect(DB_PATH) as db:
+                async with db.execute("""
+                SELECT portfolio_channel_id
+                FROM stock_market_settings
+                WHERE guild_id = ?
+                """, (interaction.guild.id,)) as cursor:
+                    row = await cursor.fetchone()
+
+            if row and row[0]:
+                portfolio_channel_id = row[0]
+
+        if not portfolio_channel_id:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        channel = interaction.guild.get_channel_or_thread(portfolio_channel_id)
+
+        if not channel:
+            await interaction.response.send_message(
+                "❌ 설정된 내정보 게시 채널을 찾을 수 없습니다. 관리자에게 문의해주세요.",
+                ephemeral=True,
+            )
+            return
+
+        await channel.send(embed=embed)
 
         await interaction.response.send_message(
-            embed=build_portfolio_embed(interaction.user, holdings, points),
+            f"✅ {channel.mention}에 게시했습니다.",
             ephemeral=True,
         )
 
 
 class StockMarketView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=180)
+        super().__init__(timeout=None)
         self.add_item(StockBuyButton())
         self.add_item(StockSellButton())
         self.add_item(StockPortfolioButton())
@@ -1072,6 +1114,7 @@ class StockMarket(commands.Cog):
     async def cog_load(self):
         await ensure_stock_tables()
         await replenish_tiers(get_stock_day_key())
+        self.bot.add_view(StockMarketView())
 
     def cog_unload(self):
         self.stock_daily_update_loop.cancel()
@@ -1106,6 +1149,77 @@ class StockMarket(commands.Cog):
             embed=build_market_embed(stocks, last_updated_text),
             view=StockMarketView(),
         )
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.author.bot:
+            return
+
+        if not message.guild:
+            return
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+            SELECT sticky_channel_id, sticky_message_id, sticky_last_posted_at
+            FROM stock_market_settings
+            WHERE guild_id = ?
+            """, (message.guild.id,)) as cursor:
+                row = await cursor.fetchone()
+
+        if not row:
+            return
+
+        sticky_channel_id, sticky_message_id, sticky_last_posted_at = row
+
+        if not sticky_channel_id:
+            return
+
+        if message.channel.id != sticky_channel_id:
+            return
+
+        now = datetime.now()
+
+        if sticky_last_posted_at:
+            try:
+                last_time = datetime.fromisoformat(sticky_last_posted_at)
+
+                if now - last_time < timedelta(minutes=STOCK_STICKY_COOLDOWN_MINUTES):
+                    return
+            except ValueError:
+                pass
+
+        if sticky_message_id:
+            try:
+                old_message = await message.channel.fetch_message(sticky_message_id)
+                await old_message.delete()
+            except discord.HTTPException:
+                pass
+
+        stocks = await get_active_stocks()
+
+        if not stocks:
+            return
+
+        last_updated_text = await get_last_market_update()
+
+        new_message = await message.channel.send(
+            embed=build_market_embed(stocks, last_updated_text),
+            view=StockMarketView(),
+        )
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+            UPDATE stock_market_settings
+            SET sticky_message_id = ?,
+                sticky_last_posted_at = ?
+            WHERE guild_id = ?
+            """, (
+                new_message.id,
+                now.isoformat(),
+                message.guild.id,
+            ))
+
+            await db.commit()
 
 
 async def setup(bot: commands.Bot):
