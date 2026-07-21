@@ -1,4 +1,5 @@
 import random
+from datetime import datetime
 
 import aiosqlite
 import discord
@@ -93,16 +94,46 @@ def format_pct(current_price: int, prev_price: int) -> tuple[str, float]:
     pct = (current_price - prev_price) / prev_price * 100
 
     if pct > 0:
-        arrow = "🔴▲"
+        arrow = "▲"
     elif pct < 0:
-        arrow = "🔵▼"
+        arrow = "▼"
     else:
         arrow = "➖"
 
     return arrow, pct
 
 
-def build_market_embed(stocks) -> discord.Embed:
+def display_width(text: str) -> int:
+    """한글 등 넓은 문자는 2칸, 나머지는 1칸으로 계산 (코드블록 표 정렬용)."""
+    return sum(2 if ord(ch) > 0x1100 else 1 for ch in text)
+
+
+def pad_display(text: str, target_width: int) -> str:
+    return text + " " * max(target_width - display_width(text), 0)
+
+
+async def get_last_market_update():
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT MAX(last_updated_at) FROM stocks WHERE status = 'active'
+        """) as cursor:
+            row = await cursor.fetchone()
+
+    if not row or not row[0]:
+        return None
+
+    try:
+        updated_at = datetime.fromisoformat(row[0])
+    except ValueError:
+        return None
+
+    return updated_at.strftime("%Y-%m-%d %H:%M")
+
+
+NAME_COLUMN_WIDTH = 16
+
+
+def build_market_embed(stocks, last_updated_text: str | None) -> discord.Embed:
     by_tier = {tier: [] for tier in TIER_ORDER}
 
     for stock in stocks:
@@ -110,7 +141,11 @@ def build_market_embed(stocks) -> discord.Embed:
         by_tier[tier].append(stock)
 
     embed = discord.Embed(
-        title="📊 주식시장",
+        title="📈 주식 시장",
+        description=(
+            f"최근 갱신: {last_updated_text or '아직 없음'} KST\n"
+            f"갱신 시간: 매일 자정 (KST)"
+        ),
         color=discord.Color.gold(),
     )
 
@@ -125,16 +160,30 @@ def build_market_embed(stocks) -> discord.Embed:
         for stock in rows:
             stock_id, name, _, current_price, prev_price, available_shares, trading_halted = stock
             arrow, pct = format_pct(current_price, prev_price)
-            halt_text = " ⛔ 거래정지" if trading_halted else ""
+
+            if trading_halted:
+                color_code = "33"
+            elif pct > 0:
+                color_code = "31"
+            elif pct < 0:
+                color_code = "34"
+            else:
+                color_code = "30"
+
+            name_part = pad_display(name, NAME_COLUMN_WIDTH)
+            price_part = f"{current_price:,}P".rjust(10)
+            pct_part = f"{arrow}{pct:+.1f}%".rjust(9)
+            halt_part = " ⛔거래정지" if trading_halted else ""
 
             lines.append(
-                f"{arrow} **{name}** `{current_price:,}P` ({pct:+.1f}%)"
-                f"{halt_text}"
+                f"[0;{color_code}m{name_part}{price_part}  {pct_part}{halt_part}[0m"
             )
 
+        max_pct = TIER_CONFIG[tier]["max_change_pct"]
+
         embed.add_field(
-            name=f"{TIER_EMOJI[tier]} {tier}",
-            value="\n".join(lines),
+            name=f"{TIER_EMOJI[tier]} {tier} (±{max_pct}%)",
+            value="```ansi\n" + "\n".join(lines) + "\n```",
             inline=False,
         )
 
@@ -1048,8 +1097,10 @@ class StockMarket(commands.Cog):
             )
             return
 
+        last_updated_text = await get_last_market_update()
+
         await interaction.response.send_message(
-            embed=build_market_embed(stocks),
+            embed=build_market_embed(stocks, last_updated_text),
             view=StockMarketView(),
         )
 
