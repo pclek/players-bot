@@ -2308,7 +2308,7 @@ class Shop(commands.Cog):
             ),
             ephemeral=True,
         )        
-    @app_commands.command(name="상점", description="포인트 상점을 확인합니다.")
+    @app_commands.command(name="상점", description="모험상품 상점을 확인합니다.")
     async def shop(self, interaction: discord.Interaction):
         if await is_user_in_battle(interaction.user.id):
             await interaction.response.send_message(
@@ -2316,18 +2316,8 @@ class Shop(commands.Cog):
                 ephemeral=True,
             )
             return
-            
-        await interaction.response.defer(ephemeral=True)
 
-        async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute("""
-            SELECT id, name, description, price, stock
-            FROM shop_items
-            WHERE is_active = 1
-            AND stock > 0
-            ORDER BY id
-            """) as cursor:
-                rows = await cursor.fetchall()
+        await interaction.response.defer(ephemeral=True)
 
         today_key = get_attendance_day_key()
 
@@ -2354,52 +2344,39 @@ class Shop(commands.Cog):
             )) as cursor:
                 adventure_rows = await cursor.fetchall()
 
-        if not rows and not adventure_rows:
+        if not adventure_rows:
             await interaction.followup.send(
                 "❌ 현재 판매중인 상품이 없습니다.",
                 ephemeral=True,
             )
             return
 
-        embeds = []
-        views = []
+        lines = []
 
-        if rows:
-            shop_embed, rows = await make_shop_embed(interaction.guild)
-            embeds.append(shop_embed)
-            views.append(ShopView(rows))
+        for shop_id, item_name, price, stock, user_limit, purchased_count in adventure_rows:
+            if user_limit > 0:
+                limit_text = f"오늘 `{purchased_count}/{user_limit}`"
+            else:
+                limit_text = "무제한"
 
-        if adventure_rows:
-            lines = []
-
-            for shop_id, item_name, price, stock, user_limit, purchased_count in adventure_rows:
-                if user_limit > 0:
-                    limit_text = f"오늘 `{purchased_count}/{user_limit}`"
-                else:
-                    limit_text = "무제한"
-
-                lines.append(
-                    f"🧭 **{item_name}**\n"
-                    f"└ 💰 `{price}P`　📦 재고 `{stock}개`　🧾 {limit_text}"
-                )
-
-            adventure_embed = discord.Embed(
-                title="🧭 모험상품 상점",
-                description="\n\n".join(lines),
-                color=discord.Color.green(),
+            lines.append(
+                f"🧭 **{item_name}**\n"
+                f"└ 💰 `{price}P`　📦 재고 `{stock}개`　🧾 {limit_text}"
             )
 
-            adventure_embed.set_footer(text="아래 드롭다운에서 모험상품을 구매할 수 있습니다.")
+        adventure_embed = discord.Embed(
+            title="🧭 모험상품 상점",
+            description="\n\n".join(lines),
+            color=discord.Color.green(),
+        )
 
-            embeds.append(adventure_embed)
-            views.append(AdventureShopView(adventure_rows, interaction.user.id))
+        adventure_embed.set_footer(text="아래 드롭다운에서 모험상품을 구매할 수 있습니다.")
 
-        for index, embed in enumerate(embeds):
-            await interaction.followup.send(
-                embed=embed,
-                view=views[index],
-                ephemeral=True,
-            )
+        await interaction.followup.send(
+            embed=adventure_embed,
+            view=AdventureShopView(adventure_rows, interaction.user.id),
+            ephemeral=True,
+        )
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -2446,12 +2423,10 @@ class Shop(commands.Cog):
             except discord.HTTPException:
                 pass
 
-        point_embed, rows = await make_shop_embed(message.guild)
         adventure_embed, adventure_rows = await make_adventure_shop_embed(message.guild)
 
         new_message = await message.channel.send(
             embeds=[
-                point_embed,
                 adventure_embed,
             ]
         )
