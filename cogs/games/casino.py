@@ -1163,48 +1163,6 @@ class PokerBetAndRevealButton(discord.ui.Button):
         )
 
 
-class PokerAddBetButton(discord.ui.Button):
-    def __init__(self, amount: int):
-        super().__init__(
-            label=f"+{amount}P",
-            style=discord.ButtonStyle.blurple,
-        )
-        self.amount = amount
-
-    async def callback(self, interaction: discord.Interaction):
-        view: PokerGameView = self.view
-        game = view.game
-
-        success, message = await game.add_bet(self.amount)
-
-        if not success:
-            await interaction.response.send_message(
-                message,
-                ephemeral=True,
-            )
-            return
-
-        view.refresh_buttons()
-
-        table_message = view.table_message or getattr(game, "table_message", None)
-        if table_message:
-            await table_message.edit(embed=game.make_table_embed())
-
-        stage_key = {
-            0: "preflop",
-            1: "flop",
-            2: "turn",
-            3: "river",
-        }.get(game.stage, "river")
-
-        await interaction.response.edit_message(
-            embed=game.make_reaction_embed(
-                message + "\n\n" + game.random_reactions(stage_key)
-            ),
-            view=view,
-        )
-
-
 class PokerActionButton(discord.ui.Button):
     def __init__(
         self,

@@ -92,7 +92,6 @@ async def ensure_role_shop_tables() -> None:
 
 class RoleShopBuySelect(discord.ui.Select):
     def __init__(self, rows: list[tuple], guild: discord.Guild):
-        self.rows_by_role_id = {int(row[0]): row for row in rows}
         options = []
 
         for role_id, price, rental_days, sale_ends_at, stock in rows[:25]:

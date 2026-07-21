@@ -168,112 +168,6 @@ async def add_equipment_instance(
 
         await db.commit()
 
-async def transfer_equipment_instance(
-    from_user_id: int,
-    to_user_id: int,
-    item_name: str,
-):
-    if item_name not in EQUIPMENT_NAMES:
-        return False
-
-    if item_name == "녹슨검":
-        return False
-
-    await ensure_adventure_profile(from_user_id)
-    await ensure_adventure_profile(to_user_id)
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        # 선물 가능한 미장착 장비 중 강화수치가 가장 높은 장비를 선택
-        async with db.execute("""
-        SELECT equipment_id
-        FROM adventure_equipment_instances
-        WHERE user_id = ?
-        AND item_name = ?
-        AND is_equipped = 0
-        ORDER BY enhance_level DESC, equipment_id ASC
-        LIMIT 1
-        """, (
-            from_user_id,
-            item_name,
-        )) as cursor:
-            row = await cursor.fetchone()
-
-        if not row:
-            return False
-
-        equipment_id = row[0]
-
-        # 보내는 사람의 통합 인벤토리 수량 확인
-        async with db.execute("""
-        SELECT quantity
-        FROM adventure_inventory
-        WHERE user_id = ?
-        AND item_name = ?
-        """, (
-            from_user_id,
-            item_name,
-        )) as cursor:
-            inventory_row = await cursor.fetchone()
-
-        if not inventory_row or inventory_row[0] <= 0:
-            return False
-
-        sender_quantity = inventory_row[0]
-
-        # 보내는 사람 인벤토리에서 1개 차감
-        if sender_quantity == 1:
-            await db.execute("""
-            DELETE FROM adventure_inventory
-            WHERE user_id = ?
-            AND item_name = ?
-            """, (
-                from_user_id,
-                item_name,
-            ))
-        else:
-            await db.execute("""
-            UPDATE adventure_inventory
-            SET quantity = quantity - 1
-            WHERE user_id = ?
-            AND item_name = ?
-            """, (
-                from_user_id,
-                item_name,
-            ))
-
-        # 받는 사람 인벤토리에 1개 추가
-        await db.execute("""
-        INSERT INTO adventure_inventory (
-            user_id,
-            item_name,
-            quantity
-        )
-        VALUES (?, ?, 1)
-        ON CONFLICT(user_id, item_name)
-        DO UPDATE SET quantity = quantity + 1
-        """, (
-            to_user_id,
-            item_name,
-        ))
-
-        # 장비 인스턴스 자체의 소유자만 변경
-        # 강화수치, 내구도, 파괴횟수는 그대로 유지됨
-        await db.execute("""
-        UPDATE adventure_equipment_instances
-        SET user_id = ?,
-            is_equipped = 0
-        WHERE equipment_id = ?
-        AND user_id = ?
-        """, (
-            to_user_id,
-            equipment_id,
-            from_user_id,
-        ))
-
-        await db.commit()
-
-    return True
-
 async def transfer_equipment_instance_by_id(
     from_user_id: int,
     to_user_id: int,
@@ -1284,16 +1178,6 @@ async def repair_equipment_instance(user_id: int, equipment_id: int):
 
 
 
-def get_next_6am_kst() -> datetime:
-    now = datetime.now(KST)
-    next_6 = now.replace(hour=6, minute=0, second=0, microsecond=0)
-
-    if now >= next_6:
-        next_6 = next_6 + timedelta(days=1)
-
-    return next_6
-
-
 async def get_user_dead_until(user_id: int):
     await ensure_adventure_profile(user_id)
 
@@ -1365,27 +1249,6 @@ async def is_user_dead(user_id: int):
     return True, dead_time
 
 
-async def set_user_dead_until_next_6(user_id: int):
-    await ensure_adventure_profile(user_id)
-
-    dead_until = get_next_6am_kst()
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-        UPDATE adventure_profiles
-        SET current_hp = 0,
-            dead_until = ?
-        WHERE user_id = ?
-        """, (
-            dead_until.isoformat(),
-            user_id,
-        ))
-
-        await db.commit()
-
-    return dead_until
-
-
 def format_dead_until(dead_until: datetime | None) -> str:
     if not dead_until:
         return "알 수 없음"
@@ -1412,30 +1275,6 @@ async def get_equipment_enhance_level(user_id: int, item_name: str) -> int:
             """, (
                 user_id,
                 item_name,
-            )) as cursor:
-                row = await cursor.fetchone()
-        except aiosqlite.OperationalError:
-            return 0
-
-    if not row:
-        return 0
-
-    return max(0, min(5, int(row[0] or 0)))
-
-
-async def get_equipment_instance_enhance_level(user_id: int, equipment_id: int) -> int:
-    await ensure_adventure_profile(user_id)
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        try:
-            async with db.execute("""
-            SELECT enhance_level
-            FROM adventure_equipment_instances
-            WHERE user_id = ?
-            AND equipment_id = ?
-            """, (
-                user_id,
-                equipment_id,
             )) as cursor:
                 row = await cursor.fetchone()
         except aiosqlite.OperationalError:

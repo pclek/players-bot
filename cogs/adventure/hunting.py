@@ -32,7 +32,6 @@ DEATH_MIN_DURABILITY_LOSS = 5
 MAX_SEARCH_COUNT = 3
 BASE_ESCAPE_CHANCE = 60
 ESCAPE_CHANCE_LOSS_PER_SEARCH = 20
-BATTLE_XP_RATE = 0.10
 
 PLAYER_MISS_CHANCE = 3
 PLAYER_CRIT_CHANCE = 8
@@ -157,24 +156,6 @@ ARMOR_SHIELDS = {
     "흑철갑옷": 240,
     "비브라늄갑옷": 310,
     "오리하르콘갑옷": 400,
-}
-
-WEAPON_BREAK_RATES = {
-    "녹슨검": 0,
-    "구리검": 15,
-    "철검": 10,
-    "은검": 8,
-    "금검": 7,
-    "다이아검": 4,
-    "비브라늄검": 1,
-}
-
-ARMOR_DAMAGE_RATES = {
-    "철갑옷": 15,
-    "은갑옷": 12,
-    "금갑옷": 10,
-    "다이아갑옷": 6,
-    "비브라늄갑옷": 2,
 }
 
 FOOD_HEALS = {

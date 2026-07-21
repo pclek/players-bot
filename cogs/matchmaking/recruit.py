@@ -15,18 +15,6 @@ async def get_games():
             return await cursor.fetchall()
 
 
-async def get_recruit_members(message_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            """
-        SELECT user_id
-        FROM recruit_members
-        WHERE message_id = ?
-        """,
-            (message_id,),
-        ) as cursor:
-            return await cursor.fetchall()
-
 def make_finished_recruit_embed(
     old_embed: discord.Embed | None,
     title: str,
@@ -576,98 +564,6 @@ class RecruitStartButton(discord.ui.Button):
         )
 
 
-class RecruitCloseButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(
-            label="모집 종료",
-            style=discord.ButtonStyle.danger,
-            custom_id="recruit_close",
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        message_id = interaction.message.id
-
-        await interaction.response.defer(ephemeral=True)
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute("""
-            SELECT game_name, host_id, voice_channel_id
-            FROM recruit_posts
-            WHERE message_id = ?
-            """, (message_id,)) as cursor:
-                row = await cursor.fetchone()
-
-        if not row:
-            await interaction.followup.send(
-                "❌ 모집 정보를 찾을 수 없습니다.",
-                ephemeral=True,
-            )
-            return
-
-        game_name, host_id, voice_channel_id = row
-
-        if interaction.user.id != host_id:
-            await interaction.followup.send(
-                "❌ 모집장만 종료할 수 있습니다.",
-                ephemeral=True,
-            )
-            return
-
-        voice_channel_id, rows = await get_recruit_group_rows_by_message(message_id)
-        await sync_recruit_current_members(interaction.guild, voice_channel_id)
-
-        visitors = await get_recruit_group_members(
-            voice_channel_id
-        )
-
-        await save_finished_guestbook(
-            [group_message_id for group_message_id, _ in rows],
-            visitors,
-        )
-
-        for group_message_id, channel_id in rows:
-            channel = interaction.guild.get_channel(channel_id)
-            if not channel:
-                continue
-
-            try:
-                message = await channel.fetch_message(group_message_id)
-                old_embed = message.embeds[0] if message.embeds else None
-
-                embed = make_finished_recruit_embed(
-                    old_embed,
-                    "🔒 모집 종료",
-                    "모집장이 모집 종료를 눌러 모집이 종료되었습니다.",
-                    discord.Color.dark_grey(),
-                    visitor_text,
-                )
-
-                await message.edit(
-                    content="",
-                    embed=embed,
-                    view=None,
-                )
-            except discord.HTTPException:
-                pass
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            for group_message_id, _ in rows:
-                await db.execute(
-                    "DELETE FROM recruit_members WHERE message_id = ?",
-                    (group_message_id,),
-                )
-                await db.execute(
-                    "DELETE FROM recruit_posts WHERE message_id = ?",
-                    (group_message_id,),
-                )
-
-            await db.commit()
-
-        await interaction.followup.send(
-            "✅ 연결된 모집글을 모두 종료했습니다.",
-            ephemeral=True,
-        )
-
 class RecruitMembersButton(discord.ui.Button):
     def __init__(self):
         super().__init__(
@@ -1049,16 +945,6 @@ class RecruitGameView(discord.ui.View):
         super().__init__(timeout=None)
         self.add_item(RecruitGameSelect(games))
 
-
-async def update_recruit_message(message: discord.Message):
-    voice_channel_id, rows = await get_recruit_group_rows_by_message(message.id)
-
-    if not voice_channel_id:
-        return
-
-    await sync_recruit_current_members(message.guild, voice_channel_id)
-
-    await update_recruit_group_messages(message.guild, voice_channel_id)
 
 class Recruit(commands.Cog):
     def __init__(self, bot: commands.Bot):
