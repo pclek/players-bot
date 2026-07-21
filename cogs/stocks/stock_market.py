@@ -1,5 +1,5 @@
 import random
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import aiosqlite
 import discord
@@ -17,7 +17,6 @@ from cogs.stocks.stock_utils import (
     NEWS_NEGATIVE_TEMPLATES,
     NEWS_POSITIVE_TEMPLATES,
     REVERSION_DOWN_PROB,
-    STOCK_STICKY_COOLDOWN_MINUTES,
     TIER_CONFIG,
     TIER_EMOJI,
     TIER_ORDER,
@@ -1072,7 +1071,40 @@ async def run_daily_stock_cycle(bot: commands.Bot, force: bool = False):
     if all_events:
         await broadcast_stock_events(bot, all_events)
 
+    await refresh_board_message(bot)
+
     return all_events
+
+
+async def refresh_board_message(bot: commands.Bot):
+    """게시판에 고정해둔 주식시장 메시지를 삭제/재게시 없이 내용만 갱신한다 (핀/스레드 유지)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT board_channel_id, board_message_id
+        FROM stock_market_settings
+        WHERE board_channel_id IS NOT NULL
+        AND board_message_id IS NOT NULL
+        """) as cursor:
+            rows = await cursor.fetchall()
+
+    if not rows:
+        return
+
+    stocks = await get_active_stocks()
+    last_updated_text = await get_last_market_update()
+    embed = build_market_embed(stocks, last_updated_text)
+
+    for board_channel_id, board_message_id in rows:
+        channel = bot.get_channel(board_channel_id)
+
+        if not channel:
+            continue
+
+        try:
+            message = await channel.fetch_message(board_message_id)
+            await message.edit(embed=embed, view=StockMarketView())
+        except discord.HTTPException:
+            pass
 
 
 async def broadcast_stock_events(bot: commands.Bot, events: list):
@@ -1149,77 +1181,6 @@ class StockMarket(commands.Cog):
             embed=build_market_embed(stocks, last_updated_text),
             view=StockMarketView(),
         )
-
-    @commands.Cog.listener()
-    async def on_message(self, message: discord.Message):
-        if message.author.bot:
-            return
-
-        if not message.guild:
-            return
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute("""
-            SELECT sticky_channel_id, sticky_message_id, sticky_last_posted_at
-            FROM stock_market_settings
-            WHERE guild_id = ?
-            """, (message.guild.id,)) as cursor:
-                row = await cursor.fetchone()
-
-        if not row:
-            return
-
-        sticky_channel_id, sticky_message_id, sticky_last_posted_at = row
-
-        if not sticky_channel_id:
-            return
-
-        if message.channel.id != sticky_channel_id:
-            return
-
-        now = datetime.now()
-
-        if sticky_last_posted_at:
-            try:
-                last_time = datetime.fromisoformat(sticky_last_posted_at)
-
-                if now - last_time < timedelta(minutes=STOCK_STICKY_COOLDOWN_MINUTES):
-                    return
-            except ValueError:
-                pass
-
-        if sticky_message_id:
-            try:
-                old_message = await message.channel.fetch_message(sticky_message_id)
-                await old_message.delete()
-            except discord.HTTPException:
-                pass
-
-        stocks = await get_active_stocks()
-
-        if not stocks:
-            return
-
-        last_updated_text = await get_last_market_update()
-
-        new_message = await message.channel.send(
-            embed=build_market_embed(stocks, last_updated_text),
-            view=StockMarketView(),
-        )
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("""
-            UPDATE stock_market_settings
-            SET sticky_message_id = ?,
-                sticky_last_posted_at = ?
-            WHERE guild_id = ?
-            """, (
-                new_message.id,
-                now.isoformat(),
-                message.guild.id,
-            ))
-
-            await db.commit()
 
 
 async def setup(bot: commands.Bot):
