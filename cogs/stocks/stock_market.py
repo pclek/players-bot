@@ -144,7 +144,7 @@ def build_market_embed(stocks, last_updated_text: str | None) -> discord.Embed:
         title="📈 주식 시장",
         description=(
             f"최근 갱신: {last_updated_text or '아직 없음'} KST\n"
-            f"갱신 시간: 매일 자정 (KST)"
+            f"갱신 시간: 매일 새벽 6시 (KST)"
         ),
         color=discord.Color.gold(),
     )
@@ -187,7 +187,7 @@ def build_market_embed(stocks, last_updated_text: str | None) -> discord.Embed:
             inline=False,
         )
 
-    embed.set_footer(text="매일 자정(KST) 시세가 갱신됩니다.")
+    embed.set_footer(text="매일 새벽 6시(KST) 시세가 갱신됩니다.")
 
     return embed
 
@@ -1061,32 +1061,35 @@ async def broadcast_stock_events(bot: commands.Bot, events: list):
                 pass
 
 
+STOCK_UPDATE_HOUR_KST = 6
+
+
 class StockMarket(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.stock_midnight_loop.start()
+        self.stock_daily_update_loop.start()
 
     async def cog_load(self):
         await ensure_stock_tables()
         await replenish_tiers(get_stock_day_key())
 
     def cog_unload(self):
-        self.stock_midnight_loop.cancel()
+        self.stock_daily_update_loop.cancel()
 
     @tasks.loop(minutes=1)
-    async def stock_midnight_loop(self):
+    async def stock_daily_update_loop(self):
         now = now_kst()
 
-        if now.hour != 0:
+        if now.hour != STOCK_UPDATE_HOUR_KST:
             return
 
         await run_daily_stock_cycle(self.bot)
 
-    @stock_midnight_loop.before_loop
-    async def before_stock_midnight_loop(self):
+    @stock_daily_update_loop.before_loop
+    async def before_stock_daily_update_loop(self):
         await self.bot.wait_until_ready()
 
-    @app_commands.command(name="주식시장", description="주식시장 종목 목록을 확인합니다.")
+    @app_commands.command(name="주식", description="주식시장 종목 목록을 확인합니다.")
     async def stock_market(self, interaction: discord.Interaction):
         stocks = await get_active_stocks()
 
