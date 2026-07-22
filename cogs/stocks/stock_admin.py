@@ -6,14 +6,18 @@ from discord.ext import commands
 from utils.checks import is_bot_admin
 
 from cogs.stocks.stock_market import (
-    StockMarketView,
-    build_market_embed,
+    build_market_layout,
     get_active_stocks,
     get_last_market_update,
+    rescale_existing_stocks,
     refresh_board_message,
     run_daily_stock_cycle,
 )
-from cogs.stocks.stock_utils import DB_PATH, ensure_stock_tables
+from cogs.stocks.stock_utils import (
+    DB_PATH,
+    ensure_stock_tables,
+    get_active_user_baseline,
+)
 
 
 THREAD_CHANNEL_TYPES = [
@@ -26,8 +30,8 @@ THREAD_CHANNEL_TYPES = [
 class StockEventChannelSelect(discord.ui.ChannelSelect):
     def __init__(self):
         super().__init__(
-            placeholder="주식시장 이벤트 알림 채널 선택",
-            channel_types=[discord.ChannelType.text],
+            placeholder="주식시장 이벤트 알림 채널/스레드 선택",
+            channel_types=THREAD_CHANNEL_TYPES,
             min_values=1,
             max_values=1,
         )
@@ -67,9 +71,18 @@ class StockBoardChannelSelect(discord.ui.ChannelSelect):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        channel = self.values[0]
-
         await interaction.response.defer(ephemeral=True, thinking=True)
+
+        # ChannelSelect.values는 실제 채널이 아니라 가벼운 AppCommandChannel
+        # 참조라 .send()가 없음 — 캐시된 실제 채널 객체로 다시 조회해야 함
+        channel = interaction.guild.get_channel(self.values[0].id)
+
+        if not channel:
+            await interaction.followup.send(
+                "❌ 선택한 채널을 찾을 수 없습니다. 다시 시도해주세요.",
+                ephemeral=True,
+            )
+            return
 
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("""
@@ -90,9 +103,8 @@ class StockBoardChannelSelect(discord.ui.ChannelSelect):
 
         stocks = await get_active_stocks()
         last_updated_text = await get_last_market_update()
-        embed = build_market_embed(stocks, last_updated_text)
 
-        message = await channel.send(embed=embed, view=StockMarketView())
+        message = await channel.send(view=build_market_layout(stocks, last_updated_text))
 
         try:
             await message.pin()
@@ -173,6 +185,82 @@ class StockPortfolioChannelSelect(discord.ui.ChannelSelect):
         )
 
 
+class StockThreadRenameModal(discord.ui.Modal):
+    def __init__(self, thread: discord.Thread):
+        super().__init__(title="게시판 스레드 이름 변경")
+
+        self.thread = thread
+
+        self.name_input = discord.ui.TextInput(
+            label="새 스레드 이름",
+            placeholder="예: 주식 거래방",
+            required=True,
+            max_length=100,
+            default=thread.name,
+        )
+
+        self.add_item(self.name_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        new_name = str(self.name_input.value).strip()
+
+        if not new_name:
+            await interaction.response.send_message(
+                "❌ 이름을 입력해주세요.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            await self.thread.edit(name=new_name)
+        except discord.HTTPException as e:
+            await interaction.response.send_message(
+                f"❌ 이름 변경에 실패했습니다: {e}",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            f"✅ 스레드 이름을 \"{new_name}\"(으)로 변경했습니다.",
+            ephemeral=True,
+        )
+
+
+class StockAdminRenameThreadButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="스레드 이름 변경",
+            style=discord.ButtonStyle.gray,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+            SELECT board_thread_id
+            FROM stock_market_settings
+            WHERE guild_id = ?
+            """, (interaction.guild.id,)) as cursor:
+                row = await cursor.fetchone()
+
+        if not row or not row[0]:
+            await interaction.response.send_message(
+                "❌ 아직 게시판 스레드가 없습니다. 먼저 게시판 채널을 설정해주세요.",
+                ephemeral=True,
+            )
+            return
+
+        thread = interaction.guild.get_channel_or_thread(row[0])
+
+        if not thread:
+            await interaction.response.send_message(
+                "❌ 스레드를 찾을 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_modal(StockThreadRenameModal(thread))
+
+
 class StockAdminRunNowButton(discord.ui.Button):
     def __init__(self):
         super().__init__(
@@ -214,6 +302,104 @@ class StockAdminRefreshBoardButton(discord.ui.Button):
         )
 
 
+class StockSetCurrentChannelButton(discord.ui.Button):
+    """디스코드 채널 선택 드롭다운은 스레드를 목록에 안 보여주므로,
+    스레드를 지정하고 싶으면 그 스레드 안에서 이 버튼을 눌러 우회한다."""
+
+    def __init__(self, label: str, column: str, setting_name: str):
+        super().__init__(label=label, style=discord.ButtonStyle.gray)
+        self.column = column
+        self.setting_name = setting_name
+
+    async def callback(self, interaction: discord.Interaction):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(f"""
+            INSERT INTO stock_market_settings (guild_id, {self.column})
+            VALUES (?, ?)
+            ON CONFLICT(guild_id) DO UPDATE SET
+                {self.column} = excluded.{self.column}
+            """, (
+                interaction.guild.id,
+                interaction.channel.id,
+            ))
+
+            await db.commit()
+
+        await interaction.response.send_message(
+            f"✅ {self.setting_name}을(를) {interaction.channel.mention}(으)로 설정했습니다.",
+            ephemeral=True,
+        )
+
+
+class StockBaselineModal(discord.ui.Modal):
+    def __init__(self, current_baseline: int):
+        super().__init__(title="활동 인원 기준 설정")
+
+        self.baseline_input = discord.ui.TextInput(
+            label="활동 인원 기준 (명)",
+            placeholder=f"현재 {current_baseline}명 — 발행 주식 수 계산 기준",
+            required=True,
+            max_length=6,
+            default=str(current_baseline),
+        )
+
+        self.add_item(self.baseline_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            baseline = int(str(self.baseline_input.value).strip())
+        except ValueError:
+            await interaction.response.send_message(
+                "❌ 숫자로 입력해주세요.",
+                ephemeral=True,
+            )
+            return
+
+        if baseline <= 0:
+            await interaction.response.send_message(
+                "❌ 1명 이상으로 입력해주세요.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+            INSERT INTO stock_market_settings (guild_id, active_user_baseline)
+            VALUES (?, ?)
+            ON CONFLICT(guild_id) DO UPDATE SET
+                active_user_baseline = excluded.active_user_baseline
+            """, (
+                interaction.guild.id,
+                baseline,
+            ))
+
+            await db.commit()
+
+        await rescale_existing_stocks(baseline)
+        await refresh_board_message(interaction.client)
+
+        await interaction.followup.send(
+            f"✅ 활동 인원 기준을 {baseline}명으로 설정했습니다. "
+            f"상장된 종목들의 발행 주식 수도 새 기준으로 다시 계산했습니다 "
+            f"(이미 보유 중인 수량은 그대로 유지됩니다).",
+            ephemeral=True,
+        )
+
+
+class StockAdminBaselineButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="활동 인원 기준 설정",
+            style=discord.ButtonStyle.gray,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        current_baseline = await get_active_user_baseline()
+        await interaction.response.send_modal(StockBaselineModal(current_baseline))
+
+
 class StockAdminView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=60)
@@ -222,6 +408,14 @@ class StockAdminView(discord.ui.View):
         self.add_item(StockPortfolioChannelSelect())
         self.add_item(StockAdminRunNowButton())
         self.add_item(StockAdminRefreshBoardButton())
+        self.add_item(StockSetCurrentChannelButton(
+            "여기를 이벤트 채널로", "event_channel_id", "이벤트 알림 채널",
+        ))
+        self.add_item(StockSetCurrentChannelButton(
+            "여기를 내정보 채널로", "portfolio_channel_id", "내정보 공개 게시 채널",
+        ))
+        self.add_item(StockAdminBaselineButton())
+        self.add_item(StockAdminRenameThreadButton())
 
 
 class StockAdmin(commands.Cog):
@@ -256,7 +450,7 @@ class StockAdmin(commands.Cog):
             event_channel_id, board_channel_id, board_thread_id, portfolio_channel_id = row
 
             if event_channel_id:
-                channel = interaction.guild.get_channel(event_channel_id)
+                channel = interaction.guild.get_channel_or_thread(event_channel_id)
                 if channel:
                     event_text = channel.mention
 
@@ -275,11 +469,14 @@ class StockAdmin(commands.Cog):
                 if channel:
                     portfolio_text = channel.mention
 
+        baseline = await get_active_user_baseline()
+
         await interaction.response.send_message(
             f"📊 **주식시장 관리**\n"
             f"이벤트 알림 채널: {event_text}\n"
             f"게시판 채널: {board_text} (스레드: {thread_text})\n"
-            f"내정보 공개 게시 채널: {portfolio_text}",
+            f"내정보 공개 게시 채널: {portfolio_text}\n"
+            f"활동 인원 기준: {baseline}명",
             view=StockAdminView(),
             ephemeral=True,
         )

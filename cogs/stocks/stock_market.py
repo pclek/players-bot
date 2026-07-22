@@ -22,7 +22,9 @@ from cogs.stocks.stock_utils import (
     TIER_ORDER,
     ensure_stock_tables,
     generate_stock_name,
+    get_active_user_baseline,
     get_stock_day_key,
+    get_tier_total_shares,
     now_kst,
 )
 
@@ -133,21 +135,35 @@ async def get_last_market_update():
 NAME_COLUMN_WIDTH = 16
 
 
-def build_market_embed(stocks, last_updated_text: str | None) -> discord.Embed:
+MARKET_TIER_ICON = {
+    "동전주": "💰",
+    "소형주": "🟡",
+    "중형주": "🏢",
+    "대형주": "🏦",
+}
+
+MARKET_TIER_COLOUR = {
+    "동전주": discord.Colour.gold(),
+    "소형주": discord.Colour.orange(),
+    "중형주": discord.Colour.blue(),
+    "대형주": discord.Colour.dark_purple(),
+}
+
+
+def build_market_layout(stocks, last_updated_text: str | None) -> discord.ui.LayoutView:
     by_tier = {tier: [] for tier in TIER_ORDER}
 
     for stock in stocks:
         stock_id, name, tier, current_price, prev_price, available_shares, trading_halted = stock
         by_tier[tier].append(stock)
 
-    embed = discord.Embed(
-        title="📈 주식 시장",
-        description=(
-            f"최근 갱신: {last_updated_text or '아직 없음'} KST\n"
-            f"갱신 시간: 매일 새벽 6시 (KST)"
-        ),
-        color=discord.Color.gold(),
-    )
+    view = discord.ui.LayoutView(timeout=None)
+
+    view.add_item(discord.ui.TextDisplay(
+        "## 📈 주식 시장\n"
+        f"-# 최근 갱신: {last_updated_text or '아직 없음'} KST\n"
+        f"-# 갱신 시간: 매일 새벽 6시 (KST)"
+    ))
 
     for tier in TIER_ORDER:
         rows = by_tier[tier]
@@ -176,35 +192,44 @@ def build_market_embed(stocks, last_updated_text: str | None) -> discord.Embed:
             halt_part = " ⛔거래정지" if trading_halted else ""
 
             lines.append(
-                f"[0;{color_code}m{name_part}{price_part}  {pct_part}{halt_part}[0m"
+                f"[1;{color_code}m{name_part}{price_part}  {pct_part}{halt_part}[0m"
             )
 
         max_pct = TIER_CONFIG[tier]["max_change_pct"]
 
-        embed.add_field(
-            name=f"{TIER_EMOJI[tier]} {tier} (±{max_pct}%)",
-            value="```ansi\n" + "\n".join(lines) + "\n```",
-            inline=False,
-        )
+        view.add_item(discord.ui.Container(
+            discord.ui.TextDisplay(f"### {MARKET_TIER_ICON[tier]} {tier} (±{max_pct}%)"),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            discord.ui.TextDisplay("```ansi\n" + "\n".join(lines) + "\n```"),
+            accent_colour=MARKET_TIER_COLOUR[tier],
+        ))
 
-    embed.set_footer(text="매일 새벽 6시(KST) 시세가 갱신됩니다.")
+    view.add_item(discord.ui.ActionRow(
+        StockBuyButton(),
+        StockSellButton(),
+        StockPortfolioButton(),
+    ))
 
-    return embed
+    return view
 
 
-def build_portfolio_embed(user: discord.abc.User, holdings) -> discord.Embed:
-    embed = discord.Embed(
-        title=f"📊 {user.display_name}님의 보유 현황",
-        color=discord.Color.blurple(),
-    )
+def build_portfolio_layout(user: discord.abc.User, holdings) -> discord.ui.LayoutView:
+    header = discord.ui.TextDisplay(f"## 📊 {user.mention} 의 보유 현황")
+
+    view = discord.ui.LayoutView(timeout=None)
 
     if not holdings:
-        embed.description = "보유 중인 종목이 없습니다."
-        return embed
+        view.add_item(discord.ui.Container(
+            header,
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            discord.ui.TextDisplay("보유 중인 종목이 없습니다."),
+            accent_colour=discord.Colour.greyple(),
+        ))
+        return view
 
-    lines = []
     total_value = 0
     total_profit = 0
+    stock_displays = []
 
     for stock_id, name, tier, quantity, avg_buy_price, current_price, trading_halted, status in holdings:
         value = quantity * current_price
@@ -215,30 +240,51 @@ def build_portfolio_embed(user: discord.abc.User, holdings) -> discord.Embed:
         total_value += value
         total_profit += profit
 
-        color_code = "31" if profit > 0 else "34" if profit < 0 else "30"
-        arrow = "▲" if profit > 0 else "▼" if profit < 0 else "➖"
+        if profit > 0:
+            arrow = "🔺"
+        elif profit < 0:
+            arrow = "🔻"
+        else:
+            arrow = "—"
+
         status_suffix = " ⛔거래정지" if trading_halted else (" (상장폐지됨)" if status != "active" else "")
 
-        lines.append(
-            f"\x1b[0;{color_code}m{name} — {quantity:,}주 × {current_price:,}P = {value:,}P{status_suffix}\n"
-            f"평단가 {avg_buy_price:,}P | {arrow}{profit:+,}P ({profit_pct:+.1f}%)\x1b[0m"
-        )
+        stock_displays.append(discord.ui.TextDisplay(
+            f"**{name}**{status_suffix} — {quantity:,}주 × {current_price:,}P = {value:,}P\n"
+            f"-# 평단가 {avg_buy_price:,}P | {arrow}{profit:+,}P ({profit_pct:+.1f}%)"
+        ))
 
-    embed.description = "```ansi\n" + "\n\n".join(lines) + "\n```"
-
-    profit_text = f"{total_profit:+,}P"
-
-    embed.add_field(
-        name="총 평가액",
-        value=f"`{total_value:,}P` (수익 `{profit_text}`)",
-        inline=False,
+    accent_colour = (
+        discord.Colour.green() if total_profit > 0
+        else discord.Colour.red() if total_profit < 0
+        else discord.Colour.greyple()
     )
 
-    return embed
+    view.add_item(discord.ui.Container(
+        header,
+        discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+        *stock_displays,
+        discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+        discord.ui.TextDisplay(f"**총 평가액**: {total_value:,}P (수익 {total_profit:+,}P)"),
+        accent_colour=accent_colour,
+    ))
+
+    return view
+
+
+
+
 
 
 class StockBuyQuantityModal(discord.ui.Modal):
-    def __init__(self, stock_id: int, stock_name: str, current_price: int, available_shares: int):
+    def __init__(
+        self,
+        stock_id: int,
+        stock_name: str,
+        current_price: int,
+        available_shares: int,
+        daily_remaining: int,
+    ):
         super().__init__(title=f"{stock_name} 매수 수량")
 
         self.stock_id = stock_id
@@ -246,7 +292,10 @@ class StockBuyQuantityModal(discord.ui.Modal):
 
         self.quantity = discord.ui.TextInput(
             label="매수 수량",
-            placeholder=f"1 이상 숫자 입력 / 잔여 {available_shares:,}주 / 현재가 {current_price:,}P",
+            placeholder=(
+                f"1 이상 숫자 / 잔여 {available_shares:,}주 / "
+                f"현재가 {current_price:,}P / 오늘 한도 {daily_remaining:,}P"
+            ),
             required=True,
             max_length=6,
             default="1",
@@ -387,7 +436,7 @@ class StockBuySelect(discord.ui.Select):
         for stock_id, name, tier, current_price, prev_price, available_shares, trading_halted in stocks[:25]:
             options.append(
                 discord.SelectOption(
-                    label=name[:100],
+                    label=f"{TIER_EMOJI[tier]} {name}"[:100],
                     value=str(stock_id),
                     description=f"{tier} · {current_price:,}P · 잔여 {available_shares:,}주"[:100],
                 )
@@ -419,8 +468,57 @@ class StockBuySelect(discord.ui.Select):
 
         stock_id, name, tier, current_price, prev_price, available_shares, trading_halted = selected
 
+        spent_today = await get_daily_spent(interaction.user.id)
+        remaining = max(DAILY_BUY_LIMIT - spent_today, 0)
+
         await interaction.response.send_modal(
-            StockBuyQuantityModal(stock_id, name, current_price, available_shares)
+            StockBuyQuantityModal(stock_id, name, current_price, available_shares, remaining)
+        )
+
+
+class StockBuyTierSelect(discord.ui.Select):
+    def __init__(self, buyable):
+        self.buyable = buyable
+
+        by_tier = {}
+        for stock in buyable:
+            by_tier.setdefault(stock[2], []).append(stock)
+
+        options = []
+
+        for tier in TIER_ORDER:
+            rows = by_tier.get(tier)
+
+            if not rows:
+                continue
+
+            max_pct = TIER_CONFIG[tier]["max_change_pct"]
+
+            options.append(
+                discord.SelectOption(
+                    label=f"{TIER_EMOJI[tier]} {tier} (±{max_pct}%)",
+                    value=tier,
+                    description=f"매수 가능 {len(rows)}종목",
+                )
+            )
+
+        super().__init__(
+            placeholder="매수할 카테고리를 선택하세요.",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        tier = self.values[0]
+        tier_stocks = [s for s in self.buyable if s[2] == tier]
+
+        view = discord.ui.View(timeout=60)
+        view.add_item(StockBuySelect(tier_stocks))
+
+        await interaction.response.edit_message(
+            content=f"{TIER_EMOJI[tier]} **{tier}** 종목 중 매수할 종목을 선택하세요.",
+            view=view,
         )
 
 
@@ -600,11 +698,15 @@ class StockBuyButton(discord.ui.Button):
             )
             return
 
+        spent_today = await get_daily_spent(interaction.user.id)
+        remaining = max(DAILY_BUY_LIMIT - spent_today, 0)
+
         view = discord.ui.View(timeout=60)
-        view.add_item(StockBuySelect(buyable))
+        view.add_item(StockBuyTierSelect(buyable))
 
         await interaction.response.send_message(
-            "매수할 종목을 선택하세요.",
+            f"오늘 남은 매수 한도: `{remaining:,}P`\n"
+            f"매수할 카테고리를 선택하세요.",
             view=view,
             ephemeral=True,
         )
@@ -648,7 +750,7 @@ class StockPortfolioButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         holdings = await get_user_holdings(interaction.user.id)
-        embed = build_portfolio_embed(interaction.user, holdings)
+        layout = build_portfolio_layout(interaction.user, holdings)
 
         portfolio_channel_id = None
 
@@ -665,7 +767,7 @@ class StockPortfolioButton(discord.ui.Button):
                 portfolio_channel_id = row[0]
 
         if not portfolio_channel_id:
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(view=layout, ephemeral=True)
             return
 
         channel = interaction.guild.get_channel_or_thread(portfolio_channel_id)
@@ -677,7 +779,7 @@ class StockPortfolioButton(discord.ui.Button):
             )
             return
 
-        await channel.send(embed=embed)
+        await channel.send(view=layout)
 
         await interaction.response.send_message(
             f"✅ {channel.mention}에 게시했습니다.",
@@ -818,7 +920,8 @@ async def perform_merge(day_key: str):
     b_outstanding = b_total - b_available
 
     combined_value = a_outstanding * a_price + b_outstanding * b_price
-    total_shares_m = TIER_CONFIG[tier]["total_shares"]
+    baseline = await get_active_user_baseline()
+    total_shares_m = get_tier_total_shares(tier, baseline)
 
     if total_shares_m > 0:
         raw_price = round(combined_value / total_shares_m)
@@ -982,8 +1085,34 @@ async def perform_delisting(day_key: str):
     return detail
 
 
+async def rescale_existing_stocks(baseline: int):
+    """활동 인원 기준(baseline)이 바뀌면 이미 상장된 종목들의 발행량도 새 기준으로 다시 맞춘다.
+    이미 팔린(보유 중인) 수량은 그대로 유지하고, 잔여 유통량만 새 발행량에서 역산한다."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT id, tier, total_shares, available_shares
+        FROM stocks
+        WHERE status = 'active'
+        """) as cursor:
+            rows = await cursor.fetchall()
+
+        for stock_id, tier, old_total, old_available in rows:
+            held = max(old_total - old_available, 0)
+            new_total = get_tier_total_shares(tier, baseline)
+            new_available = max(new_total - held, 0)
+
+            await db.execute("""
+            UPDATE stocks
+            SET total_shares = ?, available_shares = ?
+            WHERE id = ?
+            """, (new_total, new_available, stock_id))
+
+        await db.commit()
+
+
 async def replenish_tiers(day_key: str):
     events = []
+    baseline = await get_active_user_baseline()
 
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("""
@@ -993,6 +1122,7 @@ async def replenish_tiers(day_key: str):
 
         for tier in TIER_ORDER:
             tier_cfg = TIER_CONFIG[tier]
+            tier_total_shares = get_tier_total_shares(tier, baseline)
 
             async with db.execute("""
             SELECT COUNT(*) FROM stocks WHERE status = 'active' AND tier = ?
@@ -1016,7 +1146,7 @@ async def replenish_tiers(day_key: str):
                 VALUES (?, ?, ?, ?, ?, ?, 'active', 0, 0, ?, ?)
                 """, (
                     name, tier, start_price, start_price,
-                    tier_cfg["total_shares"], tier_cfg["total_shares"],
+                    tier_total_shares, tier_total_shares,
                     now_kst().isoformat(), now_kst().isoformat(),
                 ))
 
@@ -1092,7 +1222,6 @@ async def refresh_board_message(bot: commands.Bot):
 
     stocks = await get_active_stocks()
     last_updated_text = await get_last_market_update()
-    embed = build_market_embed(stocks, last_updated_text)
 
     for board_channel_id, board_message_id in rows:
         channel = bot.get_channel(board_channel_id)
@@ -1102,7 +1231,7 @@ async def refresh_board_message(bot: commands.Bot):
 
         try:
             message = await channel.fetch_message(board_message_id)
-            await message.edit(embed=embed, view=StockMarketView())
+            await message.edit(embed=None, view=build_market_layout(stocks, last_updated_text))
         except discord.HTTPException:
             pass
 
@@ -1178,8 +1307,7 @@ class StockMarket(commands.Cog):
         last_updated_text = await get_last_market_update()
 
         await interaction.response.send_message(
-            embed=build_market_embed(stocks, last_updated_text),
-            view=StockMarketView(),
+            view=build_market_layout(stocks, last_updated_text),
         )
 
 

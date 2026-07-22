@@ -31,7 +31,7 @@ TIER_CONFIG = {
         "price_min": 10,
         "price_max": 150,
         "price_floor": 5,
-        "total_shares": 3000,
+        "shares_per_100_users": 750,
         "sell_fee_pct": 5,
     },
     "소형주": {
@@ -40,8 +40,8 @@ TIER_CONFIG = {
         "price_min": 150,
         "price_max": 800,
         "price_floor": 50,
-        "total_shares": 1200,
-        "sell_fee_pct": 4,
+        "shares_per_100_users": 300,
+        "sell_fee_pct": 5,
     },
     "중형주": {
         "count": 5,
@@ -49,8 +49,8 @@ TIER_CONFIG = {
         "price_min": 800,
         "price_max": 3000,
         "price_floor": 300,
-        "total_shares": 500,
-        "sell_fee_pct": 3,
+        "shares_per_100_users": 125,
+        "sell_fee_pct": 5,
     },
     "대형주": {
         "count": 4,
@@ -58,14 +58,35 @@ TIER_CONFIG = {
         "price_min": 3000,
         "price_max": 10000,
         "price_floor": 1500,
-        "total_shares": 150,
-        "sell_fee_pct": 2,
+        "shares_per_100_users": 40,
+        "sell_fee_pct": 5,
     },
 }
 
 TOTAL_STOCK_COUNT = sum(cfg["count"] for cfg in TIER_CONFIG.values())
 
-DAILY_BUY_LIMIT = 5000
+DEFAULT_ACTIVE_USER_BASELINE = 100
+
+
+def get_tier_total_shares(tier: str, baseline: int) -> int:
+    ratio = TIER_CONFIG[tier]["shares_per_100_users"]
+    return max(1, round(ratio * baseline / 100))
+
+
+async def get_active_user_baseline() -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT active_user_baseline
+        FROM stock_market_settings
+        WHERE active_user_baseline IS NOT NULL
+        LIMIT 1
+        """) as cursor:
+            row = await cursor.fetchone()
+
+    return row[0] if row and row[0] else DEFAULT_ACTIVE_USER_BASELINE
+
+
+DAILY_BUY_LIMIT = 20000
 NEWS_EVENT_CHANCE = 0.08
 MERGE_CHANCE = 0.05
 DELIST_CHANCE = 0.03
@@ -208,6 +229,7 @@ async def ensure_stock_tables():
             "board_message_id INTEGER",
             "board_thread_id INTEGER",
             "portfolio_channel_id INTEGER",
+            "active_user_baseline INTEGER",
         ):
             try:
                 await db.execute(f"ALTER TABLE stock_market_settings ADD COLUMN {column}")
