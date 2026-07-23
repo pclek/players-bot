@@ -34,8 +34,11 @@ def from_iso(value: str | None) -> datetime | None:
 
 def format_dt(value: datetime | None) -> str:
     if not value:
-        return "제한 없음"
+        return "기한없음"
     return discord.utils.format_dt(value, style="F")
+
+
+DEFAULT_CATEGORY = "기타"
 
 
 async def ensure_role_shop_tables() -> None:
@@ -52,9 +55,23 @@ async def ensure_role_shop_tables() -> None:
             created_by INTEGER,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
+            category TEXT NOT NULL DEFAULT '기타',
+            emoji TEXT,
             PRIMARY KEY (guild_id, role_id)
         )
         """)
+
+        try:
+            await db.execute(
+                f"ALTER TABLE role_shop_items ADD COLUMN category TEXT NOT NULL DEFAULT '{DEFAULT_CATEGORY}'"
+            )
+        except Exception:
+            pass
+
+        try:
+            await db.execute("ALTER TABLE role_shop_items ADD COLUMN emoji TEXT")
+        except Exception:
+            pass
 
         await db.execute("""
         CREATE TABLE IF NOT EXISTS role_shop_rentals (
@@ -90,23 +107,169 @@ async def ensure_role_shop_tables() -> None:
         await db.commit()
 
 
+async def fetch_active_items_by_category(guild: discord.Guild) -> dict:
+    current_time = now_kst()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT role_id, price, rental_days, sale_ends_at, stock, category, emoji
+        FROM role_shop_items
+        WHERE guild_id = ?
+          AND is_active = 1
+          AND stock != 0
+          AND (sale_ends_at IS NULL OR sale_ends_at > ?)
+        ORDER BY category ASC, price ASC, role_id ASC
+        """, (guild.id, to_iso(current_time))) as cursor:
+            rows = await cursor.fetchall()
+
+    grouped: dict = {}
+
+    for role_id, price, rental_days, sale_ends_at, stock, category, emoji in rows:
+        if not guild.get_role(int(role_id)):
+            continue
+
+        grouped.setdefault(category or DEFAULT_CATEGORY, []).append(
+            (role_id, price, rental_days, sale_ends_at, stock, emoji)
+        )
+
+    return grouped
+
+
+def role_icon_prefix(role: discord.Role, emoji: str | None) -> str:
+    # 수동 지정 이모지(커스텀 서버 이모지 포함) 우선 — 텍스트 안에 그대로 넣으면 글자 크기로 나온다.
+    if emoji:
+        return f"{emoji} "
+
+    icon = role.display_icon
+
+    # 역할 자체 아이콘은 유니코드 이모지일 때만 인라인으로 쓴다.
+    # (업로드 이미지 아이콘은 Section+Thumbnail로만 표현 가능한데 글자보다 훨씬 크게 나와서 제외)
+    return f"{icon} " if isinstance(icon, str) else ""
+
+
+def format_role_item_line(role: discord.Role, price, rental_days, stock, emoji: str | None) -> str:
+    icon_prefix = role_icon_prefix(role, emoji)
+    stock_text = "무제한" if int(stock) < 0 else f"{int(stock):,}개"
+    return f"{icon_prefix}{role.mention} — `{int(price):,}P` · {int(rental_days)}일 · 재고 {stock_text}"
+
+
+CATEGORY_COLOURS = [
+    discord.Colour.blurple(), discord.Colour.gold(), discord.Colour.green(),
+    discord.Colour.red(), discord.Colour.purple(), discord.Colour.teal(),
+    discord.Colour.orange(), discord.Colour.magenta(),
+]
+
+
+def build_role_shop_layout(guild: discord.Guild, rows_by_category: dict) -> discord.ui.LayoutView:
+    view = discord.ui.LayoutView(timeout=180)
+
+    view.add_item(discord.ui.TextDisplay(
+        "## 🎨 역할 상점\n"
+        "-# 재구매하면 만료 시각부터 보유 기간이 연장됩니다."
+    ))
+
+    for i, (category, rows) in enumerate(rows_by_category.items()):
+        children = [
+            discord.ui.TextDisplay(f"### 🏷️ {category}"),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+        ]
+
+        for role_id, price, rental_days, sale_ends_at, stock, emoji in rows:
+            role = guild.get_role(int(role_id))
+
+            if not role:
+                continue
+
+            children.append(discord.ui.TextDisplay(
+                format_role_item_line(role, price, rental_days, stock, emoji)
+            ))
+
+        colour = CATEGORY_COLOURS[i % len(CATEGORY_COLOURS)]
+        view.add_item(discord.ui.Container(*children, accent_colour=colour))
+
+    view.add_item(discord.ui.ActionRow(RoleShopBuyButton()))
+
+    return view
+
+
+class RoleShopCategorySelect(discord.ui.Select):
+    def __init__(self, rows_by_category: dict):
+        self.rows_by_category = rows_by_category
+
+        options = [
+            discord.SelectOption(
+                label=category[:100],
+                value=category,
+                description=f"{len(rows)}개 상품",
+            )
+            for category, rows in rows_by_category.items()
+        ]
+
+        super().__init__(
+            placeholder="카테고리를 선택하세요.",
+            min_values=1,
+            max_values=1,
+            options=options[:25],
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        category = self.values[0]
+        rows = self.rows_by_category.get(category, [])
+
+        view = discord.ui.View(timeout=120)
+        view.add_item(RoleShopBuySelect(rows, interaction.guild))
+
+        await interaction.response.edit_message(
+            content=f"`{category}` 카테고리에서 구매할 역할을 선택하세요.",
+            view=view,
+        )
+
+
+class RoleShopCategoryView(discord.ui.View):
+    def __init__(self, rows_by_category: dict):
+        super().__init__(timeout=120)
+        self.add_item(RoleShopCategorySelect(rows_by_category))
+
+
+class RoleShopBuyButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="구매하기", style=discord.ButtonStyle.success)
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.guild:
+            await interaction.response.send_message("❌ 서버에서만 사용할 수 있습니다.", ephemeral=True)
+            return
+
+        rows_by_category = await fetch_active_items_by_category(interaction.guild)
+
+        if not rows_by_category:
+            await interaction.response.send_message("현재 판매 중인 기간제 역할이 없습니다.", ephemeral=True)
+            return
+
+        await interaction.response.send_message(
+            "구매할 카테고리를 선택하세요.",
+            view=RoleShopCategoryView(rows_by_category),
+            ephemeral=True,
+        )
+
+
 class RoleShopBuySelect(discord.ui.Select):
     def __init__(self, rows: list[tuple], guild: discord.Guild):
         options = []
 
-        for role_id, price, rental_days, sale_ends_at, stock in rows[:25]:
+        for role_id, price, rental_days, sale_ends_at, stock, emoji in rows[:25]:
             role = guild.get_role(int(role_id))
             if not role:
                 continue
 
             stock_text = "무제한" if int(stock) < 0 else f"{stock}개"
-            options.append(
-                discord.SelectOption(
-                    label=role.name[:100],
-                    value=str(role_id),
-                    description=f"{price:,}P · {rental_days}일 · 재고 {stock_text}"[:100],
-                )
-            )
+
+            options.append(discord.SelectOption(
+                label=role.name[:100],
+                value=str(role_id),
+                description=f"{price:,}P · {rental_days}일 · 재고 {stock_text}"[:100],
+                emoji=emoji or None,
+            ))
 
         super().__init__(
             placeholder="구매할 역할을 선택하세요.",
@@ -306,49 +469,124 @@ class RoleShopBuySelect(discord.ui.Select):
         )
 
 
-class RoleShopView(discord.ui.View):
-    def __init__(self, rows: list[tuple], guild: discord.Guild):
-        super().__init__(timeout=120)
-        self.add_item(RoleShopBuySelect(rows, guild))
+class RoleEmojiModal(discord.ui.Modal):
+    def __init__(self, role: discord.Role, current_emoji: str | None = None):
+        super().__init__(title=f"{role.name[:28]} 아이콘 이모지 설정")
+        self.role = role
 
+        self.emoji_input = discord.ui.TextInput(
+            label="아이콘 이모지",
+            placeholder="유니코드 이모지 또는 서버 커스텀 이모지를 붙여넣기 / 비워두면 제거",
+            required=False,
+            max_length=100,
+            default=current_emoji or "",
+        )
+
+        self.add_item(self.emoji_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not interaction.guild:
+            await interaction.response.send_message("❌ 서버에서만 사용할 수 있습니다.", ephemeral=True)
+            return
+
+        emoji = str(self.emoji_input.value).strip() or None
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute("""
+            UPDATE role_shop_items SET emoji = ?, updated_at = ?
+            WHERE guild_id = ? AND role_id = ?
+            """, (emoji, to_iso(now_kst()), interaction.guild.id, self.role.id))
+            await db.commit()
+
+        if cursor.rowcount == 0:
+            await interaction.response.send_message(
+                "❌ 먼저 역할 상품을 등록해주세요.", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            f"✅ {self.role.mention}의 아이콘을 {emoji or '제거'}(으)로 설정했습니다.",
+            ephemeral=True,
+        )
+
+
+class RoleEmojiButton(discord.ui.Button):
+    def __init__(self, role: discord.Role):
+        super().__init__(label="아이콘 이모지 설정 (선택)", style=discord.ButtonStyle.gray)
+        self.role = role
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(RoleEmojiModal(self.role))
+
+
+class RoleEmojiButtonView(discord.ui.View):
+    def __init__(self, role: discord.Role):
+        super().__init__(timeout=180)
+        self.add_item(RoleEmojiButton(role))
 
 
 class RoleProductModal(discord.ui.Modal):
-    def __init__(self, role: discord.Role):
+    def __init__(self, role: discord.Role, prefill: tuple | None = None):
         super().__init__(title=f"{role.name[:35]} 역할 상품 설정")
         self.role = role
+
+        default_price = default_rental = default_category = None
+        default_sale = "0"
+        default_stock = "-1"
+
+        if prefill:
+            price, rental_days, sale_ends_at_text, stock, category = prefill
+            default_price = str(int(price))
+            default_rental = str(int(rental_days))
+            default_stock = str(int(stock))
+            default_category = category or DEFAULT_CATEGORY
+
+            sale_end = from_iso(sale_ends_at_text)
+            if sale_end:
+                remaining_days = max(1, (sale_end - now_kst()).days + 1)
+                default_sale = str(remaining_days)
 
         self.price_input = discord.ui.TextInput(
             label="가격 (P)",
             placeholder="예: 5000",
             required=True,
             max_length=10,
+            default=default_price,
         )
         self.rental_days_input = discord.ui.TextInput(
             label="적용 기간 / 보유일",
             placeholder="예: 30",
             required=True,
             max_length=4,
+            default=default_rental,
         )
         self.sale_days_input = discord.ui.TextInput(
             label="판매 기간 / 판매일",
             placeholder="예: 7 / 상시 판매는 0",
             required=True,
-            default="0",
+            default=default_sale,
             max_length=4,
         )
         self.stock_input = discord.ui.TextInput(
             label="재고",
             placeholder="예: 20 / 무제한은 -1",
             required=True,
-            default="-1",
+            default=default_stock,
             max_length=8,
+        )
+        self.category_input = discord.ui.TextInput(
+            label="카테고리",
+            placeholder="예: 산리오 / 비워두면 '기타'로 분류됩니다.",
+            required=False,
+            max_length=30,
+            default=default_category,
         )
 
         self.add_item(self.price_input)
         self.add_item(self.rental_days_input)
         self.add_item(self.sale_days_input)
         self.add_item(self.stock_input)
+        self.add_item(self.category_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         if not interaction.guild:
@@ -377,6 +615,8 @@ class RoleProductModal(discord.ui.Modal):
             await interaction.response.send_message("❌ 재고는 -1 또는 0~1,000,000으로 입력해주세요.", ephemeral=True)
             return
 
+        category = str(self.category_input.value).strip() or DEFAULT_CATEGORY
+
         role = interaction.guild.get_role(self.role.id)
         bot_member = interaction.guild.me
         if not role:
@@ -396,28 +636,32 @@ class RoleProductModal(discord.ui.Modal):
             await db.execute("""
             INSERT INTO role_shop_items (
                 guild_id, role_id, price, rental_days, sale_ends_at,
-                stock, is_active, created_by, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+                stock, is_active, created_by, created_at, updated_at, category
+            ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
             ON CONFLICT(guild_id, role_id) DO UPDATE SET
                 price = excluded.price,
                 rental_days = excluded.rental_days,
                 sale_ends_at = excluded.sale_ends_at,
                 stock = excluded.stock,
                 is_active = 1,
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at,
+                category = excluded.category
             """, (
                 interaction.guild.id, role.id, price, rental_days,
                 to_iso(sale_end) if sale_end else None, stock,
-                interaction.user.id, to_iso(current_time), to_iso(current_time),
+                interaction.user.id, to_iso(current_time), to_iso(current_time), category,
             ))
             await db.commit()
 
         await interaction.response.send_message(
             f"✅ {role.mention} 역할 상품을 등록했습니다.\n"
+            f"카테고리: `{category}`\n"
             f"가격: `{price:,}P`\n"
-            f"적용 기간: `{rental_days}일`\n"
-            f"판매 종료: `{format_dt(sale_end)}`\n"
-            f"재고: `{'무제한' if stock < 0 else f'{stock:,}개'}`",
+            f"지속시간: `{rental_days}일`\n"
+            f"판매종료일: `{format_dt(sale_end)}`\n"
+            f"재고: `{'무제한' if stock < 0 else f'{stock:,}개'}`\n\n"
+            f"필요하면 아래 버튼으로 아이콘 이모지도 설정해주세요.",
+            view=RoleEmojiButtonView(role),
             ephemeral=True,
         )
 
@@ -451,6 +695,251 @@ class RoleProductRoleSelectView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=120)
         self.add_item(RoleProductRoleSelect())
+
+
+# ── /역할상품관리 통합 메뉴 ─────────────────────────────────
+
+async def fetch_all_items_for_guild(guild_id: int) -> list:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT role_id, price, rental_days, sale_ends_at, stock, category, emoji
+        FROM role_shop_items
+        WHERE guild_id = ?
+        ORDER BY category ASC, role_id ASC
+        """, (guild_id,)) as cursor:
+            return await cursor.fetchall()
+
+
+async def fetch_active_items_for_guild(guild_id: int) -> list:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT role_id, price, category
+        FROM role_shop_items
+        WHERE guild_id = ? AND is_active = 1
+        ORDER BY category ASC, role_id ASC
+        """, (guild_id,)) as cursor:
+            return await cursor.fetchall()
+
+
+async def build_role_item_list_embed(guild: discord.Guild) -> discord.Embed | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+        SELECT role_id, price, rental_days, sale_ends_at, stock, is_active, category
+        FROM role_shop_items
+        WHERE guild_id = ?
+        ORDER BY is_active DESC, category ASC, role_id ASC
+        """, (guild.id,)) as cursor:
+            rows = await cursor.fetchall()
+
+    if not rows:
+        return None
+
+    lines = []
+    current_time = now_kst()
+
+    for role_id, price, rental_days, sale_ends_at_text, stock, is_active, category in rows[:30]:
+        role = guild.get_role(int(role_id))
+        role_text = role.mention if role else f"삭제된 역할 (`{role_id}`)"
+        sale_end = from_iso(sale_ends_at_text)
+        actually_active = bool(is_active) and (not sale_end or sale_end > current_time) and int(stock) != 0
+        status = "판매중" if actually_active else "판매중지"
+        stock_text = "무제한" if int(stock) < 0 else f"{int(stock):,}개"
+        lines.append(
+            f"{role_text} · **{status}** · `{category or DEFAULT_CATEGORY}`\n"
+            f"└ `{int(price):,}P` · 지속시간 `{int(rental_days)}일` · 재고 `{stock_text}` · 판매종료일 `{format_dt(sale_end)}`"
+        )
+
+    return discord.Embed(
+        title="🛠 역할 상품 목록",
+        description="\n\n".join(lines),
+        color=discord.Color.blurple(),
+    )
+
+
+class RoleManageEditFieldsButton(discord.ui.Button):
+    def __init__(self, role: discord.Role, prefill: tuple):
+        super().__init__(label="가격/기간/재고 수정", style=discord.ButtonStyle.primary)
+        self.role = role
+        self.prefill = prefill
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(RoleProductModal(self.role, prefill=self.prefill))
+
+
+class RoleManageEditEmojiButton(discord.ui.Button):
+    def __init__(self, role: discord.Role, current_emoji: str | None):
+        super().__init__(label="아이콘 수정", style=discord.ButtonStyle.gray)
+        self.role = role
+        self.current_emoji = current_emoji
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(RoleEmojiModal(self.role, current_emoji=self.current_emoji))
+
+
+class RoleManageEditSelect(discord.ui.Select):
+    def __init__(self, rows: list, guild: discord.Guild):
+        self.rows_by_role = {row[0]: row for row in rows}
+        self.guild = guild
+
+        options = []
+
+        for role_id, price, rental_days, sale_ends_at, stock, category, emoji in rows[:25]:
+            role = guild.get_role(int(role_id))
+            options.append(discord.SelectOption(
+                label=(role.name if role else f"삭제된 역할({role_id})")[:100],
+                value=str(role_id),
+                description=f"{int(price):,}P · {category or DEFAULT_CATEGORY}"[:100],
+                emoji=emoji or None,
+            ))
+
+        super().__init__(
+            placeholder="수정할 역할 상품을 선택하세요.",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        role_id = int(self.values[0])
+        role = self.guild.get_role(role_id)
+
+        if not role:
+            await interaction.response.send_message(
+                "❌ 해당 역할이 서버에서 삭제되었습니다. 상품 목록에서 제거를 진행해주세요.",
+                ephemeral=True,
+            )
+            return
+
+        _, price, rental_days, sale_ends_at, stock, category, emoji = self.rows_by_role[role_id]
+
+        view = discord.ui.View(timeout=120)
+        view.add_item(RoleManageEditFieldsButton(role, (price, rental_days, sale_ends_at, stock, category)))
+        view.add_item(RoleManageEditEmojiButton(role, emoji))
+
+        await interaction.response.edit_message(
+            content=f"{role.mention} 상품을 어떻게 수정할까요?",
+            view=view,
+        )
+
+
+class RoleManageEditSelectView(discord.ui.View):
+    def __init__(self, rows: list, guild: discord.Guild):
+        super().__init__(timeout=120)
+        self.add_item(RoleManageEditSelect(rows, guild))
+
+
+class RoleManageRemoveSelect(discord.ui.Select):
+    def __init__(self, rows: list, guild: discord.Guild):
+        options = []
+
+        for role_id, price, category in rows[:25]:
+            role = guild.get_role(int(role_id))
+            options.append(discord.SelectOption(
+                label=(role.name if role else f"삭제된 역할({role_id})")[:100],
+                value=str(role_id),
+                description=f"{int(price):,}P · {category or DEFAULT_CATEGORY}"[:100],
+            ))
+
+        super().__init__(
+            placeholder="제거(판매중지)할 역할 상품을 선택하세요.",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        role_id = int(self.values[0])
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute("""
+            UPDATE role_shop_items SET is_active = 0, updated_at = ?
+            WHERE guild_id = ? AND role_id = ?
+            """, (to_iso(now_kst()), interaction.guild.id, role_id))
+            await db.commit()
+
+        role = interaction.guild.get_role(role_id)
+        role_text = role.mention if role else f"삭제된 역할 (`{role_id}`)"
+
+        if cursor.rowcount == 0:
+            message = "❌ 등록된 역할 상품이 아닙니다."
+        else:
+            message = f"✅ {role_text} 역할 상품을 제거했습니다. 기존 구매자의 역할은 만료일까지 유지됩니다."
+
+        await interaction.response.edit_message(content=message, view=None)
+
+
+class RoleManageRemoveSelectView(discord.ui.View):
+    def __init__(self, rows: list, guild: discord.Guild):
+        super().__init__(timeout=120)
+        self.add_item(RoleManageRemoveSelect(rows, guild))
+
+
+class RoleAdminRegisterButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="등록", style=discord.ButtonStyle.success)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            content="🎨 판매할 역할을 먼저 선택하세요.\n역할 선택 후 가격·적용 기간·판매일·재고 입력창이 열립니다.",
+            view=RoleProductRoleSelectView(),
+        )
+
+
+class RoleAdminEditButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="수정", style=discord.ButtonStyle.primary)
+
+    async def callback(self, interaction: discord.Interaction):
+        rows = await fetch_all_items_for_guild(interaction.guild.id)
+
+        if not rows:
+            await interaction.response.send_message("등록된 역할 상품이 없습니다.", ephemeral=True)
+            return
+
+        await interaction.response.edit_message(
+            content="수정할 역할 상품을 선택하세요.",
+            view=RoleManageEditSelectView(rows, interaction.guild),
+        )
+
+
+class RoleAdminRemoveButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="제거", style=discord.ButtonStyle.danger)
+
+    async def callback(self, interaction: discord.Interaction):
+        rows = await fetch_active_items_for_guild(interaction.guild.id)
+
+        if not rows:
+            await interaction.response.send_message("현재 판매 중인 역할 상품이 없습니다.", ephemeral=True)
+            return
+
+        await interaction.response.edit_message(
+            content="제거(판매중지)할 역할 상품을 선택하세요.",
+            view=RoleManageRemoveSelectView(rows, interaction.guild),
+        )
+
+
+class RoleAdminListButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="목록", style=discord.ButtonStyle.gray)
+
+    async def callback(self, interaction: discord.Interaction):
+        embed = await build_role_item_list_embed(interaction.guild)
+
+        if not embed:
+            await interaction.response.send_message("등록된 역할 상품이 없습니다.", ephemeral=True)
+            return
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class RoleAdminMenuView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.add_item(RoleAdminRegisterButton())
+        self.add_item(RoleAdminEditButton())
+        self.add_item(RoleAdminRemoveButton())
+        self.add_item(RoleAdminListButton())
 
 
 class RoleShop(commands.Cog):
@@ -535,49 +1024,16 @@ class RoleShop(commands.Cog):
             return
 
         await ensure_role_shop_tables()
-        current_time = now_kst()
 
-        async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute("""
-            SELECT role_id, price, rental_days, sale_ends_at, stock
-            FROM role_shop_items
-            WHERE guild_id = ?
-              AND is_active = 1
-              AND stock != 0
-              AND (sale_ends_at IS NULL OR sale_ends_at > ?)
-            ORDER BY price ASC, role_id ASC
-            LIMIT 25
-            """, (interaction.guild.id, to_iso(current_time))) as cursor:
-                rows = await cursor.fetchall()
+        rows_by_category = await fetch_active_items_by_category(interaction.guild)
 
-        valid_rows = [row for row in rows if interaction.guild.get_role(int(row[0]))]
-        if not valid_rows:
+        if not rows_by_category:
             await interaction.response.send_message("현재 판매 중인 기간제 역할이 없습니다.", ephemeral=True)
             return
 
-        lines = []
-        for role_id, price, rental_days, sale_ends_at_text, stock in valid_rows:
-            role = interaction.guild.get_role(int(role_id))
-            sale_end = from_iso(sale_ends_at_text)
-            stock_text = "무제한" if int(stock) < 0 else f"{int(stock):,}개"
-            sale_text = "상시 판매" if not sale_end else f"{discord.utils.format_dt(sale_end, style='R')} 종료"
-            lines.append(
-                f"{role.mention}\n"
-                f"└ `{int(price):,}P` · 구매 후 `{int(rental_days)}일` · 재고 `{stock_text}`\n"
-                f"└ 판매: {sale_text}"
-            )
+        layout = build_role_shop_layout(interaction.guild, rows_by_category)
 
-        embed = discord.Embed(
-            title="🎨 기간제 역할 상점",
-            description="\n\n".join(lines),
-            color=discord.Color.blurple(),
-        )
-        embed.set_footer(text="재구매하면 현재 만료 시각부터 보유 기간이 연장됩니다.")
-        await interaction.response.send_message(
-            embed=embed,
-            view=RoleShopView(valid_rows, interaction.guild),
-            ephemeral=True,
-        )
+        await interaction.response.send_message(view=layout, ephemeral=True)
 
     @app_commands.command(name="내역할기간", description="내가 구매한 기간제 역할의 남은 기간을 확인합니다.")
     async def my_role_period(self, interaction: discord.Interaction):
@@ -606,78 +1062,18 @@ class RoleShop(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(name="역할상품등록", description="기간제 역할 상품을 등록하거나 수정합니다.")
-    async def register_role_item(self, interaction: discord.Interaction):
+    @app_commands.command(name="역할상품관리", description="역할 상점 상품을 등록/수정/제거/조회합니다.")
+    async def role_shop_admin(self, interaction: discord.Interaction):
         if not await is_bot_admin(interaction):
             await interaction.response.send_message("❌ 권한이 없습니다.", ephemeral=True)
             return
 
         await ensure_role_shop_tables()
         await interaction.response.send_message(
-            "🎨 판매할 역할을 먼저 선택하세요.\n역할 선택 후 가격·적용 기간·판매일·재고 입력창이 열립니다.",
-            view=RoleProductRoleSelectView(),
+            "🛠 역할 상점 관리 — 원하는 작업을 선택하세요.",
+            view=RoleAdminMenuView(),
             ephemeral=True,
         )
-
-    @app_commands.command(name="역할상품중지", description="역할 상품의 판매를 중지합니다.")
-    async def stop_role_item(self, interaction: discord.Interaction, 역할: discord.Role):
-        if not await is_bot_admin(interaction):
-            await interaction.response.send_message("❌ 권한이 없습니다.", ephemeral=True)
-            return
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            cursor = await db.execute("""
-            UPDATE role_shop_items
-            SET is_active = 0, updated_at = ?
-            WHERE guild_id = ? AND role_id = ?
-            """, (to_iso(now_kst()), interaction.guild.id, 역할.id))
-            await db.commit()
-
-        if cursor.rowcount == 0:
-            message = "❌ 등록된 역할 상품이 아닙니다."
-        else:
-            message = f"✅ {역할.mention} 역할 상품 판매를 중지했습니다. 기존 구매자의 역할은 만료일까지 유지됩니다."
-        await interaction.response.send_message(message, ephemeral=True)
-
-    @app_commands.command(name="역할상품목록", description="등록된 역할 상품과 판매 상태를 확인합니다.")
-    async def role_item_list(self, interaction: discord.Interaction):
-        if not await is_bot_admin(interaction):
-            await interaction.response.send_message("❌ 권한이 없습니다.", ephemeral=True)
-            return
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute("""
-            SELECT role_id, price, rental_days, sale_ends_at, stock, is_active
-            FROM role_shop_items
-            WHERE guild_id = ?
-            ORDER BY is_active DESC, role_id ASC
-            """, (interaction.guild.id,)) as cursor:
-                rows = await cursor.fetchall()
-
-        if not rows:
-            await interaction.response.send_message("등록된 역할 상품이 없습니다.", ephemeral=True)
-            return
-
-        lines = []
-        current_time = now_kst()
-        for role_id, price, rental_days, sale_ends_at_text, stock, is_active in rows[:30]:
-            role = interaction.guild.get_role(int(role_id))
-            role_text = role.mention if role else f"삭제된 역할 (`{role_id}`)"
-            sale_end = from_iso(sale_ends_at_text)
-            actually_active = bool(is_active) and (not sale_end or sale_end > current_time) and int(stock) != 0
-            status = "판매중" if actually_active else "판매중지"
-            stock_text = "무제한" if int(stock) < 0 else f"{int(stock):,}개"
-            lines.append(
-                f"{role_text} · **{status}**\n"
-                f"└ `{int(price):,}P` · 보유 `{int(rental_days)}일` · 재고 `{stock_text}` · 종료 `{format_dt(sale_end)}`"
-            )
-
-        embed = discord.Embed(
-            title="🛠 역할 상품 목록",
-            description="\n\n".join(lines),
-            color=discord.Color.blurple(),
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
