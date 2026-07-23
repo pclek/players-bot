@@ -772,6 +772,7 @@ class RecruitPostView(discord.ui.View):
                     label="🎧 입장 링크 생성 실패",
                     style=discord.ButtonStyle.secondary,
                     disabled=True,
+                    custom_id="recruit_invite_failed",
                 )
             )
 
@@ -951,7 +952,8 @@ class Recruit(commands.Cog):
         self.bot = bot
 
     async def cog_load(self):
-        pass
+        self.bot.add_view(RecruitPostView())
+        self.bot.add_view(FinishedRecruitView())
 
     @commands.Cog.listener()
     async def on_voice_state_update(

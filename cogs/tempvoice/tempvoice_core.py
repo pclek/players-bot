@@ -451,6 +451,15 @@ class TempVoiceCore(commands.Cog):
                 (new_owner.id, channel.id),
             )
 
+            await db.execute(
+                """
+                UPDATE recruit_posts
+                SET host_id = ?
+                WHERE voice_channel_id = ?
+                """,
+                (new_owner.id, channel.id),
+            )
+
             await db.commit()
 
         embed = discord.Embed(
