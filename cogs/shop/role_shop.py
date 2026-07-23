@@ -1000,73 +1000,6 @@ class RoleManageRemoveSelectView(discord.ui.View):
         self.add_item(RoleManageRemoveSelect(rows, guild))
 
 
-class RoleAdminRegisterButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(label="등록", style=discord.ButtonStyle.success)
-
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.edit_message(
-            content="🎨 판매할 역할을 먼저 선택하세요.\n역할 선택 후 가격·적용 기간·판매일·재고 입력창이 열립니다.",
-            view=RoleProductRoleSelectView(),
-        )
-
-
-class RoleAdminEditButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(label="수정", style=discord.ButtonStyle.primary)
-
-    async def callback(self, interaction: discord.Interaction):
-        rows = await fetch_all_items_for_guild(interaction.guild.id)
-
-        if not rows:
-            await interaction.response.send_message("등록된 역할 상품이 없습니다.", ephemeral=True)
-            return
-
-        await interaction.response.edit_message(
-            content="수정할 역할 상품을 선택하세요.",
-            view=RoleManageEditSelectView(rows, interaction.guild),
-        )
-
-
-class RoleAdminRemoveButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(label="제거", style=discord.ButtonStyle.danger)
-
-    async def callback(self, interaction: discord.Interaction):
-        rows = await fetch_active_items_for_guild(interaction.guild.id)
-
-        if not rows:
-            await interaction.response.send_message("현재 판매 중인 역할 상품이 없습니다.", ephemeral=True)
-            return
-
-        await interaction.response.edit_message(
-            content="제거(판매중지)할 역할 상품을 선택하세요.",
-            view=RoleManageRemoveSelectView(rows, interaction.guild),
-        )
-
-
-class RoleAdminListButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(label="목록", style=discord.ButtonStyle.gray)
-
-    async def callback(self, interaction: discord.Interaction):
-        embed = await build_role_item_list_embed(interaction.guild)
-
-        if not embed:
-            await interaction.response.send_message("등록된 역할 상품이 없습니다.", ephemeral=True)
-            return
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
-class RoleAdminMenuView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=120)
-        self.add_item(RoleAdminRegisterButton())
-        self.add_item(RoleAdminEditButton())
-        self.add_item(RoleAdminRemoveButton())
-        self.add_item(RoleAdminListButton())
-
 
 def build_role_gift_status_text(target_user_id: int | None, target_role_id: int | None) -> str:
     user_text = f"<@{target_user_id}>" if target_user_id else "*(미선택)*"
@@ -1402,19 +1335,6 @@ class RoleShop(commands.Cog):
 
         await interaction.response.send_message(
             "\n".join(lines) if lines else "현재 보유 중인 기간제 역할이 없습니다.",
-            ephemeral=True,
-        )
-
-    @app_commands.command(name="역할상품관리", description="역할 상점 상품을 등록/수정/제거/조회합니다.")
-    async def role_shop_admin(self, interaction: discord.Interaction):
-        if not await is_bot_admin(interaction):
-            await interaction.response.send_message("❌ 권한이 없습니다.", ephemeral=True)
-            return
-
-        await ensure_role_shop_tables()
-        await interaction.response.send_message(
-            "🛠 역할 상점 관리 — 원하는 작업을 선택하세요.",
-            view=RoleAdminMenuView(),
             ephemeral=True,
         )
 

@@ -346,33 +346,6 @@ def build_simple_layout(text: str, colour: discord.Colour) -> discord.ui.LayoutV
     return view
 
 
-# ── 채널 설정 ─────────────────────────────────────────────
-
-class PunishSetChannelButton(discord.ui.Button):
-    def __init__(self, label: str, setting_key: str, setting_name: str):
-        super().__init__(label=label, style=discord.ButtonStyle.gray)
-        self.setting_key = setting_key
-        self.setting_name = setting_name
-
-    async def callback(self, interaction: discord.Interaction):
-        if not await is_bot_admin(interaction):
-            await interaction.response.send_message("❌ 권한이 없습니다.", ephemeral=True)
-            return
-
-        await set_setting(self.setting_key, str(interaction.channel.id))
-
-        await interaction.response.send_message(
-            f"✅ {self.setting_name}을(를) {interaction.channel.mention}(으)로 설정했습니다.",
-            ephemeral=True,
-        )
-
-
-class PunishChannelSettingsView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=120)
-        self.add_item(PunishSetChannelButton("차단채널", "punish_channel_id", "차단(제재) 목록 채널"))
-        self.add_item(PunishSetChannelButton("경고채널", "warning_channel_id", "경고 목록 채널"))
-
 
 # ── 대상 검색 ─────────────────────────────────────────────
 
@@ -489,7 +462,7 @@ class PunishReasonModal(discord.ui.Modal):
         if not channel_id:
             await interaction.response.send_message(
                 f"❌ {KIND_LABELS[self.kind]} 게시 채널이 설정되지 않았습니다. "
-                f"`/제재채널설정`으로 먼저 설정해주세요.",
+                f"`/서버설정` → 제재 → 제재/경고 게시채널에서 먼저 설정해주세요.",
                 ephemeral=True,
             )
             return
@@ -1297,7 +1270,7 @@ class MigrationSourceChannelSelect(discord.ui.ChannelSelect):
         if not dest_channel_id:
             await interaction.response.send_message(
                 f"❌ 새 {KIND_LABELS[self.kind]} 채널이 아직 설정되지 않았습니다. "
-                f"`/제재채널설정`을 먼저 실행해주세요.",
+                f"`/서버설정` → 제재 → 제재/경고 게시채널에서 먼저 설정해주세요.",
                 ephemeral=True,
             )
             return
@@ -1501,18 +1474,6 @@ class PunishRecords(commands.Cog):
     async def cog_load(self):
         await ensure_punish_record_tables()
 
-    @app_commands.command(name="제재채널설정", description="차단/경고 목록 게시 채널을 설정합니다.")
-    async def punish_channel_settings(self, interaction: discord.Interaction):
-        if not await is_bot_admin(interaction):
-            await interaction.response.send_message("❌ 권한이 없습니다.", ephemeral=True)
-            return
-
-        await interaction.response.send_message(
-            "아래 버튼을 눌러 **현재 채널**을 지정하세요.",
-            view=PunishChannelSettingsView(),
-            ephemeral=True,
-        )
-
     @app_commands.command(name="제재", description="경고/제재 기록을 생성하거나 수정합니다.")
     async def punish_command(self, interaction: discord.Interaction):
         if not await is_bot_admin(interaction):
@@ -1535,7 +1496,7 @@ class PunishRecords(commands.Cog):
             return
 
         await interaction.response.send_message(
-            "이동할 기록 종류를 선택하세요. (새 채널은 `/제재채널설정`에 지정된 채널입니다)",
+            "이동할 기록 종류를 선택하세요. (새 채널은 `/서버설정` → 제재에서 지정된 채널입니다)",
             view=MigrationEntryView(),
             ephemeral=True,
         )

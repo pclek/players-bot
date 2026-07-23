@@ -45,21 +45,22 @@ async def setup_hook():
     await bot.load_extension("cogs.xp.voice_time")
     await bot.load_extension("cogs.profile.ranking")
     await bot.load_extension("cogs.admin.backup")
-    await bot.load_extension("cogs.punish.punish_settings")
+    # cogs.punish.punish_settings: 순수 로직 모듈로 전환됨(/제재설정 명령어는 /서버설정 허브로 흡수).
+    # setup()이 없으므로 load_extension 대상 아님 — 다른 파일들이 함수만 import해서 씀.
     await bot.load_extension("cogs.punish.rejoin_punish")
     # cogs.punish.warnings: 구버전 /경고 카운터 시스템 (users.warnings 컬럼).
     # punish_records.py의 /제재 로 완전히 대체되어 비활성화함. 실사용 데이터 0건 확인 후 제거.
     await bot.load_extension("cogs.punish.punish_records")
     await bot.load_extension("cogs.admin.user_info")
     await bot.load_extension("cogs.admin.points_admin")
-    await bot.load_extension("cogs.tempvoice.tempvoice_settings")
+    # cogs.tempvoice.tempvoice_settings: /채널생성기는 /서버설정 허브로 흡수, 파일 삭제됨.
     await bot.load_extension("cogs.tempvoice.tempvoice_core")
-    await bot.load_extension("cogs.matchmaking.game_settings")
+    # cogs.matchmaking.game_settings: /게임관리는 /서버설정 허브로 흡수, 파일 삭제됨.
     await bot.load_extension("cogs.matchmaking.recruit")
-    await bot.load_extension("cogs.matchmaking.matching_settings")
+    # cogs.matchmaking.matching_settings: /매칭설정은 /서버설정 허브로 흡수, 파일 삭제됨.
     await bot.load_extension("cogs.matchmaking.matching")
     await bot.load_extension("cogs.sticky.sticky")
-    await bot.load_extension("cogs.shop.shop_admin")
+    # cogs.shop.shop_admin: /상점관리는 /서버설정 허브로 흡수, 파일 삭제됨.
     await bot.load_extension("cogs.shop.role_shop")
     await bot.load_extension("cogs.points.shop")
     await bot.load_extension("cogs.punish.inactive_role")
@@ -71,11 +72,11 @@ async def setup_hook():
     await bot.load_extension("cogs.games.casino")
     await bot.load_extension("cogs.adventure.trade")
     await bot.load_extension("cogs.stocks.stock_market")
-    await bot.load_extension("cogs.stocks.stock_admin")
-    await bot.load_extension("cogs.civilwar.civilwar_settings")
+    # cogs.stocks.stock_admin: /주식시장관리는 /서버설정 허브로 흡수, 파일 삭제됨.
+    # cogs.civilwar.civilwar_settings: 순수 로직 모듈로 전환됨(/내전채널설정은 /서버설정 허브로 흡수).
     await bot.load_extension("cogs.civilwar.civilwar")
     await bot.load_extension("cogs.notifications.notification_settings")
-    await bot.load_extension("cogs.admin.admin_log_settings")
+    await bot.load_extension("cogs.admin.server_settings_hub")
 
     synced = await bot.tree.sync()
 
