@@ -7,6 +7,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from utils.checks import is_bot_admin
+from utils.admin_log import send_admin_log
 
 DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
@@ -469,7 +470,145 @@ class RoleShopBuySelect(discord.ui.Select):
         )
 
 
+async def set_role_shop_emoji(guild_id: int, role_id: int, emoji: str | None) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("""
+        UPDATE role_shop_items SET emoji = ?, updated_at = ?
+        WHERE guild_id = ? AND role_id = ?
+        """, (emoji, to_iso(now_kst()), guild_id, role_id))
+        await db.commit()
+
+    return cursor.rowcount > 0
+
+
+EMOJI_REACTION_TIMEOUT = 60
+
+
+async def start_emoji_reaction_wait(
+    interaction: discord.Interaction,
+    role: discord.Role,
+    message: discord.Message | None = None,
+):
+    """
+    안내 메시지를 보내고(또는 재사용하고) 관리자가 리액션을 달 때까지 대기.
+    성공 시 (emoji_str, message), 시간 초과 시 (None, message)를 반환.
+    시간 초과 시 message에는 재시도/건너뛰기 버튼이 달린다.
+    """
+    bot = interaction.client
+
+    prompt_text = (
+        f"{interaction.user.mention} `{role.name}` 상품에 사용할 이모지로 "
+        f"아래 메시지에 반응(리액션)해주세요.\n"
+        f"-# {EMOJI_REACTION_TIMEOUT}초 이내 · 유니코드 이모지, 서버 커스텀 이모지 모두 가능"
+    )
+
+    if message is None:
+        message = await interaction.channel.send(prompt_text)
+    else:
+        try:
+            await message.edit(content=prompt_text, view=None)
+            await message.clear_reactions()
+        except discord.HTTPException:
+            pass
+
+    def check(payload: discord.RawReactionActionEvent) -> bool:
+        return payload.message_id == message.id and payload.user_id == interaction.user.id
+
+    try:
+        payload = await bot.wait_for("raw_reaction_add", check=check, timeout=EMOJI_REACTION_TIMEOUT)
+    except asyncio.TimeoutError:
+        view = discord.ui.View(timeout=180)
+        view.add_item(RoleEmojiRetryButton(role, message))
+        view.add_item(RoleEmojiSkipButton(role, message))
+
+        try:
+            await message.edit(
+                content=(
+                    f"{interaction.user.mention} ⏰ 시간이 초과되었습니다.\n"
+                    f"다시 시도하거나 이모지 선택 없이 계속할 수 있습니다."
+                ),
+                view=view,
+            )
+        except discord.HTTPException:
+            pass
+
+        return None, message
+
+    return str(payload.emoji), message
+
+
+async def handle_emoji_reaction_selection(
+    interaction: discord.Interaction,
+    role: discord.Role,
+    message: discord.Message | None = None,
+):
+    emoji_str, message = await start_emoji_reaction_wait(interaction, role, message=message)
+
+    if emoji_str is None:
+        await interaction.followup.send(
+            "⏰ 이모지 선택 시간이 초과되었습니다. 안내 메시지의 버튼으로 다시 시도하거나 건너뛸 수 있습니다.",
+            ephemeral=True,
+        )
+        return
+
+    updated = await set_role_shop_emoji(interaction.guild.id, role.id, emoji_str)
+
+    if not updated:
+        await interaction.followup.send("❌ 먼저 역할 상품을 등록해주세요.", ephemeral=True)
+        return
+
+    try:
+        await message.edit(content=f"✅ {emoji_str} 선택 완료", view=None)
+        await message.clear_reactions()
+    except discord.HTTPException:
+        pass
+
+    await interaction.followup.send(
+        f"✅ {role.mention}의 아이콘을 {emoji_str}(으)로 설정했습니다.", ephemeral=True
+    )
+
+
+class RoleEmojiRetryButton(discord.ui.Button):
+    def __init__(self, role: discord.Role, message: discord.Message):
+        super().__init__(label="다시 시도", style=discord.ButtonStyle.primary)
+        self.role = role
+        self.message = message
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        await handle_emoji_reaction_selection(interaction, self.role, message=self.message)
+
+
+class RoleEmojiSkipButton(discord.ui.Button):
+    def __init__(self, role: discord.Role, message: discord.Message):
+        super().__init__(label="선택 없이 계속", style=discord.ButtonStyle.secondary)
+        self.role = role
+        self.message = message
+
+    async def callback(self, interaction: discord.Interaction):
+        try:
+            await self.message.edit(content="➖ 이모지 선택 없이 계속 진행합니다.", view=None)
+        except discord.HTTPException:
+            pass
+
+        await interaction.response.send_message(
+            "➖ 이모지 선택을 건너뛰었습니다. 아이콘 설정은 변경되지 않았습니다.", ephemeral=True
+        )
+
+
+class RoleEmojiReactionButton(discord.ui.Button):
+    def __init__(self, role: discord.Role):
+        super().__init__(label="🖱 이모지 선택 (리액션)", style=discord.ButtonStyle.primary)
+        self.role = role
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        await handle_emoji_reaction_selection(interaction, self.role)
+
+
 class RoleEmojiModal(discord.ui.Modal):
+    """리액션 방식이 안 될 때를 위한 백업 — 텍스트 직접 입력."""
+
     def __init__(self, role: discord.Role, current_emoji: str | None = None):
         super().__init__(title=f"{role.name[:28]} 아이콘 이모지 설정")
         self.role = role
@@ -490,15 +629,9 @@ class RoleEmojiModal(discord.ui.Modal):
             return
 
         emoji = str(self.emoji_input.value).strip() or None
+        updated = await set_role_shop_emoji(interaction.guild.id, self.role.id, emoji)
 
-        async with aiosqlite.connect(DB_PATH) as db:
-            cursor = await db.execute("""
-            UPDATE role_shop_items SET emoji = ?, updated_at = ?
-            WHERE guild_id = ? AND role_id = ?
-            """, (emoji, to_iso(now_kst()), interaction.guild.id, self.role.id))
-            await db.commit()
-
-        if cursor.rowcount == 0:
+        if not updated:
             await interaction.response.send_message(
                 "❌ 먼저 역할 상품을 등록해주세요.", ephemeral=True
             )
@@ -510,19 +643,21 @@ class RoleEmojiModal(discord.ui.Modal):
         )
 
 
-class RoleEmojiButton(discord.ui.Button):
-    def __init__(self, role: discord.Role):
-        super().__init__(label="아이콘 이모지 설정 (선택)", style=discord.ButtonStyle.gray)
+class RoleEmojiModalButton(discord.ui.Button):
+    def __init__(self, role: discord.Role, current_emoji: str | None = None):
+        super().__init__(label="⌨️ 직접 입력 (백업)", style=discord.ButtonStyle.gray)
         self.role = role
+        self.current_emoji = current_emoji
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(RoleEmojiModal(self.role))
+        await interaction.response.send_modal(RoleEmojiModal(self.role, current_emoji=self.current_emoji))
 
 
 class RoleEmojiButtonView(discord.ui.View):
-    def __init__(self, role: discord.Role):
+    def __init__(self, role: discord.Role, current_emoji: str | None = None):
         super().__init__(timeout=180)
-        self.add_item(RoleEmojiButton(role))
+        self.add_item(RoleEmojiReactionButton(role))
+        self.add_item(RoleEmojiModalButton(role, current_emoji))
 
 
 class RoleProductModal(discord.ui.Modal):
@@ -766,16 +901,6 @@ class RoleManageEditFieldsButton(discord.ui.Button):
         await interaction.response.send_modal(RoleProductModal(self.role, prefill=self.prefill))
 
 
-class RoleManageEditEmojiButton(discord.ui.Button):
-    def __init__(self, role: discord.Role, current_emoji: str | None):
-        super().__init__(label="아이콘 수정", style=discord.ButtonStyle.gray)
-        self.role = role
-        self.current_emoji = current_emoji
-
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(RoleEmojiModal(self.role, current_emoji=self.current_emoji))
-
-
 class RoleManageEditSelect(discord.ui.Select):
     def __init__(self, rows: list, guild: discord.Guild):
         self.rows_by_role = {row[0]: row for row in rows}
@@ -814,7 +939,8 @@ class RoleManageEditSelect(discord.ui.Select):
 
         view = discord.ui.View(timeout=120)
         view.add_item(RoleManageEditFieldsButton(role, (price, rental_days, sale_ends_at, stock, category)))
-        view.add_item(RoleManageEditEmojiButton(role, emoji))
+        view.add_item(RoleEmojiReactionButton(role))
+        view.add_item(RoleEmojiModalButton(role, emoji))
 
         await interaction.response.edit_message(
             content=f"{role.mention} 상품을 어떻게 수정할까요?",
@@ -940,6 +1066,223 @@ class RoleAdminMenuView(discord.ui.View):
         self.add_item(RoleAdminEditButton())
         self.add_item(RoleAdminRemoveButton())
         self.add_item(RoleAdminListButton())
+
+
+def build_role_gift_status_text(target_user_id: int | None, target_role_id: int | None) -> str:
+    user_text = f"<@{target_user_id}>" if target_user_id else "*(미선택)*"
+    role_text = f"<@&{target_role_id}>" if target_role_id else "*(미선택)*"
+
+    return (
+        f"🎁 **관리자 역할 선물**\n"
+        f"대상 유저: {user_text}\n"
+        f"선물할 역할: {role_text}\n\n"
+        f"유저와 역할을 모두 선택한 뒤 아래 '다음' 버튼을 눌러주세요."
+    )
+
+
+class RoleGiftUserSelect(discord.ui.UserSelect):
+    def __init__(self):
+        super().__init__(placeholder="선물할 유저를 선택하세요.", min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: RoleGiftSelectView = self.view
+        target = self.values[0]
+
+        if target.bot:
+            await interaction.response.send_message("❌ 봇에게는 역할을 선물할 수 없습니다.", ephemeral=True)
+            return
+
+        view.target_user_id = target.id
+        await interaction.response.edit_message(
+            content=build_role_gift_status_text(view.target_user_id, view.target_role_id),
+            view=view,
+        )
+
+
+class RoleGiftRoleSelect(discord.ui.RoleSelect):
+    def __init__(self):
+        super().__init__(placeholder="선물할 역할을 선택하세요.", min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: RoleGiftSelectView = self.view
+        role = self.values[0]
+        bot_member = interaction.guild.me if interaction.guild else None
+
+        if role.is_default() or role.managed:
+            await interaction.response.send_message("❌ 기본 역할이나 연동 역할은 선물할 수 없습니다.", ephemeral=True)
+            return
+        if not bot_member or role >= bot_member.top_role:
+            await interaction.response.send_message("❌ 봇의 최고 역할보다 낮은 역할만 선물할 수 있습니다.", ephemeral=True)
+            return
+
+        view.target_role_id = role.id
+        await interaction.response.edit_message(
+            content=build_role_gift_status_text(view.target_user_id, view.target_role_id),
+            view=view,
+        )
+
+
+class RoleGiftNextButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="다음 (적용 기간 입력)", style=discord.ButtonStyle.success, row=2)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: RoleGiftSelectView = self.view
+
+        if not view.target_user_id or not view.target_role_id:
+            await interaction.response.send_message("❌ 유저와 역할을 모두 선택해주세요.", ephemeral=True)
+            return
+
+        guild = interaction.guild
+        member = guild.get_member(view.target_user_id)
+        role = guild.get_role(view.target_role_id)
+
+        if not member:
+            await interaction.response.send_message("❌ 대상 유저를 찾을 수 없습니다. 다시 선택해주세요.", ephemeral=True)
+            return
+        if not role:
+            await interaction.response.send_message("❌ 대상 역할을 찾을 수 없습니다. 다시 선택해주세요.", ephemeral=True)
+            return
+
+        await interaction.response.send_modal(RoleGiftDurationModal(member, role))
+
+
+class RoleGiftSelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.target_user_id: int | None = None
+        self.target_role_id: int | None = None
+        self.add_item(RoleGiftUserSelect())
+        self.add_item(RoleGiftRoleSelect())
+        self.add_item(RoleGiftNextButton())
+
+
+class RoleGiftDurationModal(discord.ui.Modal):
+    def __init__(self, member: discord.Member, role: discord.Role):
+        super().__init__(title="역할 선물 - 적용 기간")
+        self.member = member
+        self.role = role
+
+        self.days_input = discord.ui.TextInput(
+            label="적용 기간 (일)",
+            placeholder="예: 7",
+            required=True,
+            max_length=5,
+        )
+        self.add_item(self.days_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            days = int(str(self.days_input.value).strip())
+        except ValueError:
+            await interaction.response.send_message("❌ 적용 기간은 숫자로 입력해주세요.", ephemeral=True)
+            return
+
+        if not 1 <= days <= 3650:
+            await interaction.response.send_message("❌ 적용 기간은 1~3650일로 입력해주세요.", ephemeral=True)
+            return
+
+        guild = interaction.guild
+        member = guild.get_member(self.member.id)
+        role = guild.get_role(self.role.id)
+
+        if not member:
+            await interaction.response.send_message("❌ 대상 유저를 찾을 수 없습니다.", ephemeral=True)
+            return
+        if not role:
+            await interaction.response.send_message("❌ 대상 역할을 찾을 수 없습니다.", ephemeral=True)
+            return
+
+        bot_member = guild.me
+        if role.is_default() or role.managed or not bot_member or role >= bot_member.top_role:
+            await interaction.response.send_message(
+                "❌ 이 역할은 선물할 수 없습니다. (봇 권한/역할 순서 확인)", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        try:
+            if role not in member.roles:
+                await member.add_roles(role, reason=f"관리자 역할 선물 ({interaction.user})")
+        except discord.HTTPException:
+            await interaction.followup.send(
+                "❌ 역할 지급에 실패했습니다. 역할 순서와 봇 권한을 확인해주세요.", ephemeral=True
+            )
+            return
+
+        current_time = now_kst()
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+            SELECT expires_at, purchase_count
+            FROM role_shop_rentals
+            WHERE guild_id = ? AND user_id = ? AND role_id = ?
+            """, (guild.id, member.id, role.id)) as cursor:
+                rental_row = await cursor.fetchone()
+
+            previous_expiry = from_iso(rental_row[0]) if rental_row else None
+            base_time = previous_expiry if previous_expiry and previous_expiry > current_time else current_time
+            new_expiry = base_time + timedelta(days=days)
+            purchase_count = int(rental_row[1]) + 1 if rental_row else 1
+
+            await db.execute("""
+            INSERT INTO role_shop_rentals (
+                guild_id, user_id, role_id, expires_at,
+                last_price, purchase_count, updated_at
+            ) VALUES (?, ?, ?, ?, 0, ?, ?)
+            ON CONFLICT(guild_id, user_id, role_id) DO UPDATE SET
+                expires_at = excluded.expires_at,
+                last_price = 0,
+                purchase_count = excluded.purchase_count,
+                updated_at = excluded.updated_at
+            """, (
+                guild.id, member.id, role.id, to_iso(new_expiry),
+                purchase_count, to_iso(current_time),
+            ))
+            await db.commit()
+
+        try:
+            await member.send(
+                f"🎁 관리자로부터 역할을 선물받았습니다: {role.name}\n"
+                f"(적용기간: {days}일, 만료일: {new_expiry.strftime('%Y-%m-%d')})"
+            )
+        except discord.HTTPException as e:
+            print(f"[역할선물] DM 발송 실패 - user_id={member.id}: {e}")
+
+        await send_admin_log(
+            interaction.client, interaction.user,
+            f"역할 {role.mention} 선물 (적용기간: {days}일, 만료일: {new_expiry.strftime('%Y-%m-%d')})",
+            target=member,
+        )
+
+        layout = build_role_gift_result_layout(interaction.user, member, role, days, new_expiry)
+        await interaction.followup.send(view=layout, ephemeral=True)
+
+
+def build_role_gift_result_layout(
+    admin: discord.abc.User,
+    member: discord.Member,
+    role: discord.Role,
+    days: int,
+    new_expiry: datetime,
+) -> discord.ui.LayoutView:
+    view = discord.ui.LayoutView(timeout=None)
+
+    view.add_item(discord.ui.Container(
+        discord.ui.TextDisplay("## 🎁 역할 선물 완료"),
+        discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+        discord.ui.TextDisplay(
+            f"대상: {member.mention}\n"
+            f"역할: {role.mention}\n"
+            f"적용 기간: `{days}일`\n"
+            f"만료일: {format_dt(new_expiry)} ({discord.utils.format_dt(new_expiry, style='R')})\n"
+            f"지급자: {admin.mention}"
+        ),
+        accent_colour=discord.Colour.gold(),
+    ))
+
+    return view
 
 
 class RoleShop(commands.Cog):
@@ -1072,6 +1415,21 @@ class RoleShop(commands.Cog):
         await interaction.response.send_message(
             "🛠 역할 상점 관리 — 원하는 작업을 선택하세요.",
             view=RoleAdminMenuView(),
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="역할선물", description="관리자가 유저에게 임시로 역할을 선물합니다.")
+    async def role_gift(self, interaction: discord.Interaction):
+        if not await is_bot_admin(interaction):
+            await interaction.response.send_message("❌ 권한이 없습니다.", ephemeral=True)
+            return
+
+        await ensure_role_shop_tables()
+
+        view = RoleGiftSelectView()
+        await interaction.response.send_message(
+            build_role_gift_status_text(None, None),
+            view=view,
             ephemeral=True,
         )
 
