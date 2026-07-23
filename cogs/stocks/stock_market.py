@@ -213,8 +213,9 @@ def build_market_layout(stocks, last_updated_text: str | None) -> discord.ui.Lay
     return view
 
 
-def build_portfolio_layout(user: discord.abc.User, holdings) -> discord.ui.LayoutView:
+def build_portfolio_layout(user: discord.abc.User, holdings, points: int) -> discord.ui.LayoutView:
     header = discord.ui.TextDisplay(f"## 📊 {user.mention} 의 보유 현황")
+    points_display = discord.ui.TextDisplay(f"**현재 보유 포인트**: {points:,}P")
 
     view = discord.ui.LayoutView(timeout=None)
 
@@ -223,6 +224,8 @@ def build_portfolio_layout(user: discord.abc.User, holdings) -> discord.ui.Layou
             header,
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
             discord.ui.TextDisplay("보유 중인 종목이 없습니다."),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            points_display,
             accent_colour=discord.Colour.greyple(),
         ))
         return view
@@ -266,6 +269,8 @@ def build_portfolio_layout(user: discord.abc.User, holdings) -> discord.ui.Layou
         *stock_displays,
         discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
         discord.ui.TextDisplay(f"**총 평가액**: {total_value:,}P (수익 {total_profit:+,}P)"),
+        discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+        points_display,
         accent_colour=accent_colour,
     ))
 
@@ -284,6 +289,7 @@ class StockBuyQuantityModal(discord.ui.Modal):
         current_price: int,
         available_shares: int,
         daily_remaining: int,
+        points: int,
     ):
         super().__init__(title=f"{stock_name} 매수 수량")
 
@@ -293,7 +299,7 @@ class StockBuyQuantityModal(discord.ui.Modal):
         self.quantity = discord.ui.TextInput(
             label="매수 수량",
             placeholder=(
-                f"1 이상 숫자 / 잔여 {available_shares:,}주 / "
+                f"보유 포인트 {points:,}P / 1 이상 숫자 / 잔여 {available_shares:,}주 / "
                 f"현재가 {current_price:,}P / 오늘 한도 {daily_remaining:,}P"
             ),
             required=True,
@@ -470,9 +476,10 @@ class StockBuySelect(discord.ui.Select):
 
         spent_today = await get_daily_spent(interaction.user.id)
         remaining = max(DAILY_BUY_LIMIT - spent_today, 0)
+        points = await get_user_points(interaction.user.id)
 
         await interaction.response.send_modal(
-            StockBuyQuantityModal(stock_id, name, current_price, available_shares, remaining)
+            StockBuyQuantityModal(stock_id, name, current_price, available_shares, remaining, points)
         )
 
 
@@ -700,11 +707,13 @@ class StockBuyButton(discord.ui.Button):
 
         spent_today = await get_daily_spent(interaction.user.id)
         remaining = max(DAILY_BUY_LIMIT - spent_today, 0)
+        points = await get_user_points(interaction.user.id)
 
         view = discord.ui.View(timeout=60)
         view.add_item(StockBuyTierSelect(buyable))
 
         await interaction.response.send_message(
+            f"보유 포인트: `{points:,}P`\n"
             f"오늘 남은 매수 한도: `{remaining:,}P`\n"
             f"매수할 카테고리를 선택하세요.",
             view=view,
@@ -750,7 +759,8 @@ class StockPortfolioButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         holdings = await get_user_holdings(interaction.user.id)
-        layout = build_portfolio_layout(interaction.user, holdings)
+        points = await get_user_points(interaction.user.id)
+        layout = build_portfolio_layout(interaction.user, holdings, points)
 
         portfolio_channel_id = None
 
