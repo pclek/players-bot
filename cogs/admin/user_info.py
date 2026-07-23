@@ -10,6 +10,7 @@ from utils.xp import required_xp, set_xp, set_level
 from utils.notifications import notify_if_enabled
 from utils.admin_log import send_admin_log
 from cogs.profile.profile import progress_bar, format_voice_time
+from cogs.punish.punish_records import count_active_records
 from cogs.adventure.adventure_utils import (
     ensure_adventure_profile,
     add_adventure_item,
@@ -154,7 +155,8 @@ async def build_admin_user_layout(
     banner: str | None = None,
 ) -> discord.ui.LayoutView:
     data = await get_or_create_user(member.id)
-    xp, level, points, attendance, voice_time, warnings = data
+    xp, level, points, attendance, voice_time, _legacy_warnings = data
+    warnings = await count_active_records("warning", member.id)
     need_xp = required_xp(level)
 
     view = discord.ui.LayoutView(timeout=120)
@@ -193,8 +195,6 @@ async def build_admin_user_layout(
     ))
 
     view.add_item(discord.ui.ActionRow(
-        AdminWarnAddButton(member),
-        AdminWarnRemoveButton(member),
         AdminPointsEditButton(member),
         AdminXpEditButton(member),
         AdminLevelEditButton(member),
@@ -655,157 +655,6 @@ class AdventureItemSelectView(discord.ui.View):
                 items,
             )
         )
-
-class WarningReasonModal(discord.ui.Modal):
-    def __init__(self, target: discord.Member):
-        super().__init__(title="경고 지급")
-        self.target = target
-
-        self.reason = discord.ui.TextInput(
-            label="경고 사유",
-            placeholder="경고 사유를 입력하세요.",
-            required=True,
-            max_length=200,
-        )
-
-        self.add_item(self.reason)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if not await is_bot_admin(interaction):
-            await interaction.response.send_message(
-                "❌ 권한이 없습니다.", ephemeral=True
-            )
-            return
-
-        reason_text = str(self.reason.value)
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                "INSERT OR IGNORE INTO users (user_id) VALUES (?)", (self.target.id,)
-            )
-
-            await db.execute(
-                """
-            UPDATE users
-            SET warnings = warnings + 1
-            WHERE user_id = ?
-            """,
-                (self.target.id,),
-            )
-
-            await db.execute(
-                """
-            INSERT INTO warning_logs (user_id, admin_id, reason, created_at)
-            VALUES (?, ?, ?, ?)
-            """,
-                (
-                    self.target.id,
-                    interaction.user.id,
-                    reason_text,
-                    datetime.now().isoformat(),
-                ),
-            )
-
-            async with db.execute(
-                "SELECT warnings FROM users WHERE user_id = ?", (self.target.id,)
-            ) as cursor:
-                row = await cursor.fetchone()
-
-            await db.commit()
-
-        layout = await build_admin_user_layout(
-            self.target,
-            banner=(
-                f"✅ {self.target.mention} 님에게 경고를 지급했습니다.\n"
-                f"사유: `{reason_text}`\n"
-                f"현재 경고: `{row[0]}`회"
-            ),
-        )
-
-        await interaction.response.send_message(
-            view=layout,
-            ephemeral=True,
-        )
-
-
-class AdminWarnAddButton(discord.ui.Button):
-    def __init__(self, target: discord.Member):
-        super().__init__(
-            label="경고 +",
-            style=discord.ButtonStyle.danger,
-            custom_id="admin_user_warn_add",
-        )
-        self.target = target
-
-    async def callback(self, interaction: discord.Interaction):
-        if not await is_bot_admin(interaction):
-            await interaction.response.send_message(
-                "❌ 권한이 없습니다.", ephemeral=True
-            )
-            return
-
-        await interaction.response.send_modal(WarningReasonModal(self.target))
-
-
-class AdminWarnRemoveButton(discord.ui.Button):
-    def __init__(self, target: discord.Member):
-        super().__init__(
-            label="경고 -",
-            style=discord.ButtonStyle.secondary,
-            custom_id="admin_user_warn_remove",
-        )
-        self.target = target
-
-    async def callback(self, interaction: discord.Interaction):
-        if not await is_bot_admin(interaction):
-            await interaction.response.send_message(
-                "❌ 권한이 없습니다.", ephemeral=True
-            )
-            return
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                "INSERT OR IGNORE INTO users (user_id) VALUES (?)", (self.target.id,)
-            )
-
-            async with db.execute(
-                "SELECT warnings FROM users WHERE user_id = ?", (self.target.id,)
-            ) as cursor:
-                row = await cursor.fetchone()
-
-            current_warning = row[0]
-
-            if current_warning <= 0:
-                await interaction.response.send_message(
-                    f"❌ {self.target.mention} 님은 차감할 경고가 없습니다.",
-                    ephemeral=True,
-                )
-                return
-
-            await db.execute(
-                """
-            UPDATE users
-            SET warnings = warnings - 1
-            WHERE user_id = ?
-            """,
-                (self.target.id,),
-            )
-
-            await db.commit()
-
-        layout = await build_admin_user_layout(
-            self.target,
-            banner=(
-                f"✅ {self.target.mention} 님의 경고를 차감했습니다.\n"
-                f"현재 경고: `{current_warning - 1}`회"
-            ),
-        )
-
-        await interaction.response.send_message(
-            view=layout,
-            ephemeral=True,
-        )
-
 
 class AdminPointsEditButton(discord.ui.Button):
     def __init__(self, target: discord.Member):

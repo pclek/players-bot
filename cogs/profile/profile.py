@@ -7,6 +7,7 @@ from pathlib import Path
 from cogs.adventure.adventure_utils import get_adventure_profile, is_user_dead, format_dead_until, get_user_max_hp, get_user_attack_bonus
 from utils.xp import required_xp, add_xp
 from utils.notifications import notify_if_enabled
+from cogs.punish.punish_records import count_active_records
 
 DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
@@ -143,7 +144,9 @@ async def get_level_rank(guild: discord.Guild, user_id: int):
 
 async def make_profile_embed(member: discord.Member):
     data = await get_or_create_user(member.id)
-    xp, level, points, attendance, voice_time, warnings = data
+    xp, level, points, attendance, voice_time, _legacy_warnings = data
+
+    warnings = await count_active_records("warning", member.id)
 
     adventure_profile = await get_adventure_profile(member.id)
     is_dead, dead_until = await is_user_dead(member.id)

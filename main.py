@@ -47,7 +47,8 @@ async def setup_hook():
     await bot.load_extension("cogs.admin.backup")
     await bot.load_extension("cogs.punish.punish_settings")
     await bot.load_extension("cogs.punish.rejoin_punish")
-    await bot.load_extension("cogs.punish.warnings")
+    # cogs.punish.warnings: 구버전 /경고 카운터 시스템 (users.warnings 컬럼).
+    # punish_records.py의 /제재 로 완전히 대체되어 비활성화함. 실사용 데이터 0건 확인 후 제거.
     await bot.load_extension("cogs.punish.punish_records")
     await bot.load_extension("cogs.admin.user_info")
     await bot.load_extension("cogs.admin.points_admin")
