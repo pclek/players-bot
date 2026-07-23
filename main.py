@@ -3,6 +3,7 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 from database.database import setup_database
+from cogs.civilwar.civilwar import PersistentWinnerSelectView, PersistentPayoutView
 
 # .env 불러오기
 load_dotenv()
@@ -25,6 +26,13 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def on_ready():
     print(f"{bot.user} 온라인!")
 
+    # 내전 관련 persistent view는 재시작/재연결 시에도 항상 다시 등록
+    # (커스텀 아이디 기반이라 여러 번 등록해도 안전하지만, 굳이 중복 등록하지 않도록 가드)
+    if not getattr(bot, "_civilwar_views_registered", False):
+        bot.add_view(PersistentWinnerSelectView())
+        bot.add_view(PersistentPayoutView())
+        bot._civilwar_views_registered = True
+
 
 # 슬래시 명령어 동기화
 @bot.event
@@ -40,7 +48,9 @@ async def setup_hook():
     await bot.load_extension("cogs.punish.punish_settings")
     await bot.load_extension("cogs.punish.rejoin_punish")
     await bot.load_extension("cogs.punish.warnings")
+    await bot.load_extension("cogs.punish.punish_records")
     await bot.load_extension("cogs.admin.user_info")
+    await bot.load_extension("cogs.admin.points_admin")
     await bot.load_extension("cogs.tempvoice.tempvoice_settings")
     await bot.load_extension("cogs.tempvoice.tempvoice_core")
     await bot.load_extension("cogs.matchmaking.game_settings")
@@ -61,6 +71,8 @@ async def setup_hook():
     await bot.load_extension("cogs.adventure.trade")
     await bot.load_extension("cogs.stocks.stock_market")
     await bot.load_extension("cogs.stocks.stock_admin")
+    await bot.load_extension("cogs.civilwar.civilwar_settings")
+    await bot.load_extension("cogs.civilwar.civilwar")
 
     synced = await bot.tree.sync()
 
