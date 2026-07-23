@@ -7,6 +7,8 @@ from datetime import datetime
 from utils.checks import is_bot_admin
 from utils.points import ensure_points_log_table, set_points
 from utils.xp import required_xp, set_xp, set_level
+from utils.notifications import notify_if_enabled
+from utils.admin_log import send_admin_log
 from cogs.profile.profile import progress_bar, format_voice_time
 from cogs.adventure.adventure_utils import (
     ensure_adventure_profile,
@@ -264,10 +266,20 @@ class NumberEditModal(discord.ui.Modal):
                 admin_id=interaction.user.id,
                 source="admin_user_info",
             )
+            await notify_if_enabled(
+                self.target, "admin_points",
+                f"💰 관리자가 포인트를 `{value:,}P`로 수정했습니다.",
+            )
         elif self.column_name == "xp":
             await set_xp(self.target.id, value)
         else:
             await set_level(self.target.id, value)
+
+        await send_admin_log(
+            interaction.client, interaction.user,
+            f"{self.field_name}을(를) `{value}`(으)로 수정",
+            target=self.target,
+        )
 
         layout = await build_admin_user_layout(
             self.target,

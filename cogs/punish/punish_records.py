@@ -7,6 +7,7 @@ import aiosqlite
 from datetime import datetime
 
 from utils.checks import is_bot_admin
+from utils.admin_log import send_admin_log
 from cogs.punish.punish_settings import get_setting, set_setting
 
 DB_PATH = "database/bot.db"
@@ -86,6 +87,20 @@ async def insert_record(
 
         await db.commit()
         return cursor.lastrowid
+
+
+async def count_active_records(kind: str, target_id: int) -> int:
+    """삭제된(status='deleted') 기록은 제외하고 해당 유저의 기록 건수를 센다."""
+    table = record_table(kind)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(f"""
+        SELECT COUNT(*) FROM {table}
+        WHERE target_id = ? AND status != 'deleted'
+        """, (target_id,)) as cursor:
+            row = await cursor.fetchone()
+
+    return row[0] if row else 0
 
 
 async def get_existing_numbers(kind: str) -> set:
@@ -229,12 +244,18 @@ async def build_target_card(
         accessory=discord.ui.Thumbnail(user.display_avatar.url),
     )
 
-    info_block = discord.ui.TextDisplay(
+    info_text = (
         f"UID: `{user.id}`\n"
         f"계정 생성일: `{created_text}`\n"
         f"서버 가입일: `{joined_text}`\n"
         f"서버 퇴장일: `{left_text}`"
     )
+
+    if kind == "warning":
+        existing_count = await count_active_records("warning", user.id)
+        info_text += f"\n⚠️ 기존 경고: `{existing_count}`회"
+
+    info_block = discord.ui.TextDisplay(info_text)
 
     children = [
         header,
@@ -263,6 +284,7 @@ def build_record_post(
     emoji: str | None = None,
     account_line_override: str | None = None,
     extra_target_ids: list | None = None,
+    extra_notice: str | None = None,
 ) -> discord.ui.LayoutView:
     label = KIND_LABELS[kind]
     number_text = format_number(record_no)
@@ -272,6 +294,8 @@ def build_record_post(
     uid_parts = [f"`{user.id}`"] + [f"`{uid}`" for uid in (extra_target_ids or [])]
     uid_line = "UID : " + ", ".join(uid_parts)
 
+    notice_line = f"\n\n{extra_notice}" if extra_notice else ""
+
     body = discord.ui.TextDisplay(
         f"# {emoji_text} {label} 번호 : {number_text}\n"
         f"{account_line}\n"
@@ -279,6 +303,7 @@ def build_record_post(
         f"정보 : {info or '-'}\n"
         f"\n"
         f"사유 : {reason}"
+        f"{notice_line}"
     )
 
     if show_media:
@@ -487,9 +512,19 @@ class PunishReasonModal(discord.ui.Modal):
         info_value = str(self.info_input.value).strip() or None
         reason_value = str(self.reason_input.value).strip()
 
+        existing_count = await count_active_records(self.kind, self.target_id)
+        new_total = existing_count + 1
+
+        notice = None
+        if self.kind == "warning" and new_total == 3:
+            notice = "🚨 3회 누적 - 추방 예정"
+
         record_no = await insert_record(self.kind, self.target_id, info_value, reason_value, interaction.user.id)
 
-        post = build_record_post(self.kind, record_no, user, info_value, reason_value, show_media=True)
+        post = build_record_post(
+            self.kind, record_no, user, info_value, reason_value,
+            show_media=True, extra_notice=notice,
+        )
 
         try:
             message = await channel.send(view=post)
@@ -502,9 +537,31 @@ class PunishReasonModal(discord.ui.Modal):
 
         await set_record_message(self.kind, record_no, message.id, channel.id)
 
+        dm_notice = f"\n\n{notice}" if notice else ""
+
+        try:
+            await user.send(
+                f"🚨 {KIND_LABELS[self.kind]}을(를) 받았습니다.\n"
+                f"사유: `{reason_value}`\n"
+                f"정보: `{info_value or '-'}`"
+                f"{dm_notice}"
+            )
+        except discord.HTTPException as e:
+            print(f"[{KIND_LABELS[self.kind]}] DM 발송 실패 - user_id={self.target_id}: {e}")
+
+        await send_admin_log(
+            interaction.client, interaction.user,
+            f"{KIND_LABELS[self.kind]} 번호 {format_number(record_no)} 등록",
+            target=user,
+            reason=reason_value,
+        )
+
+        confirm_notice = f"\n\n{notice}" if notice else ""
+
         await interaction.response.send_message(
             f"✅ {KIND_LABELS[self.kind]} 번호 `{format_number(record_no)}`을(를) "
-            f"{channel.mention}에 게시했습니다.",
+            f"{channel.mention}에 게시했습니다."
+            f"{confirm_notice}",
             ephemeral=True,
         )
 
@@ -655,6 +712,21 @@ class PunishEditReasonModal(discord.ui.Modal):
 
         await refresh_posted_record(interaction.client, self.kind, self.record_no)
 
+        record = await get_record(self.kind, self.record_no)
+        target_user = None
+        if record:
+            try:
+                target_user = await interaction.client.fetch_user(record[1])
+            except discord.HTTPException:
+                pass
+
+        await send_admin_log(
+            interaction.client, interaction.user,
+            f"{KIND_LABELS[self.kind]} 번호 {format_number(self.record_no)} 수정",
+            target=target_user,
+            reason=reason_value,
+        )
+
         await interaction.followup.send(
             f"✅ {KIND_LABELS[self.kind]} 번호 `{format_number(self.record_no)}` 내용을 수정했습니다.",
             ephemeral=True,
@@ -783,11 +855,26 @@ class PunishDeleteConfirmButton(discord.ui.Button):
             await interaction.response.send_message("❌ 권한이 없습니다.", ephemeral=True)
             return
 
+        record = await get_record(self.kind, self.record_no)
+
         await soft_delete_record(self.kind, self.record_no)
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         await refresh_posted_record(interaction.client, self.kind, self.record_no)
+
+        target_user = None
+        if record:
+            try:
+                target_user = await interaction.client.fetch_user(record[1])
+            except discord.HTTPException:
+                pass
+
+        await send_admin_log(
+            interaction.client, interaction.user,
+            f"{KIND_LABELS[self.kind]} 번호 {format_number(self.record_no)} 삭제",
+            target=target_user,
+        )
 
         await interaction.followup.send(
             f"✅ {KIND_LABELS[self.kind]} 번호 `{format_number(self.record_no)}`을(를) 삭제 처리했습니다.",

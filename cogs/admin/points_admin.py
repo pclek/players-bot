@@ -4,6 +4,8 @@ from discord.ext import commands
 
 from utils.checks import is_bot_admin
 from utils.points import ensure_points_log_table, adjust_points_bulk
+from utils.notifications import notify_if_enabled
+from utils.admin_log import send_admin_log
 
 MODE_LABELS = {
     "grant": "지급",
@@ -86,6 +88,20 @@ class PointConfirmButton(discord.ui.Button):
         )
 
         action_word = MODE_LABELS[self.mode]
+        sign = "+" if self.mode == "grant" else "-"
+
+        for uid in self.user_ids:
+            await notify_if_enabled(
+                interaction.client.get_user(uid), "admin_points",
+                f"💰 관리자가 포인트를 {sign}{self.amount:,}P {action_word}했습니다.",
+            )
+
+        mention_text = ", ".join(f"<@{uid}>" for uid in self.user_ids)
+        await send_admin_log(
+            interaction.client, interaction.user,
+            f"{len(self.user_ids)}명에게 포인트 {sign}{self.amount:,}P {action_word} ({mention_text})",
+            reason=self.reason,
+        )
 
         await interaction.followup.send(
             f"✅ {len(self.user_ids)}명에게 각 {self.amount:,}P {action_word} 완료",

@@ -73,6 +73,8 @@ async def setup_hook():
     await bot.load_extension("cogs.stocks.stock_admin")
     await bot.load_extension("cogs.civilwar.civilwar_settings")
     await bot.load_extension("cogs.civilwar.civilwar")
+    await bot.load_extension("cogs.notifications.notification_settings")
+    await bot.load_extension("cogs.admin.admin_log_settings")
 
     synced = await bot.tree.sync()
 

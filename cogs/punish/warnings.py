@@ -5,6 +5,7 @@ import aiosqlite
 from datetime import datetime
 
 from utils.checks import is_bot_admin
+from utils.admin_log import send_admin_log
 from cogs.punish.punish_settings import get_setting
 
 DB_PATH = "database/bot.db"
@@ -114,6 +115,22 @@ class WarningReasonModal(discord.ui.Modal):
                     except discord.HTTPException:
                         message += "\n\n⚠️ 격리 역할 지급 중 오류가 발생했습니다."
 
+        try:
+            await self.target.send(
+                f"🚨 경고를 받았습니다.\n"
+                f"사유: `{reason_text}`\n"
+                f"현재 경고: `{warning_count}`회"
+            )
+        except discord.HTTPException as e:
+            print(f"[경고] DM 발송 실패 - user_id={self.target.id}: {e}")
+
+        await send_admin_log(
+            interaction.client, interaction.user,
+            f"경고 지급 (현재 경고: {warning_count}회)",
+            target=self.target,
+            reason=reason_text,
+        )
+
         await interaction.response.send_message(message, ephemeral=True)
 
 
@@ -200,6 +217,12 @@ class WarningActionSelect(discord.ui.Select):
             )
 
             await db.commit()
+
+        await send_admin_log(
+            interaction.client, interaction.user,
+            f"경고 차감 (현재 경고: {current_warning - 1}회)",
+            target=self.target,
+        )
 
         view = discord.ui.View(timeout=60)
         view.add_item(WarningBackButton(self.target))
