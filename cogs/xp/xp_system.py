@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from cogs.profile.profile import has_attended_today
 from utils.xp import add_xp
+from utils.notifications import notify_if_enabled
 
 DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
@@ -146,6 +147,11 @@ class XPSystem(commands.Cog):
             )
 
             await message.channel.send(embed=embed)
+
+            await notify_if_enabled(
+                message.author, "level_up",
+                f"⬆️ 레벨업! 레벨 `{level}`이 되었습니다.",
+            )
 
 
 async def setup(bot: commands.Bot):

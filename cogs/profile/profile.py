@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from cogs.adventure.adventure_utils import get_adventure_profile, is_user_dead, format_dead_until, get_user_max_hp, get_user_attack_bonus
 from utils.xp import required_xp, add_xp
+from utils.notifications import notify_if_enabled
 
 DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
@@ -322,12 +323,18 @@ class Profile(commands.Cog):
 
             await db.commit()
 
-        await add_xp(
+        old_level, level, leveled_up = await add_xp(
             user_id,
             reward_xp,
             extra_sql="points = points + ?",
             extra_params=(reward_points,),
         )
+
+        if leveled_up:
+            await notify_if_enabled(
+                interaction.user, "level_up",
+                f"⬆️ 레벨업! 레벨 `{level}`이 되었습니다.",
+            )
 
         embed, file = await make_profile_embed(interaction.user)
 

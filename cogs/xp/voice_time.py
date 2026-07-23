@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from cogs.profile.profile import has_attended_today
 from utils.xp import add_xp
+from utils.notifications import notify_if_enabled
 
 DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
@@ -179,12 +180,18 @@ class VoiceTime(commands.Cog):
 
             await db.commit()
 
-        await add_xp(
+        old_level, level, leveled_up = await add_xp(
             user_id,
             reward_xp,
             extra_sql="voice_time = voice_time + ?, points = points + ?",
             extra_params=(seconds, reward_points),
         )
+
+        if leveled_up:
+            await notify_if_enabled(
+                self.bot.get_user(user_id), "level_up",
+                f"⬆️ 레벨업! 레벨 `{level}`이 되었습니다.",
+            )
 
     @tasks.loop(minutes=1)
     async def voice_reward_loop(self):

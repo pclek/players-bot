@@ -7,6 +7,7 @@ from datetime import datetime
 
 from utils.checks import is_bot_admin
 from utils.points import ensure_points_log_table, adjust_points_bulk
+from utils.notifications import notify_if_enabled
 from cogs.punish.punish_settings import get_setting
 from cogs.civilwar.civilwar_settings import (
     FORUM_CHANNEL_KEY,
@@ -210,7 +211,7 @@ async def soft_delete_match(match_no: int):
 
 # ── 포인트 지급/회수 ─────────────────────────────────────
 
-async def apply_match_points(match_no: int):
+async def apply_match_points(bot: commands.Bot, match_no: int):
     match = await get_match(match_no)
 
     if not match or not match[2]:
@@ -227,6 +228,22 @@ async def apply_match_points(match_no: int):
 
     await adjust_points_bulk(win_ids, points_win or 0, reason=reason, admin_id=paid_by, source="civilwar")
     await adjust_points_bulk(lose_ids, points_lose or 0, reason=reason, admin_id=paid_by, source="civilwar")
+
+    winner_label = TEAM_LABELS.get(winner_team, winner_team)
+
+    for uid in win_ids:
+        await notify_if_enabled(
+            bot.get_user(uid), "civilwar_result",
+            f"⚔️ 내전 결과 - 매치 #{format_match_no(match_no)} ({match_name})\n"
+            f"🏆 승리! ({winner_label}) · `{points_win or 0:+,}P` 지급되었습니다.",
+        )
+
+    for uid in lose_ids:
+        await notify_if_enabled(
+            bot.get_user(uid), "civilwar_result",
+            f"⚔️ 내전 결과 - 매치 #{format_match_no(match_no)} ({match_name})\n"
+            f"패배... `{points_lose or 0:+,}P` 반영되었습니다.",
+        )
 
 
 async def reverse_match_points(match_no: int):
@@ -1088,7 +1105,7 @@ class PayoutPointsModal(discord.ui.Modal):
             return
 
         await set_match_payout(self.match_no, win_amt, lose_amt, interaction.user.id)
-        await apply_match_points(self.match_no)
+        await apply_match_points(interaction.client, self.match_no)
         await refresh_match_forum_post(interaction.client, self.match_no)
 
         await interaction.followup.send(
@@ -1198,7 +1215,7 @@ class CivilwarEditRosterBSelect(discord.ui.Select):
 
         await reverse_match_points(self.match_no)
         await replace_match_members(self.match_no, self.team_a_ids, team_b_ids)
-        await apply_match_points(self.match_no)
+        await apply_match_points(interaction.client, self.match_no)
 
         await refresh_match_announcement(interaction.client, self.match_no)
         await refresh_match_forum_post(interaction.client, self.match_no)
@@ -1239,7 +1256,7 @@ class CivilwarEditRosterASelect(discord.ui.Select):
 
             await reverse_match_points(self.match_no)
             await replace_match_members(self.match_no, team_a_ids, [])
-            await apply_match_points(self.match_no)
+            await apply_match_points(interaction.client, self.match_no)
 
             await refresh_match_announcement(interaction.client, self.match_no)
             await refresh_match_forum_post(interaction.client, self.match_no)
@@ -1316,7 +1333,7 @@ class CivilwarEditResultModal(discord.ui.Modal):
 
         await reverse_match_points(self.match_no)
         await set_match_result(self.match_no, self.team, win_amt, lose_amt, interaction.user.id)
-        await apply_match_points(self.match_no)
+        await apply_match_points(interaction.client, self.match_no)
 
         await refresh_match_announcement(interaction.client, self.match_no)
         await refresh_match_forum_post(interaction.client, self.match_no)

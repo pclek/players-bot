@@ -27,6 +27,7 @@ from cogs.stocks.stock_utils import (
     get_tier_total_shares,
     now_kst,
 )
+from utils.notifications import notify_if_enabled
 
 
 async def get_active_stocks():
@@ -819,9 +820,20 @@ async def log_stock_event(db, day_key, event_type, stock_id=None, related_stock_
     ))
 
 
-async def update_stock_prices(day_key: str):
+async def get_stock_holder_ids(db, stock_id: int) -> list:
+    async with db.execute(
+        "SELECT user_id FROM user_stock_holdings WHERE stock_id = ? AND quantity > 0",
+        (stock_id,),
+    ) as cursor:
+        rows = await cursor.fetchall()
+
+    return [row[0] for row in rows]
+
+
+async def update_stock_prices(bot: commands.Bot, day_key: str):
     """활성 종목 전체의 가격을 갱신하고, 뉴스/서킷브레이커 이벤트를 처리한다."""
     events = []
+    dm_notifications = []  # (user_id, kind, message)
 
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("""
@@ -888,6 +900,9 @@ async def update_stock_prices(day_key: str):
                 )
                 events.append(detail)
 
+                for holder_id in await get_stock_holder_ids(db, stock_id):
+                    dm_notifications.append((holder_id, "stock_news", f"📰 {detail}"))
+
             if trading_halted:
                 detail = f"⛔ **{name}** 가격이 급변하여 오늘 남은 시간 거래가 정지됩니다."
 
@@ -897,12 +912,18 @@ async def update_stock_prices(day_key: str):
                 )
                 events.append(detail)
 
+                for holder_id in await get_stock_holder_ids(db, stock_id):
+                    dm_notifications.append((holder_id, "stock_circuit_breaker", detail))
+
         await db.commit()
+
+    for user_id, kind, message in dm_notifications:
+        await notify_if_enabled(bot.get_user(user_id), kind, message)
 
     return events
 
 
-async def perform_merge(day_key: str):
+async def perform_merge(bot: commands.Bot, day_key: str):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("""
         SELECT id, name, tier, current_price, total_shares, available_shares
@@ -1041,10 +1062,15 @@ async def perform_merge(day_key: str):
 
         await db.commit()
 
+    holder_ids = {row[0] for row in a_holdings} | {row[0] for row in b_holdings}
+
+    for user_id in holder_ids:
+        await notify_if_enabled(bot.get_user(user_id), "stock_merge_delist", detail)
+
     return detail
 
 
-async def perform_delisting(day_key: str):
+async def perform_delisting(bot: commands.Bot, day_key: str):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("""
         SELECT id, name, current_price
@@ -1091,6 +1117,9 @@ async def perform_delisting(day_key: str):
         )
 
         await db.commit()
+
+    for user_id, quantity in holdings:
+        await notify_if_enabled(bot.get_user(user_id), "stock_merge_delist", detail)
 
     return detail
 
@@ -1188,15 +1217,15 @@ async def run_daily_stock_cycle(bot: commands.Bot, force: bool = False):
         return []
 
     all_events = []
-    all_events.extend(await update_stock_prices(today_key))
+    all_events.extend(await update_stock_prices(bot, today_key))
 
     if random.random() < MERGE_CHANCE:
-        merge_detail = await perform_merge(today_key)
+        merge_detail = await perform_merge(bot, today_key)
         if merge_detail:
             all_events.append(merge_detail)
 
     if random.random() < DELIST_CHANCE:
-        delist_detail = await perform_delisting(today_key)
+        delist_detail = await perform_delisting(bot, today_key)
         if delist_detail:
             all_events.append(delist_detail)
 

@@ -3,6 +3,8 @@ import discord
 from discord.ext import commands
 import aiosqlite
 
+from utils.notifications import notify_if_enabled
+
 DB_PATH = "database/bot.db"
 
 
@@ -472,6 +474,11 @@ class TempVoiceCore(commands.Cog):
             await channel.send(embed=embed, view=TempVoiceControlView(channel.id))
         except discord.HTTPException:
             pass
+
+        await notify_if_enabled(
+            new_owner, "tempvoice_owner",
+            f"👑 임시보이스 채널 `{channel.name}`의 방장을 위임받았습니다.",
+        )
 
     async def delete_temp_channel(self, channel: discord.VoiceChannel):
         async with aiosqlite.connect(DB_PATH) as db:

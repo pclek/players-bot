@@ -8,6 +8,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils.xp import add_xp
+from utils.notifications import notify_if_enabled
 from cogs.adventure.adventure_utils import (
     ensure_adventure_profile,
     get_adventure_profile,
@@ -749,7 +750,12 @@ class HuntView(discord.ui.View):
             embed=embed,
             view=self,
         )
-        
+
+        await notify_if_enabled(
+            interaction.user, "hunt_end",
+            f"🏹 모험(사냥)이 종료되었습니다.\n\n{result_text}",
+        )
+
     async def check_equipment_after_battle(self) -> str:
         return ""
     
@@ -851,6 +857,12 @@ class HuntView(discord.ui.View):
                     self.monster["xp_max"],
                 )
                 levelup_text = await self.give_rewards(reward_points, reward_xp)
+
+                if levelup_text:
+                    await notify_if_enabled(
+                        interaction.user, "level_up",
+                        f"⬆️ 레벨업! {levelup_text.strip()}",
+                    )
 
                 result_text = (
                     f"🏆 **전투 승리!**\n\n"
