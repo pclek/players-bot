@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from cogs.profile.profile import has_attended_today
+from utils.xp import add_xp
 
 DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
@@ -14,13 +15,6 @@ VOICE_REWARD_POINTS = 3
 VOICE_REWARD_XP = 10
 DAILY_VOICE_POINT_LIMIT = 500
 DAILY_VOICE_XP_LIMIT = 200
-
-def required_xp(level: int) -> int:
-    return int(
-        80 +
-        (level * 35) +
-        ((level ** 2) * 6)
-    )
 
 def get_today_key() -> str:
     now = datetime.now(KST)
@@ -168,38 +162,6 @@ class VoiceTime(commands.Cog):
             else:
                 new_accumulated_seconds = total_accumulated_seconds
 
-            async with db.execute("""
-            SELECT xp, level
-            FROM users
-            WHERE user_id = ?
-            """, (user_id,)) as cursor:
-                user_row = await cursor.fetchone()
-
-            xp, level = user_row
-
-            new_xp = xp + reward_xp
-            need_xp = required_xp(level)
-
-            while new_xp >= need_xp:
-                new_xp -= need_xp
-                level += 1
-                need_xp = required_xp(level)
-
-            await db.execute("""
-            UPDATE users
-            SET voice_time = voice_time + ?,
-                points = points + ?,
-                xp = ?,
-                level = ?
-            WHERE user_id = ?
-            """, (
-                seconds,
-                reward_points,
-                new_xp,
-                level,
-                user_id,
-            ))
-
             await db.execute("""
             UPDATE daily_voice_point_logs
             SET earned_points = earned_points + ?,
@@ -216,6 +178,13 @@ class VoiceTime(commands.Cog):
             ))
 
             await db.commit()
+
+        await add_xp(
+            user_id,
+            reward_xp,
+            extra_sql="voice_time = voice_time + ?, points = points + ?",
+            extra_params=(seconds, reward_points),
+        )
 
     @tasks.loop(minutes=1)
     async def voice_reward_loop(self):

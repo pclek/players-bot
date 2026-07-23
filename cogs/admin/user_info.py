@@ -5,7 +5,9 @@ import aiosqlite
 from datetime import datetime
 
 from utils.checks import is_bot_admin
-from cogs.profile.profile import required_xp, progress_bar, format_voice_time
+from utils.points import ensure_points_log_table, set_points
+from utils.xp import required_xp, set_xp, set_level
+from cogs.profile.profile import progress_bar, format_voice_time
 from cogs.adventure.adventure_utils import (
     ensure_adventure_profile,
     add_adventure_item,
@@ -145,33 +147,69 @@ async def get_or_create_user(user_id: int):
             return await cursor.fetchone()
 
 
-async def make_admin_user_embed(member: discord.Member):
+async def build_admin_user_layout(
+    member: discord.Member,
+    banner: str | None = None,
+) -> discord.ui.LayoutView:
     data = await get_or_create_user(member.id)
     xp, level, points, attendance, voice_time, warnings = data
     need_xp = required_xp(level)
 
-    embed = discord.Embed(
-        title=f"🛠 {member.display_name}님의 관리자 정보",
-        color=discord.Color.dark_blue(),
+    view = discord.ui.LayoutView(timeout=120)
+
+    if banner:
+        view.add_item(discord.ui.TextDisplay(banner))
+
+    header_section = discord.ui.Section(
+        discord.ui.TextDisplay(
+            f"## 🛠 {member.display_name}님의 관리자 정보\n"
+            f"-# 유저: {member.mention} · UID: `{member.id}`"
+        ),
+        accessory=discord.ui.Thumbnail(member.display_avatar.url),
     )
 
-    embed.description = (
-        f"👤 유저: {member.mention}\n"
-        f"🆔 UID: `{member.id}`\n\n"
-        f"⬆️ **레벨 {level}**\n"
+    level_block = discord.ui.TextDisplay(
+        f"### ⬆️ 레벨 {level}\n"
         f"EXP: `{xp} / {need_xp}`\n"
         f"{progress_bar(xp, need_xp)}"
     )
 
-    embed.add_field(name="💰 포인트", value=f"`{points}`", inline=True)
-    embed.add_field(name="🚨 경고", value=f"`{warnings}`", inline=True)
-    embed.add_field(name="📅 출석", value=f"`{attendance}일`", inline=True)
-    embed.add_field(
-        name="🎧 음성시간", value=f"`{format_voice_time(voice_time)}`", inline=True
+    stats_block = discord.ui.TextDisplay(
+        f"💰 포인트: `{points}`\n"
+        f"🚨 경고: `{warnings}`\n"
+        f"📅 출석: `{attendance}일`\n"
+        f"🎧 음성시간: `{format_voice_time(voice_time)}`"
     )
-    embed.set_thumbnail(url=member.display_avatar.url)
 
-    return embed
+    view.add_item(discord.ui.Container(
+        header_section,
+        discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+        level_block,
+        discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+        stats_block,
+        accent_colour=discord.Colour.dark_blue(),
+    ))
+
+    view.add_item(discord.ui.ActionRow(
+        AdminWarnAddButton(member),
+        AdminWarnRemoveButton(member),
+        AdminPointsEditButton(member),
+        AdminXpEditButton(member),
+        AdminLevelEditButton(member),
+    ))
+    view.add_item(discord.ui.ActionRow(
+        AdminAdventureInventoryButton(member),
+        AdminSyncEquipmentButton(member),
+        AdminAdventureItemAddButton(member),
+        AdminAdventureItemRemoveButton(member),
+        AdminAdventureReviveButton(member),
+    ))
+    view.add_item(discord.ui.ActionRow(
+        AdminAdventureHpEditButton(member),
+        AdminRefreshButton(member),
+    ))
+
+    return view
 
 
 class NumberEditModal(discord.ui.Modal):
@@ -219,23 +257,25 @@ class NumberEditModal(discord.ui.Modal):
             )
             return
 
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                "INSERT OR IGNORE INTO users (user_id) VALUES (?)", (self.target.id,)
+        if self.column_name == "points":
+            await set_points(
+                self.target.id, value,
+                reason=f"관리자 수정 ({self.field_name})",
+                admin_id=interaction.user.id,
+                source="admin_user_info",
             )
+        elif self.column_name == "xp":
+            await set_xp(self.target.id, value)
+        else:
+            await set_level(self.target.id, value)
 
-            await db.execute(
-                f"UPDATE users SET {self.column_name} = ? WHERE user_id = ?",
-                (value, self.target.id),
-            )
-
-            await db.commit()
-
-        embed = await make_admin_user_embed(self.target)
+        layout = await build_admin_user_layout(
+            self.target,
+            banner=f"✅ {self.target.mention} 님의 {self.field_name} 값을 `{value}`로 수정했습니다.",
+        )
 
         await interaction.response.send_message(
-            f"✅ {self.target.mention} 님의 {self.field_name} 값을 `{value}`로 수정했습니다.",
-            embed=embed,
+            view=layout,
             ephemeral=True,
         )
 
@@ -661,30 +701,31 @@ class WarningReasonModal(discord.ui.Modal):
 
             await db.commit()
 
-        embed = await make_admin_user_embed(self.target)
+        layout = await build_admin_user_layout(
+            self.target,
+            banner=(
+                f"✅ {self.target.mention} 님에게 경고를 지급했습니다.\n"
+                f"사유: `{reason_text}`\n"
+                f"현재 경고: `{row[0]}`회"
+            ),
+        )
 
         await interaction.response.send_message(
-            f"✅ {self.target.mention} 님에게 경고를 지급했습니다.\n"
-            f"사유: `{reason_text}`\n"
-            f"현재 경고: `{row[0]}`회",
-            embed=embed,
+            view=layout,
             ephemeral=True,
         )
 
 
-class AdminUserInfoView(discord.ui.View):
+class AdminWarnAddButton(discord.ui.Button):
     def __init__(self, target: discord.Member):
-        super().__init__(timeout=120)
+        super().__init__(
+            label="경고 +",
+            style=discord.ButtonStyle.danger,
+            custom_id="admin_user_warn_add",
+        )
         self.target = target
 
-    @discord.ui.button(
-        label="경고 +",
-        style=discord.ButtonStyle.danger,
-        custom_id="admin_user_warn_add",
-    )
-    async def warn_add(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+    async def callback(self, interaction: discord.Interaction):
         if not await is_bot_admin(interaction):
             await interaction.response.send_message(
                 "❌ 권한이 없습니다.", ephemeral=True
@@ -693,14 +734,17 @@ class AdminUserInfoView(discord.ui.View):
 
         await interaction.response.send_modal(WarningReasonModal(self.target))
 
-    @discord.ui.button(
-        label="경고 -",
-        style=discord.ButtonStyle.secondary,
-        custom_id="admin_user_warn_remove",
-    )
-    async def warn_remove(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+
+class AdminWarnRemoveButton(discord.ui.Button):
+    def __init__(self, target: discord.Member):
+        super().__init__(
+            label="경고 -",
+            style=discord.ButtonStyle.secondary,
+            custom_id="admin_user_warn_remove",
+        )
+        self.target = target
+
+    async def callback(self, interaction: discord.Interaction):
         if not await is_bot_admin(interaction):
             await interaction.response.send_message(
                 "❌ 권한이 없습니다.", ephemeral=True
@@ -737,60 +781,73 @@ class AdminUserInfoView(discord.ui.View):
 
             await db.commit()
 
-        embed = await make_admin_user_embed(self.target)
+        layout = await build_admin_user_layout(
+            self.target,
+            banner=(
+                f"✅ {self.target.mention} 님의 경고를 차감했습니다.\n"
+                f"현재 경고: `{current_warning - 1}`회"
+            ),
+        )
 
         await interaction.response.send_message(
-            f"✅ {self.target.mention} 님의 경고를 차감했습니다.\n"
-            f"현재 경고: `{current_warning - 1}`회",
-            embed=embed,
+            view=layout,
             ephemeral=True,
         )
 
-    @discord.ui.button(
-        label="포인트 수정",
-        style=discord.ButtonStyle.primary,
-        custom_id="admin_user_points_edit",
-    )
-    async def points_edit(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+
+class AdminPointsEditButton(discord.ui.Button):
+    def __init__(self, target: discord.Member):
+        super().__init__(
+            label="포인트 수정",
+            style=discord.ButtonStyle.primary,
+            custom_id="admin_user_points_edit",
+        )
+        self.target = target
+
+    async def callback(self, interaction: discord.Interaction):
         await interaction.response.send_modal(
             NumberEditModal(self.target, "포인트", "points")
         )
 
-    @discord.ui.button(
-        label="XP 수정",
-        style=discord.ButtonStyle.primary,
-        custom_id="admin_user_xp_edit",
-    )
-    async def xp_edit(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+
+class AdminXpEditButton(discord.ui.Button):
+    def __init__(self, target: discord.Member):
+        super().__init__(
+            label="XP 수정",
+            style=discord.ButtonStyle.primary,
+            custom_id="admin_user_xp_edit",
+        )
+        self.target = target
+
+    async def callback(self, interaction: discord.Interaction):
         await interaction.response.send_modal(NumberEditModal(self.target, "XP", "xp"))
 
-    @discord.ui.button(
-        label="레벨 수정",
-        style=discord.ButtonStyle.primary,
-        custom_id="admin_user_level_edit",
-    )
-    async def level_edit(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+
+class AdminLevelEditButton(discord.ui.Button):
+    def __init__(self, target: discord.Member):
+        super().__init__(
+            label="레벨 수정",
+            style=discord.ButtonStyle.primary,
+            custom_id="admin_user_level_edit",
+        )
+        self.target = target
+
+    async def callback(self, interaction: discord.Interaction):
         await interaction.response.send_modal(
             NumberEditModal(self.target, "레벨", "level")
         )
 
 
-    @discord.ui.button(
-        label="모험 인벤토리",
-        style=discord.ButtonStyle.secondary,
-        custom_id="admin_adventure_inventory",
-    )
-    async def adventure_inventory(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ):
+class AdminAdventureInventoryButton(discord.ui.Button):
+    def __init__(self, target: discord.Member):
+        super().__init__(
+            label="모험 인벤토리",
+            style=discord.ButtonStyle.secondary,
+            custom_id="admin_adventure_inventory",
+        )
+        self.target = target
+
+    async def callback(self, interaction: discord.Interaction):
         if not await is_bot_admin(interaction):
             await interaction.response.send_message(
                 "❌ 권한이 없습니다.",
@@ -911,16 +968,16 @@ class AdminUserInfoView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(
-        label="장비 동기화",
-        style=discord.ButtonStyle.danger,
-    )
-    async def sync_equipment(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ):
 
+class AdminSyncEquipmentButton(discord.ui.Button):
+    def __init__(self, target: discord.Member):
+        super().__init__(
+            label="장비 동기화",
+            style=discord.ButtonStyle.danger,
+        )
+        self.target = target
+
+    async def callback(self, interaction: discord.Interaction):
         if not await is_bot_admin(interaction):
             await interaction.response.send_message(
                 "권한이 없습니다.",
@@ -944,16 +1001,19 @@ class AdminUserInfoView(discord.ui.View):
         await interaction.response.send_message(
             f"✅ 장비 인벤토리를 동기화했습니다.\n\n{text}",
             ephemeral=True,
-        )    
+        )
 
-    @discord.ui.button(
-        label="모험 아이템 +",
-        style=discord.ButtonStyle.success,
-        custom_id="admin_adventure_item_add",
-    )
-    async def adventure_item_add(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+
+class AdminAdventureItemAddButton(discord.ui.Button):
+    def __init__(self, target: discord.Member):
+        super().__init__(
+            label="모험 아이템 +",
+            style=discord.ButtonStyle.success,
+            custom_id="admin_adventure_item_add",
+        )
+        self.target = target
+
+    async def callback(self, interaction: discord.Interaction):
         if not await is_bot_admin(interaction):
             await interaction.response.send_message(
                 "❌ 권한이 없습니다.",
@@ -967,14 +1027,17 @@ class AdminUserInfoView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(
-        label="모험 아이템 -",
-        style=discord.ButtonStyle.danger,
-        custom_id="admin_adventure_item_remove",
-    )
-    async def adventure_item_remove(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+
+class AdminAdventureItemRemoveButton(discord.ui.Button):
+    def __init__(self, target: discord.Member):
+        super().__init__(
+            label="모험 아이템 -",
+            style=discord.ButtonStyle.danger,
+            custom_id="admin_adventure_item_remove",
+        )
+        self.target = target
+
+    async def callback(self, interaction: discord.Interaction):
         if not await is_bot_admin(interaction):
             await interaction.response.send_message(
                 "❌ 권한이 없습니다.",
@@ -988,14 +1051,17 @@ class AdminUserInfoView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(
-        label="모험 부활",
-        style=discord.ButtonStyle.success,
-        custom_id="admin_adventure_revive",
-    )
-    async def adventure_revive(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+
+class AdminAdventureReviveButton(discord.ui.Button):
+    def __init__(self, target: discord.Member):
+        super().__init__(
+            label="모험 부활",
+            style=discord.ButtonStyle.success,
+            custom_id="admin_adventure_revive",
+        )
+        self.target = target
+
+    async def callback(self, interaction: discord.Interaction):
         if not await is_bot_admin(interaction):
             await interaction.response.send_message(
                 "❌ 권한이 없습니다.",
@@ -1025,18 +1091,19 @@ class AdminUserInfoView(discord.ui.View):
             f"✅ {self.target.mention} 님을 즉시 부활시켰습니다.\n"
             f"현재 HP: `{revive_hp}/{max_hp}`",
             ephemeral=True,
-        )    
-    @discord.ui.button(
-        label="HP 수정",
-        style=discord.ButtonStyle.primary,
-        custom_id="admin_adventure_hp_edit",
-        row=4,
-    )
-    async def adventure_hp_edit(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ):
+        )
+
+
+class AdminAdventureHpEditButton(discord.ui.Button):
+    def __init__(self, target: discord.Member):
+        super().__init__(
+            label="HP 수정",
+            style=discord.ButtonStyle.primary,
+            custom_id="admin_adventure_hp_edit",
+        )
+        self.target = target
+
+    async def callback(self, interaction: discord.Interaction):
         if not await is_bot_admin(interaction):
             await interaction.response.send_message(
                 "❌ 권한이 없습니다.",
@@ -1049,28 +1116,35 @@ class AdminUserInfoView(discord.ui.View):
                 self.target,
             )
         )
-    @discord.ui.button(
-        label="새로고침",
-        style=discord.ButtonStyle.success,
-        custom_id="admin_user_refresh",
-    )
-    async def refresh(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
+
+
+class AdminRefreshButton(discord.ui.Button):
+    def __init__(self, target: discord.Member):
+        super().__init__(
+            label="새로고침",
+            style=discord.ButtonStyle.success,
+            custom_id="admin_user_refresh",
+        )
+        self.target = target
+
+    async def callback(self, interaction: discord.Interaction):
         if not await is_bot_admin(interaction):
             await interaction.response.send_message(
                 "❌ 권한이 없습니다.", ephemeral=True
             )
             return
 
-        embed = await make_admin_user_embed(self.target)
+        layout = await build_admin_user_layout(self.target)
 
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.response.edit_message(view=layout)
 
 
 class AdminUserInfo(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    async def cog_load(self):
+        await ensure_points_log_table()
     @app_commands.command(
         name="역할없음목록",
         description="특정 역할이 없는 멤버를 조회합니다."
@@ -1226,10 +1300,10 @@ class AdminUserInfo(commands.Cog):
             await interaction.followup.send("❌ 권한이 없습니다.")
             return
 
-        embed = await make_admin_user_embed(유저)
+        layout = await build_admin_user_layout(유저)
 
         await interaction.followup.send(
-            embed=embed, view=AdminUserInfoView(유저), ephemeral=True
+            view=layout, ephemeral=True
         )
 
 

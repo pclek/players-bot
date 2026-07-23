@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from discord import app_commands
 from discord.ext import commands
 
-from cogs.profile.profile import required_xp
+from utils.xp import add_xp
 from cogs.adventure.adventure_utils import (
     ensure_adventure_profile,
     get_adventure_profile,
@@ -480,6 +480,10 @@ class FoodSelect(discord.ui.Select):
             )
             return
 
+        # 전투 중 장비를 바꾸거나 강화했을 수 있으니 매 턴 시작 시 항상 최신 상태로 갱신
+        await view.refresh_equipped_weapon()
+        await view.refresh_equipped_armor()
+
         await remove_adventure_item(view.user_id, food_name, 1)
 
         before_hp = view.player_hp
@@ -509,6 +513,8 @@ class FoodSelect(discord.ui.Select):
 
             if armor_durability_text:
                 log_extra = armor_durability_text
+                # 이번 턴 안에서 방어구가 파손/해제됐을 수 있으니 다시 한번 갱신
+                await view.refresh_equipped_armor()
             else:
                 log_extra = ""
         else:
@@ -642,6 +648,19 @@ class HuntView(discord.ui.View):
             self.weapon_name,
         )
 
+    async def refresh_equipped_armor(self):
+        profile = await get_adventure_profile(self.user_id)
+        if not profile:
+            self.armor_name = "없음"
+            self.armor_enhance_level = 0
+            return
+
+        self.armor_name = profile[2] or "없음"
+        self.armor_enhance_level = await get_equipment_enhance_level(
+            self.user_id,
+            self.armor_name,
+        )
+
     def make_embed(self, message: str | None = None):
         monster = self.monster
 
@@ -750,48 +769,15 @@ class HuntView(discord.ui.View):
                 )
 
     async def give_rewards(self, point_amount: int, xp_amount: int):
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("""
-            INSERT OR IGNORE INTO users (user_id)
-            VALUES (?)
-            """, (self.user_id,))
+        old_level, new_level, leveled_up = await add_xp(
+            self.user_id,
+            xp_amount,
+            extra_sql="points = points + ?",
+            extra_params=(point_amount,),
+        )
 
-            async with db.execute("""
-            SELECT xp, level
-            FROM users
-            WHERE user_id = ?
-            """, (self.user_id,)) as cursor:
-                row = await cursor.fetchone()
-
-            current_xp = row[0] if row else 0
-            current_level = row[1] if row else 1
-
-            new_xp = current_xp + xp_amount
-            new_level = current_level
-            need_xp = required_xp(new_level)
-
-            while new_xp >= need_xp:
-                new_xp -= need_xp
-                new_level += 1
-                need_xp = required_xp(new_level)
-
-            await db.execute("""
-            UPDATE users
-            SET points = points + ?,
-                xp = ?,
-                level = ?
-            WHERE user_id = ?
-            """, (
-                point_amount,
-                new_xp,
-                new_level,
-                self.user_id,
-            ))
-
-            await db.commit()
-
-        if new_level > current_level:
-            return f"\n🎉 레벨업! Lv.`{current_level}` → Lv.`{new_level}`"
+        if leveled_up:
+            return f"\n🎉 레벨업! Lv.`{old_level}` → Lv.`{new_level}`"
 
         return ""
 
@@ -800,6 +786,10 @@ class HuntView(discord.ui.View):
         async with self.action_lock:
             if self.finished:
                 return
+
+            # 전투 중 장비를 바꾸거나 강화했을 수 있으니 매 턴 시작 시 항상 최신 상태로 갱신
+            await self.refresh_equipped_weapon()
+            await self.refresh_equipped_armor()
 
             self.battle_turns += 1
 
@@ -827,6 +817,7 @@ class HuntView(discord.ui.View):
 
             if weapon_durability_text:
                 durability_messages.append(weapon_durability_text)
+                # 이번 턴 안에서 무기가 파손/해제됐을 수 있으니 다시 한번 갱신
                 await self.refresh_equipped_weapon()
 
             if player_hit_type == "dodge":
@@ -895,6 +886,8 @@ class HuntView(discord.ui.View):
 
                 if armor_durability_text:
                     durability_messages.append(armor_durability_text)
+                    # 이번 턴 안에서 방어구가 파손/해제됐을 수 있으니 다시 한번 갱신
+                    await self.refresh_equipped_armor()
 
             before_hp = self.player_hp
             self.player_hp -= monster_damage

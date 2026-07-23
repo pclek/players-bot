@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from cogs.profile.profile import has_attended_today
+from utils.xp import add_xp
 
 DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
@@ -16,14 +17,6 @@ CHAT_POINTS = 2
 CHAT_COOLDOWN = 60
 DAILY_CHAT_POINT_LIMIT = 200
 DAILY_CHAT_XP_LIMIT = 800
-
-
-def required_xp(level: int) -> int:
-    return int(
-        80 +
-        (level * 35) +
-        ((level ** 2) * 6)
-    )
 
 
 def get_today_key() -> str:
@@ -100,18 +93,6 @@ class XPSystem(commands.Cog):
 
             async with db.execute(
                 """
-            SELECT xp, level, points
-            FROM users
-            WHERE user_id = ?
-            """,
-                (user_id,),
-            ) as cursor:
-                user_data = await cursor.fetchone()
-
-            xp, level, points = user_data
-
-            async with db.execute(
-                """
             SELECT earned_points, earned_xp
             FROM daily_point_logs
             WHERE user_id = ?
@@ -135,27 +116,6 @@ class XPSystem(commands.Cog):
                 remaining_xp = DAILY_CHAT_XP_LIMIT - today_xp
                 gained_xp = min(CHAT_XP, remaining_xp)
 
-            new_xp = xp + gained_xp
-            need_xp = required_xp(level)
-            leveled_up = False
-
-            while new_xp >= need_xp:
-                new_xp -= need_xp
-                level += 1
-                need_xp = required_xp(level)
-                leveled_up = True
-
-            await db.execute(
-                """
-            UPDATE users
-            SET xp = ?,
-                level = ?,
-                points = points + ?
-            WHERE user_id = ?
-            """,
-                (new_xp, level, gained_points, user_id),
-            )
-
             await db.execute(
                 """
             UPDATE daily_point_logs
@@ -168,6 +128,13 @@ class XPSystem(commands.Cog):
             )
 
             await db.commit()
+
+        old_level, level, leveled_up = await add_xp(
+            user_id,
+            gained_xp,
+            extra_sql="points = points + ?",
+            extra_params=(gained_points,),
+        )
 
         if leveled_up:
             embed = discord.Embed(

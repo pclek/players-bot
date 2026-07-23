@@ -5,6 +5,7 @@ import aiosqlite
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from cogs.adventure.adventure_utils import get_adventure_profile, is_user_dead, format_dead_until, get_user_max_hp, get_user_attack_bonus
+from utils.xp import required_xp, add_xp
 
 DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
@@ -49,14 +50,6 @@ async def get_or_create_user(user_id: int):
         WHERE user_id = ?
         """, (user_id,)) as cursor:
             return await cursor.fetchone()
-
-
-def required_xp(level: int) -> int:
-    return int(
-        80 +
-        (level * 35) +
-        ((level ** 2) * 6)
-    )
 
 
 def progress_bar(current: int, required: int, size: int = 10) -> str:
@@ -323,13 +316,18 @@ class Profile(commands.Cog):
 
             await db.execute("""
             UPDATE users
-            SET attendance = attendance + 1,
-                points = points + ?,
-                xp = xp + ?
+            SET attendance = attendance + 1
             WHERE user_id = ?
-            """, (reward_points, reward_xp, user_id))
+            """, (user_id,))
 
             await db.commit()
+
+        await add_xp(
+            user_id,
+            reward_xp,
+            extra_sql="points = points + ?",
+            extra_params=(reward_points,),
+        )
 
         embed, file = await make_profile_embed(interaction.user)
 
