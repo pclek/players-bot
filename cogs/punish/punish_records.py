@@ -415,6 +415,7 @@ def build_record_post(
     extra_target_ids: list | None = None,
     extra_notice: str | None = None,
     images: list | None = None,
+    created_at_text: str | None = None,
 ):
     """(view, files) 튜플을 반환한다. images가 있으면 files도 채워지며,
     이 files는 channel.send(files=...)/message.edit(attachments=...)로 반드시 같이 넘겨야
@@ -428,15 +429,17 @@ def build_record_post(
     uid_line = "UID : " + ", ".join(uid_parts)
 
     notice_line = f"\n\n{extra_notice}" if extra_notice else ""
+    date_line = f"\n-# 원본 작성일 : {created_at_text}" if created_at_text else ""
 
     body = discord.ui.TextDisplay(
         f"# {emoji_text} {label} 번호 : {number_text}\n"
         f"{account_line}\n"
         f"{uid_line}\n"
-        f"정보 : {info or '-'}\n"
+        f"정보 : {info or '정보 없음'}\n"
         f"\n"
         f"사유 : {reason}"
         f"{notice_line}"
+        f"{date_line}"
     )
 
     if show_media:

@@ -9,3 +9,4 @@ database/*.db
 venv/
 .env.*
 assets/evidence/
+제재목록_마이그레이션_정리.json

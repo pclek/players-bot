@@ -199,6 +199,7 @@ class AdventureResultButton(discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message(
                 "❌ 본인의 모험 결과만 확인할 수 있습니다.",
+                ephemeral=True,
             )
             return
 
@@ -215,6 +216,7 @@ class AdventureResultButton(discord.ui.Button):
             if not job:
                 await interaction.response.send_message(
                     "❌ 확인할 모험 결과가 없습니다.",
+                    ephemeral=True,
                 )
                 return
 
@@ -224,6 +226,7 @@ class AdventureResultButton(discord.ui.Button):
             if datetime.now() < end_time:
                 await interaction.response.send_message(
                     "⏳ 아직 모험이 끝나지 않았습니다.",
+                    ephemeral=True,
                 )
                 return
 
@@ -1140,6 +1143,7 @@ class Adventure(commands.Cog):
                 "🪦 아직 부활 대기중입니다.\n"
                 "영혼은 접속했지만 몸이 로그아웃 상태입니다.\n"
                 f"부활 예정 : `{format_dead_until(dead_until)}`",
+                ephemeral=True,
             )
             return
 
@@ -1195,6 +1199,7 @@ class Adventure(commands.Cog):
                     f"⏳ 이미 진행 중인 모험이 있습니다.\n"
                     f"진행 중 : `{get_job_name(job_type)}`\n"
                     f"남은 시간 : `{remaining_minutes}분 {remaining_seconds}초`",
+                    ephemeral=True,
                 )
                 return
 
