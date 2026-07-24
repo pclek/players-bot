@@ -1,5 +1,8 @@
 import asyncio
+import json
 import re
+from pathlib import Path
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -11,6 +14,9 @@ from utils.admin_log import send_admin_log
 from cogs.punish.punish_settings import get_setting, set_setting
 
 DB_PATH = "database/bot.db"
+EVIDENCE_DIR = Path("assets/evidence")
+EVIDENCE_WAIT_SECONDS = 30
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 
 PUNISH_EMOJI = "<:cutesystar:1355911498253209640>"
 
@@ -52,6 +58,11 @@ async def ensure_punish_record_tables():
             except Exception:
                 pass
 
+            try:
+                await db.execute(f"ALTER TABLE {table} ADD COLUMN images TEXT")
+            except Exception:
+                pass
+
         await db.commit()
 
 
@@ -66,27 +77,137 @@ async def insert_record(
     emoji: str | None = None,
     record_no: int | None = None,
     created_at: str | None = None,
+    images: list | None = None,
 ) -> int:
     table = record_table(kind)
     created_at = created_at or datetime.now().isoformat()
+    images_json = json.dumps(images or [])
 
     async with aiosqlite.connect(DB_PATH) as db:
         if record_no is not None:
             await db.execute(f"""
-            INSERT INTO {table} (record_no, target_id, info, reason, admin_id, created_at, status, show_media, emoji)
-            VALUES (?, ?, ?, ?, ?, ?, 'active', 1, ?)
-            """, (record_no, target_id, info, reason, admin_id, created_at, emoji))
+            INSERT INTO {table} (record_no, target_id, info, reason, admin_id, created_at, status, show_media, emoji, images)
+            VALUES (?, ?, ?, ?, ?, ?, 'active', 1, ?, ?)
+            """, (record_no, target_id, info, reason, admin_id, created_at, emoji, images_json))
 
             await db.commit()
             return record_no
 
         cursor = await db.execute(f"""
-        INSERT INTO {table} (target_id, info, reason, admin_id, created_at, status, show_media, emoji)
-        VALUES (?, ?, ?, ?, ?, 'active', 1, ?)
-        """, (target_id, info, reason, admin_id, created_at, emoji))
+        INSERT INTO {table} (target_id, info, reason, admin_id, created_at, status, show_media, emoji, images)
+        VALUES (?, ?, ?, ?, ?, 'active', 1, ?, ?)
+        """, (target_id, info, reason, admin_id, created_at, emoji, images_json))
 
         await db.commit()
         return cursor.lastrowid
+
+
+# ── 증거사진 ───────────────────────────────────────────────
+
+async def save_evidence_images(kind: str, record_no: int, attachments: list) -> list:
+    """첨부파일들을 로컬(assets/evidence/{kind}/{record_no}/)에 저장하고 저장된 경로 목록을 반환."""
+    if not attachments:
+        return []
+
+    record_dir = EVIDENCE_DIR / kind / str(record_no)
+    record_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_paths = []
+
+    for index, attachment in enumerate(attachments[:10]):
+        ext = Path(attachment.filename).suffix.lower() or ".png"
+        dest = record_dir / f"{index}{ext}"
+
+        try:
+            await attachment.save(dest)
+        except discord.HTTPException:
+            continue
+
+        saved_paths.append(str(dest))
+
+    return saved_paths
+
+
+def is_image_attachment(attachment) -> bool:
+    if attachment.content_type and attachment.content_type.startswith("image/"):
+        return True
+
+    return attachment.filename.lower().endswith(IMAGE_EXTENSIONS)
+
+
+def load_evidence_files(image_paths: list | None) -> list:
+    """저장된 로컬 경로들을 매번 새로 읽어 discord.File 목록으로 반환 (메시지 전송/수정 시마다 재첨부 필요)."""
+    if not image_paths:
+        return []
+
+    files = []
+
+    for index, path in enumerate(image_paths):
+        p = Path(path)
+
+        if not p.exists():
+            continue
+
+        ext = p.suffix or ".png"
+        files.append(discord.File(p, filename=f"evidence_{index}{ext}"))
+
+    return files
+
+
+def build_media_gallery(files: list):
+    if not files:
+        return None
+
+    items = [discord.MediaGalleryItem(media=f) for f in files]
+    return discord.ui.MediaGallery(*items)
+
+
+async def capture_evidence_images(interaction: discord.Interaction, kind: str, record_no: int) -> list:
+    """모달 제출 직후 같은 채널·같은 관리자가 보내는, 첨부파일이 있는 메시지를 최대
+    EVIDENCE_WAIT_SECONDS초까지 기다린다. 오면 이미지만 걸러 로컬에 저장하고 원본 메시지는 삭제한다."""
+
+    def check(message: discord.Message) -> bool:
+        return (
+            message.author.id == interaction.user.id
+            and message.channel.id == interaction.channel.id
+            and len(message.attachments) > 0
+        )
+
+    try:
+        evidence_message = await interaction.client.wait_for(
+            "message", check=check, timeout=EVIDENCE_WAIT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        return []
+
+    image_attachments = [a for a in evidence_message.attachments if is_image_attachment(a)]
+    saved_paths = await save_evidence_images(kind, record_no, image_attachments)
+
+    try:
+        await evidence_message.delete()
+    except discord.HTTPException:
+        pass
+
+    return saved_paths
+
+
+async def set_record_images(kind: str, record_no: int, images: list):
+    table = record_table(kind)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(f"""
+        UPDATE {table} SET images = ? WHERE record_no = ?
+        """, (json.dumps(images or []), record_no))
+
+        await db.commit()
+
+
+def delete_evidence_files(image_paths: list | None):
+    for path in (image_paths or []):
+        try:
+            Path(path).unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 async def count_active_records(kind: str, target_id: int) -> int:
@@ -147,11 +268,19 @@ async def get_record(kind: str, record_no: int):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(f"""
         SELECT record_no, target_id, info, reason, message_id, channel_id,
-               admin_id, created_at, status, show_media, emoji
+               admin_id, created_at, status, show_media, emoji, images
         FROM {table}
         WHERE record_no = ?
         """, (record_no,)) as cursor:
-            return await cursor.fetchone()
+            row = await cursor.fetchone()
+
+    if not row:
+        return None
+
+    *rest, images_json = row
+    images = json.loads(images_json) if images_json else []
+
+    return (*rest, images)
 
 
 async def update_record_reason(kind: str, record_no: int, info: str | None, reason: str):
@@ -285,7 +414,11 @@ def build_record_post(
     account_line_override: str | None = None,
     extra_target_ids: list | None = None,
     extra_notice: str | None = None,
-) -> discord.ui.LayoutView:
+    images: list | None = None,
+):
+    """(view, files) 튜플을 반환한다. images가 있으면 files도 채워지며,
+    이 files는 channel.send(files=...)/message.edit(attachments=...)로 반드시 같이 넘겨야
+    카드 안 MediaGallery의 attachment:// 참조가 깨지지 않는다."""
     label = KIND_LABELS[kind]
     number_text = format_number(record_no)
     emoji_text = emoji or PUNISH_EMOJI
@@ -316,12 +449,19 @@ def build_record_post(
 
     children = [header]
 
+    files = load_evidence_files(images)
+    gallery = build_media_gallery(files)
+
+    if gallery:
+        children.append(discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small))
+        children.append(gallery)
+
     accent = discord.Colour.red() if kind == "punish" else discord.Colour.gold()
 
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(discord.ui.Container(*children, accent_colour=accent))
 
-    return view
+    return view, files
 
 
 def build_deleted_post(kind: str, record_no: int) -> discord.ui.LayoutView:
@@ -494,15 +634,26 @@ class PunishReasonModal(discord.ui.Modal):
 
         record_no = await insert_record(self.kind, self.target_id, info_value, reason_value, interaction.user.id)
 
-        post = build_record_post(
+        await interaction.response.send_message(
+            "📎 증거 사진이 있으면 이 채널에 첨부해서 보내주세요.\n"
+            f"(없으면 {EVIDENCE_WAIT_SECONDS}초 후 자동으로 넘어갑니다)",
+            ephemeral=True,
+        )
+
+        image_paths = await capture_evidence_images(interaction, self.kind, record_no)
+
+        if image_paths:
+            await set_record_images(self.kind, record_no, image_paths)
+
+        post, files = build_record_post(
             self.kind, record_no, user, info_value, reason_value,
-            show_media=True, extra_notice=notice,
+            show_media=True, extra_notice=notice, images=image_paths,
         )
 
         try:
-            message = await channel.send(view=post)
+            message = await channel.send(view=post, files=files)
         except discord.HTTPException:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ 게시글 전송 중 오류가 발생했습니다. (기록은 저장됨 — `/제재`의 수정 메뉴에서 확인해주세요)",
                 ephemeral=True,
             )
@@ -530,10 +681,12 @@ class PunishReasonModal(discord.ui.Modal):
         )
 
         confirm_notice = f"\n\n{notice}" if notice else ""
+        image_notice = f"\n📎 증거 사진 `{len(image_paths)}장` 첨부됨" if image_paths else ""
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"✅ {KIND_LABELS[self.kind]} 번호 `{format_number(record_no)}`을(를) "
             f"{channel.mention}에 게시했습니다."
+            f"{image_notice}"
             f"{confirm_notice}",
             ephemeral=True,
         )
@@ -615,10 +768,10 @@ class PunishNumberSearchModal(discord.ui.Modal):
             )
             return
 
-        (_, _, info, reason, _, _, _, _, status, show_media, _) = record
+        (_, _, info, reason, _, _, _, _, status, show_media, _, images) = record
 
         view = (
-            PunishManageView(self.kind, record_no, info, reason, show_media)
+            PunishManageView(self.kind, record_no, info, reason, show_media, len(images))
             if status == "active"
             else None
         )
@@ -632,9 +785,10 @@ class PunishNumberSearchModal(discord.ui.Modal):
 
 def render_manage_text(kind: str, record) -> str:
     (record_no, target_id, info, reason, message_id, channel_id,
-     admin_id, created_at, status, show_media, emoji) = record
+     admin_id, created_at, status, show_media, emoji, images) = record
 
     status_text = "✅ 정상" if status == "active" else "❌ 삭제됨"
+    image_line = f"\n증거사진: `{len(images)}장`" if images else ""
 
     return (
         f"📋 {KIND_LABELS[kind]} 번호 `{format_number(record_no)}`\n"
@@ -644,6 +798,7 @@ def render_manage_text(kind: str, record) -> str:
         f"등록일: `{created_at[:10]}`\n"
         f"등록자: <@{admin_id}>\n"
         f"상태: {status_text}"
+        f"{image_line}"
     )
 
 
@@ -713,7 +868,7 @@ async def refresh_posted_record(bot: commands.Bot, kind: str, record_no: int):
         return
 
     (record_no, target_id, info, reason, message_id, channel_id,
-     admin_id, created_at, status, show_media, emoji) = record
+     admin_id, created_at, status, show_media, emoji, images) = record
 
     if not message_id or not channel_id:
         return
@@ -740,13 +895,13 @@ async def refresh_posted_record(bot: commands.Bot, kind: str, record_no: int):
     except discord.HTTPException:
         return
 
-    post = build_record_post(
+    post, files = build_record_post(
         kind, record_no, user, info, reason,
-        show_media=bool(show_media), emoji=emoji,
+        show_media=bool(show_media), emoji=emoji, images=images,
     )
 
     try:
-        await message.edit(view=post)
+        await message.edit(view=post, attachments=files)
     except discord.HTTPException:
         pass
 
@@ -855,6 +1010,97 @@ class PunishDeleteConfirmButton(discord.ui.Button):
         )
 
 
+class PunishManageImagesButton(discord.ui.Button):
+    def __init__(self, kind: str, record_no: int, image_count: int):
+        super().__init__(label=f"📎 사진 관리 ({image_count}장)", style=discord.ButtonStyle.gray)
+        self.kind = kind
+        self.record_no = record_no
+
+    async def callback(self, interaction: discord.Interaction):
+        if not await is_bot_admin(interaction):
+            await interaction.response.send_message("❌ 권한이 없습니다.", ephemeral=True)
+            return
+
+        record = await get_record(self.kind, self.record_no)
+
+        if not record:
+            await interaction.response.send_message("❌ 기록을 찾을 수 없습니다.", ephemeral=True)
+            return
+
+        images = record[11]
+
+        view = discord.ui.View(timeout=120)
+        view.add_item(PunishAddImagesButton(self.kind, self.record_no))
+
+        if images:
+            view.add_item(PunishClearImagesButton(self.kind, self.record_no))
+
+        await interaction.response.send_message(
+            f"📎 현재 증거사진 `{len(images)}장`",
+            view=view,
+            ephemeral=True,
+        )
+
+
+class PunishAddImagesButton(discord.ui.Button):
+    def __init__(self, kind: str, record_no: int):
+        super().__init__(label="➕ 사진 추가", style=discord.ButtonStyle.primary)
+        self.kind = kind
+        self.record_no = record_no
+
+    async def callback(self, interaction: discord.Interaction):
+        if not await is_bot_admin(interaction):
+            await interaction.response.send_message("❌ 권한이 없습니다.", ephemeral=True)
+            return
+
+        await interaction.response.edit_message(
+            content=(
+                "📎 이 채널에 추가할 사진을 첨부해서 보내주세요.\n"
+                f"({EVIDENCE_WAIT_SECONDS}초 안에 안 보내면 취소됩니다)"
+            ),
+            view=None,
+        )
+
+        new_paths = await capture_evidence_images(interaction, self.kind, self.record_no)
+
+        if not new_paths:
+            await interaction.followup.send("❌ 시간 안에 사진이 첨부되지 않아 취소되었습니다.", ephemeral=True)
+            return
+
+        record = await get_record(self.kind, self.record_no)
+        existing_images = record[11] if record else []
+        combined = (existing_images + new_paths)[:10]
+
+        await set_record_images(self.kind, self.record_no, combined)
+        await refresh_posted_record(interaction.client, self.kind, self.record_no)
+
+        await interaction.followup.send(
+            f"✅ 사진 `{len(new_paths)}장`을 추가했습니다. (총 `{len(combined)}장`)",
+            ephemeral=True,
+        )
+
+
+class PunishClearImagesButton(discord.ui.Button):
+    def __init__(self, kind: str, record_no: int):
+        super().__init__(label="🗑 사진 전체 삭제", style=discord.ButtonStyle.danger)
+        self.kind = kind
+        self.record_no = record_no
+
+    async def callback(self, interaction: discord.Interaction):
+        if not await is_bot_admin(interaction):
+            await interaction.response.send_message("❌ 권한이 없습니다.", ephemeral=True)
+            return
+
+        record = await get_record(self.kind, self.record_no)
+        images = record[11] if record else []
+
+        delete_evidence_files(images)
+        await set_record_images(self.kind, self.record_no, [])
+        await refresh_posted_record(interaction.client, self.kind, self.record_no)
+
+        await interaction.response.edit_message(content="✅ 증거사진을 전부 제거했습니다.", view=None)
+
+
 class PunishManageView(discord.ui.View):
     def __init__(
         self,
@@ -863,10 +1109,12 @@ class PunishManageView(discord.ui.View):
         current_info: str | None,
         current_reason: str,
         show_media: int = 1,
+        image_count: int = 0,
     ):
         super().__init__(timeout=120)
         self.add_item(PunishEditButton(kind, record_no, current_info, current_reason))
         self.add_item(PunishToggleMediaButton(kind, record_no, bool(show_media)))
+        self.add_item(PunishManageImagesButton(kind, record_no, image_count))
         self.add_item(PunishDeleteButton(kind, record_no))
 
 
@@ -1108,6 +1356,8 @@ async def scan_legacy_channel(channel, expected_kind: str):
         if payload["kind"] != expected_kind:
             continue
 
+        payload["images"] = [a for a in message.attachments if is_image_attachment(a)]
+
         matched.append((message, payload))
 
     return matched, failed
@@ -1151,15 +1401,18 @@ async def execute_migration(bot: commands.Bot, dest_channel, kind: str, items: l
 
         user = await resolve_migration_user(bot, parsed["target_id"], parsed["account_name"])
 
-        post = build_record_post(
+        image_paths = await save_evidence_images(kind, record_no, parsed.get("images") or [])
+
+        post, files = build_record_post(
             kind, record_no, user, parsed["info"], parsed["reason"],
             show_media=True, emoji=parsed["emoji"],
             account_line_override=parsed.get("account_line_raw"),
             extra_target_ids=parsed.get("extra_target_ids"),
+            images=image_paths,
         )
 
         try:
-            new_message = await dest_channel.send(view=post)
+            new_message = await dest_channel.send(view=post, files=files)
         except discord.HTTPException as e:
             send_failed.append((record_no, str(e)))
             continue
@@ -1169,6 +1422,7 @@ async def execute_migration(bot: commands.Bot, dest_channel, kind: str, items: l
                 kind, parsed["target_id"], parsed["info"], parsed["reason"], admin_id,
                 emoji=parsed["emoji"], record_no=record_no,
                 created_at=old_message.created_at.isoformat(),
+                images=image_paths,
             )
             await set_record_message(kind, record_no, new_message.id, dest_channel.id)
         except Exception as e:
@@ -1347,11 +1601,105 @@ class MigrationKindButton(discord.ui.Button):
         )
 
 
+class ImageBackfillSourceChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self, kind: str):
+        super().__init__(
+            placeholder="사진을 보정할 원본(구) 채널을 선택하세요.",
+            channel_types=[
+                discord.ChannelType.text,
+                discord.ChannelType.public_thread,
+                discord.ChannelType.private_thread,
+            ],
+            min_values=1,
+            max_values=1,
+        )
+        self.kind = kind
+
+    async def callback(self, interaction: discord.Interaction):
+        if not await is_bot_admin(interaction):
+            await interaction.response.send_message("❌ 권한이 없습니다.", ephemeral=True)
+            return
+
+        source_channel = interaction.guild.get_channel_or_thread(self.values[0].id)
+
+        if not source_channel:
+            await interaction.response.send_message("❌ 선택한 채널을 찾을 수 없습니다.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        results, failed = await scan_legacy_channel(source_channel, self.kind)
+
+        updated = 0
+        skipped_no_image = 0
+        skipped_already_has = 0
+        not_found = 0
+
+        for old_message, parsed in results:
+            record_no = parsed["record_no"]
+            existing = await get_record(self.kind, record_no)
+
+            if not existing:
+                not_found += 1
+                continue
+
+            if existing[11]:
+                skipped_already_has += 1
+                continue
+
+            if not parsed.get("images"):
+                skipped_no_image += 1
+                continue
+
+            image_paths = await save_evidence_images(self.kind, record_no, parsed["images"])
+
+            if not image_paths:
+                continue
+
+            await set_record_images(self.kind, record_no, image_paths)
+            await refresh_posted_record(interaction.client, self.kind, record_no)
+            updated += 1
+
+            await asyncio.sleep(0.5)
+
+        await interaction.followup.send(
+            f"✅ {KIND_LABELS[self.kind]} 사진 보정 완료\n"
+            f"- 보정됨: `{updated}`개\n"
+            f"- 이미 사진 있어서 건너뜀: `{skipped_already_has}`개\n"
+            f"- 원본에 사진 없어서 건너뜀: `{skipped_no_image}`개\n"
+            f"- DB에 기록이 없어서 건너뜀(마이그레이션 안 된 번호): `{not_found}`개",
+            ephemeral=True,
+        )
+
+
+class ImageBackfillKindButton(discord.ui.Button):
+    def __init__(self, kind: str):
+        super().__init__(label=f"{KIND_LABELS[kind]} 사진만 보정", style=discord.ButtonStyle.secondary)
+        self.kind = kind
+
+    async def callback(self, interaction: discord.Interaction):
+        if not await is_bot_admin(interaction):
+            await interaction.response.send_message("❌ 권한이 없습니다.", ephemeral=True)
+            return
+
+        view = discord.ui.View(timeout=120)
+        view.add_item(ImageBackfillSourceChannelSelect(self.kind))
+
+        await interaction.response.send_message(
+            f"사진을 보정할 **기존(구) {KIND_LABELS[self.kind]} 채널**을 선택하세요.\n"
+            "이미 DB에 있는 번호 중 사진이 없는 기록에만 채워넣고, 새로 게시하지는 않습니다.",
+            view=view,
+            ephemeral=True,
+        )
+
+
 class MigrationEntryView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=120)
         self.add_item(MigrationKindButton("punish"))
         self.add_item(MigrationKindButton("warning"))
+        self.add_item(ImageBackfillKindButton("punish"))
+        self.add_item(ImageBackfillKindButton("warning"))
 
 
 # ── 초기화 (마이그레이션 재시작용) ─────────────────────────────

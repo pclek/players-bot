@@ -8,3 +8,4 @@ database/*.db
 .venv/
 venv/
 .env.*
+assets/evidence/

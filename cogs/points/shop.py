@@ -152,48 +152,41 @@ async def equip_inventory_equipment_by_id(
 INVENTORY_FOOD_COOLDOWN_HOURS = 2
 
 
-async def make_adventure_shop_embed(guild: discord.Guild):
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("""
-        SELECT item_name, price, stock, user_limit
-        FROM adventure_shop_items
-        WHERE enabled = 1
-        AND stock > 0
-        ORDER BY id
-        """) as cursor:
-            rows = await cursor.fetchall()
+def build_adventure_shop_layout(rows, user_id: int) -> discord.ui.LayoutView:
+    """모험상점 목록 화면. rows는 (shop_id, item_name, price, stock, user_limit, purchased_count) 튜플 목록."""
+    view = discord.ui.LayoutView(timeout=180)
 
     if not rows:
-        embed = discord.Embed(
-            title="🧭 모험상품 상점",
-            description="현재 판매중인 모험상품이 없습니다.",
-            color=discord.Color.green(),
-        )
-        embed.set_footer(text="모험상품 구매는 /상점 명령어를 사용해주세요.")
-        return embed, rows
+        view.add_item(discord.ui.Container(
+            discord.ui.TextDisplay(
+                "## 🧭 모험상점\n"
+                "현재 판매 중인 모험상품이 없습니다."
+            ),
+            accent_colour=discord.Colour.dark_grey(),
+        ))
+        return view
 
-    lines = []
+    children = [discord.ui.TextDisplay("## 🧭 모험상점")]
 
-    for item_name, price, stock, user_limit in rows:
+    for shop_id, item_name, price, stock, user_limit, purchased_count in rows[:25]:
         if user_limit and user_limit > 0:
-            limit_text = f"1인 일일 `{user_limit}개`"
+            limit_text = f"오늘 `{purchased_count}/{user_limit}`"
         else:
-            limit_text = "구매 제한 없음"
+            limit_text = "제한 없음"
 
-        lines.append(
-            f"🧭 **{item_name}**\n"
-            f"└ 💰 `{price}P`　📦 재고 `{stock}개`　🧾 {limit_text}"
-        )
+        children.append(discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small))
+        children.append(discord.ui.TextDisplay(
+            f"**🧭 {item_name}**\n"
+            f"💰 `{price:,}P`　📦 재고 `{stock:,}개`　🧾 {limit_text}"
+        ))
 
-    embed = discord.Embed(
-        title="🧭 모험상품 상점",
-        description="\n\n".join(lines),
-        color=discord.Color.green(),
-    )
+    children.append(discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small))
+    children.append(discord.ui.TextDisplay("-# 아래 드롭다운에서 구매할 상품을 선택하세요."))
+    children.append(discord.ui.ActionRow(AdventureShopSelect(rows, user_id)))
 
-    embed.set_footer(text="모험상품 구매는 /상점 명령어를 사용해주세요.")
+    view.add_item(discord.ui.Container(*children, accent_colour=discord.Colour.green()))
 
-    return embed, rows
+    return view
 
 
 async def send_public_shop_purchase_embed(
@@ -486,14 +479,15 @@ class AdventureShopSelect(discord.ui.Select):
             limit_text = "구매 제한 없음"
 
         try:
-            await interaction.message.edit(
-                content=(
+            confirm_view = discord.ui.LayoutView(timeout=None)
+            confirm_view.add_item(discord.ui.Container(
+                discord.ui.TextDisplay(
                     f"🧭 `{item_name}` 구매 수량 입력창을 열었습니다.\n"
-                    "이전 드롭다운은 정리했습니다."
+                    "이전 목록은 정리했습니다."
                 ),
-                embed=None,
-                view=None,
-            )
+                accent_colour=discord.Colour.green(),
+            ))
+            await interaction.message.edit(view=confirm_view)
         except Exception:
             pass
 
@@ -501,11 +495,6 @@ class AdventureShopSelect(discord.ui.Select):
             AdventureShopQuantityModal(selected)
         )
 
-
-class AdventureShopView(discord.ui.View):
-    def __init__(self, rows, user_id: int):
-        super().__init__(timeout=60)
-        self.add_item(AdventureShopSelect(rows, user_id))
 
 class AdventureEquipmentDiscardButton(
     discord.ui.Button
@@ -1935,47 +1924,8 @@ class Shop(commands.Cog):
             )
             return
 
-        lines = []
-
-        for (
-            shop_id,
-            item_name,
-            price,
-            stock,
-            user_limit,
-            purchased_count,
-        ) in adventure_rows:
-
-            if user_limit > 0:
-                limit_text = (
-                    f"오늘 `{purchased_count}/{user_limit}`"
-                )
-            else:
-                limit_text = "무제한"
-
-            lines.append(
-                f"🧭 **{item_name}**\n"
-                f"└ 💰 `{price}P`　"
-                f"📦 재고 `{stock}개`　"
-                f"🧾 {limit_text}"
-            )
-
-        embed = discord.Embed(
-            title="🧭 모험상점",
-            description="\n\n".join(lines),
-            color=discord.Color.green(),
-        )
-
-        embed.set_footer(
-            text="아래 드롭다운에서 모험상품을 구매할 수 있습니다."
-        )
-
         await interaction.followup.send(
-            embed=embed,
-            view=AdventureShopView(
-                adventure_rows,
-                interaction.user.id,
-            ),
+            view=build_adventure_shop_layout(adventure_rows, interaction.user.id),
             ephemeral=True,
         )        
     @app_commands.command(name="상점", description="모험상품 상점을 확인합니다.")
@@ -2021,30 +1971,8 @@ class Shop(commands.Cog):
             )
             return
 
-        lines = []
-
-        for shop_id, item_name, price, stock, user_limit, purchased_count in adventure_rows:
-            if user_limit > 0:
-                limit_text = f"오늘 `{purchased_count}/{user_limit}`"
-            else:
-                limit_text = "무제한"
-
-            lines.append(
-                f"🧭 **{item_name}**\n"
-                f"└ 💰 `{price}P`　📦 재고 `{stock}개`　🧾 {limit_text}"
-            )
-
-        adventure_embed = discord.Embed(
-            title="🧭 모험상품 상점",
-            description="\n\n".join(lines),
-            color=discord.Color.green(),
-        )
-
-        adventure_embed.set_footer(text="아래 드롭다운에서 모험상품을 구매할 수 있습니다.")
-
         await interaction.followup.send(
-            embed=adventure_embed,
-            view=AdventureShopView(adventure_rows, interaction.user.id),
+            view=build_adventure_shop_layout(adventure_rows, interaction.user.id),
             ephemeral=True,
         )
 
