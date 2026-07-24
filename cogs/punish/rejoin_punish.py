@@ -1,16 +1,29 @@
+import asyncio
 import discord
 from discord.ext import commands
 import aiosqlite
 from datetime import datetime
 
 from cogs.punish.punish_settings import get_setting
+from cogs.punish.inactive_role import grant_employee_badge_if_missing
 
 DB_PATH = "database/bot.db"
+
+EMPLOYEE_BADGE_JOIN_DELAY_SECONDS = 5 * 60
 
 
 class RejoinPunish(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    async def _delayed_employee_badge_check(self, member: discord.Member):
+        await asyncio.sleep(EMPLOYEE_BADGE_JOIN_DELAY_SECONDS)
+
+        # 딜레이 도중 멤버가 나갔으면 스킵
+        if member.guild.get_member(member.id) is None:
+            return
+
+        await grant_employee_badge_if_missing(self.bot, member)
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member):
@@ -33,6 +46,9 @@ class RejoinPunish(commands.Cog):
     async def on_member_join(self, member: discord.Member):
         if member.bot:
             return
+
+        # 신규/재입장 여부와 무관하게 사원증 안전장치는 항상 예약한다.
+        asyncio.create_task(self._delayed_employee_badge_check(member))
 
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute(

@@ -11,7 +11,7 @@ from cogs.stocks.stock_utils import (
     DAILY_BUY_LIMIT,
     DELIST_CHANCE,
     EVENT_MAGNITUDE_MULT,
-    BREAKER_MULT,
+    CIRCUIT_BREAKER_DAILY_PCT,
     MERGE_CHANCE,
     NEWS_EVENT_CHANCE,
     NEWS_NEGATIVE_TEMPLATES,
@@ -28,6 +28,7 @@ from cogs.stocks.stock_utils import (
     now_kst,
 )
 from utils.notifications import notify_if_enabled
+from utils.economy import adjust_points, spend_points, log_point_adjustment, ensure_points_log_table
 
 
 async def get_active_stocks():
@@ -163,7 +164,7 @@ def build_market_layout(stocks, last_updated_text: str | None) -> discord.ui.Lay
     view.add_item(discord.ui.TextDisplay(
         "## 📈 주식 시장\n"
         f"-# 최근 갱신: {last_updated_text or '아직 없음'} KST\n"
-        f"-# 갱신 시간: 매일 새벽 6시 (KST)"
+        f"-# 갱신 시간: 매시 정각 (KST)"
     ))
 
     for tier in TIER_ORDER:
@@ -387,11 +388,16 @@ class StockBuyQuantityModal(discord.ui.Modal):
 
         day_key = get_stock_day_key()
 
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("""
-            UPDATE users SET points = points - ? WHERE user_id = ?
-            """, (cost, user_id))
+        paid = await spend_points(user_id, cost, source="stock_buy")
 
+        if not paid:
+            await interaction.response.send_message(
+                "❌ 포인트가 부족합니다.",
+                ephemeral=True,
+            )
+            return
+
+        async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("""
             UPDATE stocks SET available_shares = available_shares - ? WHERE id = ?
             """, (quantity, self.stock_id))
@@ -622,14 +628,12 @@ class StockSellQuantityModal(discord.ui.Modal):
                 """, (remaining_qty, user_id, self.stock_id))
 
             await db.execute("""
-            UPDATE users SET points = points + ? WHERE user_id = ?
-            """, (net, user_id))
-
-            await db.execute("""
             UPDATE stocks SET available_shares = available_shares + ? WHERE id = ?
             """, (quantity, self.stock_id))
 
             await db.commit()
+
+        await adjust_points(user_id, net, source="stock_sell")
 
         await interaction.response.send_message(
             f"✅ **{name}** `{quantity:,}주`를 매도했습니다.\n"
@@ -831,19 +835,21 @@ async def get_stock_holder_ids(db, stock_id: int) -> list:
 
 
 async def update_stock_prices(bot: commands.Bot, day_key: str):
-    """활성 종목 전체의 가격을 갱신하고, 뉴스/서킷브레이커 이벤트를 처리한다."""
+    """활성 종목 전체의 가격을 갱신하고, 뉴스/서킷브레이커 이벤트를 처리한다.
+    서킷브레이커는 그날 00:00 KST 시가(day_open_price) 대비 누적 변동폭 기준이며,
+    한 번 발동되면 그날 자정 롤오버 전까지는 계속 유지된다."""
     events = []
     dm_notifications = []  # (user_id, kind, message)
 
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("""
-        SELECT id, name, tier, current_price, reversion_pending
+        SELECT id, name, tier, current_price, reversion_pending, day_open_price, trading_halted
         FROM stocks
         WHERE status = 'active'
         """) as cursor:
             rows = await cursor.fetchall()
 
-        for stock_id, name, tier, current_price, reversion_pending in rows:
+        for stock_id, name, tier, current_price, reversion_pending, day_open_price, was_halted in rows:
             tier_cfg = TIER_CONFIG[tier]
             max_pct = tier_cfg["max_change_pct"]
 
@@ -869,13 +875,14 @@ async def update_stock_prices(bot: commands.Bot, day_key: str):
                 round(current_price * (1 + pct / 100)),
             )
 
-            actual_pct = (
-                (new_price - current_price) / current_price * 100
-                if current_price else 0
+            reference_price = day_open_price or current_price
+            cumulative_pct = (
+                (new_price - reference_price) / reference_price * 100
+                if reference_price else 0
             )
 
-            breaker_threshold = max_pct * BREAKER_MULT
-            trading_halted = 1 if abs(actual_pct) > breaker_threshold else 0
+            newly_halted = (not was_halted) and abs(cumulative_pct) > CIRCUIT_BREAKER_DAILY_PCT
+            trading_halted = 1 if (was_halted or newly_halted) else 0
 
             await db.execute("""
             UPDATE stocks
@@ -903,8 +910,11 @@ async def update_stock_prices(bot: commands.Bot, day_key: str):
                 for holder_id in await get_stock_holder_ids(db, stock_id):
                     dm_notifications.append((holder_id, "stock_news", f"📰 {detail}"))
 
-            if trading_halted:
-                detail = f"⛔ **{name}** 가격이 급변하여 오늘 남은 시간 거래가 정지됩니다."
+            if newly_halted:
+                detail = (
+                    f"⛔ **{name}** 누적 변동폭이 {cumulative_pct:+.1f}%에 달해 "
+                    f"오늘 남은 시간 거래가 정지됩니다."
+                )
 
                 await log_stock_event(
                     db, day_key, "circuit_breaker", stock_id=stock_id,
@@ -921,6 +931,17 @@ async def update_stock_prices(bot: commands.Bot, day_key: str):
         await notify_if_enabled(bot.get_user(user_id), kind, message)
 
     return events
+
+
+async def roll_over_new_trading_day(day_key: str):
+    """자정(00:00 KST) 롤오버: 그날 시가 기준점을 갱신하고 서킷브레이커를 해제한다."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+        UPDATE stocks
+        SET day_open_price = current_price, trading_halted = 0
+        WHERE status = 'active'
+        """)
+        await db.commit()
 
 
 async def perform_merge(bot: commands.Bot, day_key: str):
@@ -999,6 +1020,7 @@ async def perform_merge(bot: commands.Bot, day_key: str):
                     await db.execute("""
                     UPDATE users SET points = points + ? WHERE user_id = ?
                     """, (remainder, user_id))
+                    await log_point_adjustment(db, user_id, remainder, "주식 합병 잔여지분 환급", None, "stock_merge")
 
                 if new_shares <= 0:
                     await db.execute("""
@@ -1040,11 +1062,11 @@ async def perform_merge(bot: commands.Bot, day_key: str):
         await db.execute("""
         UPDATE stocks
         SET current_price = ?, prev_price = ?, total_shares = ?,
-            available_shares = ?, last_updated_at = ?
+            available_shares = ?, day_open_price = ?, trading_halted = 0, last_updated_at = ?
         WHERE id = ?
         """, (
             new_price, new_price, total_shares_m,
-            available_shares_m, now_kst().isoformat(), a_id,
+            available_shares_m, new_price, now_kst().isoformat(), a_id,
         ))
 
         await db.execute("""
@@ -1098,6 +1120,7 @@ async def perform_delisting(bot: commands.Bot, day_key: str):
             await db.execute("""
             UPDATE users SET points = points + ? WHERE user_id = ?
             """, (refund, user_id))
+            await log_point_adjustment(db, user_id, refund, f"{name} 상장폐지 환급", None, "stock_delist")
 
         await db.execute("""
         DELETE FROM user_stock_holdings WHERE stock_id = ?
@@ -1180,12 +1203,12 @@ async def replenish_tiers(day_key: str):
                 INSERT INTO stocks (
                     name, tier, current_price, prev_price, total_shares,
                     available_shares, status, trading_halted, reversion_pending,
-                    listed_at, last_updated_at
+                    day_open_price, listed_at, last_updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, 'active', 0, 0, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, 'active', 0, 0, ?, ?, ?)
                 """, (
                     name, tier, start_price, start_price,
-                    tier_total_shares, tier_total_shares,
+                    tier_total_shares, tier_total_shares, start_price,
                     now_kst().isoformat(), now_kst().isoformat(),
                 ))
 
@@ -1203,38 +1226,53 @@ async def replenish_tiers(day_key: str):
 
 
 async def run_daily_stock_cycle(bot: commands.Bot, force: bool = False):
+    """이름과 달리 매시 정각(KST)마다 호출된다. 가격 갱신은 매시간, 자정 롤오버
+    (서킷브레이커 해제/시가 리셋)와 합병/상장폐지/보충상장은 00시에만 같이 처리한다."""
     await ensure_stock_tables()
 
+    now = now_kst()
     today_key = get_stock_day_key()
+    hour_key = now.strftime("%Y-%m-%d-%H")
 
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("""
-        SELECT last_processed_day_key FROM stock_market_schedule WHERE id = 1
+        SELECT last_processed_hour_key FROM stock_market_schedule WHERE id = 1
         """) as cursor:
             row = await cursor.fetchone()
 
-    if not force and row and row[0] == today_key:
+    if not force and row and row[0] == hour_key:
         return []
 
+    # force는 "지금 가격만 한 번 더 갱신"용 디버그 트리거이므로, 자정 전용 처리(롤오버/합병/
+    # 상장폐지/보충상장)는 실제로 00시일 때만 돌게 한다 — 버튼 연타로 유발되지 않도록.
+    run_daily_actions = now.hour == 0
+
     all_events = []
+
+    if run_daily_actions:
+        await roll_over_new_trading_day(today_key)
+
     all_events.extend(await update_stock_prices(bot, today_key))
 
-    if random.random() < MERGE_CHANCE:
-        merge_detail = await perform_merge(bot, today_key)
-        if merge_detail:
-            all_events.append(merge_detail)
+    if run_daily_actions:
+        if random.random() < MERGE_CHANCE:
+            merge_detail = await perform_merge(bot, today_key)
+            if merge_detail:
+                all_events.append(merge_detail)
 
-    if random.random() < DELIST_CHANCE:
-        delist_detail = await perform_delisting(bot, today_key)
-        if delist_detail:
-            all_events.append(delist_detail)
+        if random.random() < DELIST_CHANCE:
+            delist_detail = await perform_delisting(bot, today_key)
+            if delist_detail:
+                all_events.append(delist_detail)
 
-    all_events.extend(await replenish_tiers(today_key))
+        all_events.extend(await replenish_tiers(today_key))
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
-        UPDATE stock_market_schedule SET last_processed_day_key = ? WHERE id = 1
-        """, (today_key,))
+        UPDATE stock_market_schedule
+        SET last_processed_hour_key = ?, last_processed_day_key = ?
+        WHERE id = 1
+        """, (hour_key, today_key))
         await db.commit()
 
     if all_events:
@@ -1303,33 +1341,31 @@ async def broadcast_stock_events(bot: commands.Bot, events: list):
                 pass
 
 
-STOCK_UPDATE_HOUR_KST = 6
-
-
 class StockMarket(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.stock_daily_update_loop.start()
+        self.stock_hourly_update_loop.start()
 
     async def cog_load(self):
         await ensure_stock_tables()
+        await ensure_points_log_table()
         await replenish_tiers(get_stock_day_key())
         self.bot.add_view(StockMarketView())
 
     def cog_unload(self):
-        self.stock_daily_update_loop.cancel()
+        self.stock_hourly_update_loop.cancel()
 
     @tasks.loop(minutes=1)
-    async def stock_daily_update_loop(self):
+    async def stock_hourly_update_loop(self):
         now = now_kst()
 
-        if now.hour != STOCK_UPDATE_HOUR_KST:
+        if now.minute != 0:
             return
 
         await run_daily_stock_cycle(self.bot)
 
-    @stock_daily_update_loop.before_loop
-    async def before_stock_daily_update_loop(self):
+    @stock_hourly_update_loop.before_loop
+    async def before_stock_hourly_update_loop(self):
         await self.bot.wait_until_ready()
 
     @app_commands.command(name="주식", description="주식시장 종목 목록을 확인합니다.")

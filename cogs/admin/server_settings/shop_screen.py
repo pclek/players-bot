@@ -3,6 +3,9 @@ import aiosqlite
 from datetime import datetime
 
 from utils.settings_nav import SettingsNav, NavButtonRow
+from utils.activity_boards import get_board_row, save_board
+from utils.economy import adjust_points
+from cogs.sticky.sticky import StickyShopButton
 
 DB_PATH = "database/bot.db"
 
@@ -180,7 +183,7 @@ class ShopNavButton(discord.ui.Button):
             return
 
         if self.target == "shop_board_channel":
-            await self.nav.render(interaction, lambda: build_board_channel_screen(self.nav))
+            await self.nav.render(interaction, lambda: build_board_channel_screen(self.nav, interaction.guild))
             return
 
         if self.target == "sales_log":
@@ -598,13 +601,35 @@ class ShopLogChannelSelect(discord.ui.ChannelSelect):
         ))
 
 
-def build_board_channel_screen(nav: SettingsNav, banner: str | None = None) -> discord.ui.LayoutView:
+async def build_board_channel_screen(nav: SettingsNav, guild: discord.Guild, banner: str | None = None) -> discord.ui.LayoutView:
+    row = await get_board_row(guild.id, "shop")
+
+    channel_text = "설정 안 됨"
+    thread_text = "설정 안 됨"
+
+    if row:
+        channel_id, message_id, thread_id = row
+
+        if channel_id:
+            channel = guild.get_channel(channel_id)
+            if channel:
+                channel_text = channel.mention
+
+        if thread_id:
+            thread = guild.get_channel_or_thread(thread_id)
+            if thread:
+                thread_text = thread.mention
+
     view = discord.ui.LayoutView(timeout=180)
     lines = []
     if banner:
         lines.append(banner)
     lines.append("## 🛒 상점 게시판 채널 설정")
-    lines.append("채팅이 올라오면 30분 쿨타임 기준으로 상점 목록이 하단에 갱신되는 채널입니다.")
+    lines.append(
+        "채널을 선택하면 🧭 모험상점 / 🎨 역할상점 버튼이 달린 안내글을 고정 게시하고, "
+        "구매 결과가 올라오는 전용 스레드를 함께 만듭니다.\n\n"
+        f"게시판 채널: {channel_text} (스레드: {thread_text})"
+    )
 
     view.add_item(discord.ui.Container(
         discord.ui.TextDisplay("\n\n".join(lines)),
@@ -619,22 +644,73 @@ def build_board_channel_screen(nav: SettingsNav, banner: str | None = None) -> d
 class ShopBoardChannelSelect(discord.ui.ChannelSelect):
     def __init__(self, nav: SettingsNav):
         self.nav = nav
-        super().__init__(placeholder="상점 게시판 채널 선택", channel_types=[discord.ChannelType.text], min_values=1, max_values=1)
+        super().__init__(placeholder="상점 게시판 채널 선택 (목록 고정 + 구매결과 스레드 자동 생성)", channel_types=[discord.ChannelType.text], min_values=1, max_values=1)
 
     async def callback(self, interaction: discord.Interaction):
-        channel = self.values[0]
+        await interaction.response.defer(ephemeral=True, thinking=True)
 
+        channel = interaction.guild.get_channel(self.values[0].id)
+
+        if not channel:
+            await interaction.followup.send("❌ 선택한 채널을 찾을 수 없습니다. 다시 시도해주세요.", ephemeral=True)
+            return
+
+        old_row = await get_board_row(interaction.guild.id, "shop")
+
+        if old_row and old_row[0] and old_row[1]:
+            old_channel = interaction.guild.get_channel(old_row[0])
+            if old_channel:
+                try:
+                    old_message = await old_channel.fetch_message(old_row[1])
+                    await old_message.delete()
+                except discord.HTTPException:
+                    pass
+
+        embed = discord.Embed(
+            title="🛒 상점",
+            description=(
+                "아래 버튼으로 상점을 이용하세요.\n"
+                "구매 결과는 이 게시글의 스레드에서 확인할 수 있습니다."
+            ),
+            color=discord.Color.blurple(),
+        )
+
+        shop_view = discord.ui.View(timeout=None)
+        shop_view.add_item(StickyShopButton("adventure"))
+        shop_view.add_item(StickyShopButton("role"))
+
+        message = await channel.send(embed=embed, view=shop_view)
+
+        try:
+            await message.pin()
+        except discord.HTTPException:
+            pass
+
+        thread = None
+        try:
+            thread = await message.create_thread(name="상점 구매결과", auto_archive_duration=10080)
+        except discord.HTTPException:
+            pass
+
+        await save_board(interaction.guild.id, "shop", channel.id, message.id, thread.id if thread else None)
+
+        # 예전 채팅-트리거 재게시 방식은 더 이상 쓰지 않으므로 비활성화
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("""
-            INSERT INTO shop_settings (guild_id, shop_channel_id)
-            VALUES (?, ?)
-            ON CONFLICT(guild_id) DO UPDATE SET shop_channel_id = excluded.shop_channel_id
-            """, (interaction.guild.id, channel.id))
+            UPDATE shop_settings
+            SET shop_channel_id = NULL, shop_message_id = NULL, shop_last_sticky_at = NULL
+            WHERE guild_id = ?
+            """, (interaction.guild.id,))
             await db.commit()
 
+        thread_text = (
+            f" 스레드: {thread.mention}" if thread
+            else " (스레드 생성 실패 — 봇의 '스레드 만들기' 권한을 확인해주세요)"
+        )
+
         await self.nav.render(interaction, lambda: build_board_channel_screen(
-            self.nav,
-            banner=f"✅ 상점 게시판을 {channel.mention}(으)로 설정했습니다. 채팅 시 30분 쿨타임으로 목록이 갱신됩니다.",
+            self.nav, interaction.guild,
+            banner=f"✅ {channel.mention}에 상점 게시판을 만들고 핀 고정했습니다.{thread_text}",
         ))
 
 
@@ -787,7 +863,6 @@ class InventoryUpdateButton(discord.ui.Button):
 
                 if price_row:
                     refund_amount = price_row[0]
-                    await db.execute("UPDATE users SET points = points + ? WHERE user_id = ?", (refund_amount, user_id))
 
             await db.execute("""
             UPDATE inventory SET status = ?, completed_by = ?, completed_at = ? WHERE id = ?
@@ -799,6 +874,9 @@ class InventoryUpdateButton(discord.ui.Button):
                 "SELECT log_channel_id FROM shop_settings WHERE guild_id = ?", (interaction.guild.id,),
             ) as cursor:
                 log_row = await cursor.fetchone()
+
+        if refund_amount > 0:
+            await adjust_points(user_id, refund_amount, reason=f"상점 구매 취소 환불: {item_name}", admin_id=interaction.user.id, source="shop_refund")
 
         status_text = "사용 완료" if self.new_status == "completed" else "취소됨"
         refund_line = f"\n환불 포인트: `{refund_amount}P`" if refund_amount > 0 else ""

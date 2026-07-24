@@ -6,7 +6,7 @@ import aiosqlite
 from datetime import datetime
 
 from utils.checks import is_bot_admin
-from utils.points import ensure_points_log_table, adjust_points_bulk
+from utils.economy import ensure_points_log_table, adjust_points_bulk
 from utils.notifications import notify_if_enabled
 from cogs.punish.punish_settings import get_setting
 from cogs.civilwar.civilwar_settings import (

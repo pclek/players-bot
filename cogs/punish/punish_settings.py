@@ -71,21 +71,18 @@ async def ensure_inactive_rule_schema():
             rule_name TEXT DEFAULT '장기 미활동 설정',
             base_role_ids TEXT NOT NULL,
             inactive_role_ids TEXT NOT NULL,
-            reauth_remove_role_ids TEXT,
             inactive_days INTEGER NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
         """)
 
-        for sql in [
-            "ALTER TABLE inactive_role_rules ADD COLUMN rule_name TEXT DEFAULT '장기 미활동 설정'",
-            "ALTER TABLE inactive_role_rules ADD COLUMN reauth_remove_role_ids TEXT",
-        ]:
-            try:
-                await db.execute(sql)
-            except aiosqlite.OperationalError:
-                pass
+        try:
+            await db.execute(
+                "ALTER TABLE inactive_role_rules ADD COLUMN rule_name TEXT DEFAULT '장기 미활동 설정'"
+            )
+        except aiosqlite.OperationalError:
+            pass
 
         await db.execute("""
         CREATE TABLE IF NOT EXISTS inactive_reauth_logs (
@@ -115,62 +112,20 @@ async def ensure_inactive_rule_schema():
         await db.commit()
 
 
-async def migrate_old_inactive_settings():
-    await ensure_inactive_rule_schema()
-
-    base_role_id = await get_setting("inactive_base_role_id")
-    inactive_days = await get_setting("inactive_days")
-    inactive_role_id = await get_setting("inactive_role_id")
-
-    if not base_role_id or not inactive_days or not inactive_role_id:
-        return
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("""
-        SELECT id
-        FROM inactive_role_rules
-        LIMIT 1
-        """) as cursor:
-            existing = await cursor.fetchone()
-
-        if existing:
-            return
-
-        await db.execute("""
-        INSERT INTO inactive_role_rules (
-            guild_id,
-            rule_name,
-            base_role_ids,
-            inactive_role_ids,
-            reauth_remove_role_ids,
-            inactive_days,
-            enabled
-        )
-        VALUES (NULL, '기존 미활동 설정', ?, ?, ?, ?, 1)
-        """, (
-            str(base_role_id),
-            str(inactive_role_id),
-            str(inactive_role_id),
-            int(inactive_days),
-        ))
-
-        await db.commit()
-
-
 async def get_inactive_rules(include_disabled: bool = False):
-    await migrate_old_inactive_settings()
+    await ensure_inactive_rule_schema()
 
     async with aiosqlite.connect(DB_PATH) as db:
         if include_disabled:
             async with db.execute("""
-            SELECT id, guild_id, rule_name, base_role_ids, inactive_role_ids, reauth_remove_role_ids, inactive_days, enabled
+            SELECT id, guild_id, rule_name, base_role_ids, inactive_role_ids, inactive_days, enabled
             FROM inactive_role_rules
             ORDER BY id ASC
             """) as cursor:
                 return await cursor.fetchall()
 
         async with db.execute("""
-        SELECT id, guild_id, rule_name, base_role_ids, inactive_role_ids, reauth_remove_role_ids, inactive_days, enabled
+        SELECT id, guild_id, rule_name, base_role_ids, inactive_role_ids, inactive_days, enabled
         FROM inactive_role_rules
         WHERE enabled = 1
         ORDER BY id ASC
@@ -183,7 +138,6 @@ async def create_inactive_rule(
     rule_name: str,
     base_role_ids: list[int],
     inactive_role_ids: list[int],
-    reauth_remove_role_ids: list[int],
     inactive_days: int,
 ):
     await ensure_inactive_rule_schema()
@@ -195,17 +149,15 @@ async def create_inactive_rule(
             rule_name,
             base_role_ids,
             inactive_role_ids,
-            reauth_remove_role_ids,
             inactive_days,
             enabled
         )
-        VALUES (?, ?, ?, ?, ?, ?, 1)
+        VALUES (?, ?, ?, ?, ?, 1)
         """, (
             guild_id,
             rule_name,
             ",".join(str(role_id) for role_id in base_role_ids),
             ",".join(str(role_id) for role_id in inactive_role_ids),
-            ",".join(str(role_id) for role_id in reauth_remove_role_ids),
             inactive_days,
         ))
 
@@ -218,7 +170,6 @@ async def update_inactive_rule(
     rule_name: str,
     base_role_ids: list[int],
     inactive_role_ids: list[int],
-    reauth_remove_role_ids: list[int],
     inactive_days: int,
 ):
     await ensure_inactive_rule_schema()
@@ -230,7 +181,6 @@ async def update_inactive_rule(
             rule_name = ?,
             base_role_ids = ?,
             inactive_role_ids = ?,
-            reauth_remove_role_ids = ?,
             inactive_days = ?,
             enabled = 1
         WHERE id = ?
@@ -239,7 +189,6 @@ async def update_inactive_rule(
             rule_name,
             ",".join(str(role_id) for role_id in base_role_ids),
             ",".join(str(role_id) for role_id in inactive_role_ids),
-            ",".join(str(role_id) for role_id in reauth_remove_role_ids),
             inactive_days,
             rule_id,
         ))

@@ -3,6 +3,9 @@ import aiosqlite
 from cogs.adventure.hunting import WEAPON_STATS, ARMOR_SHIELDS
 from discord.ext import commands
 
+from utils.activity_boards import get_or_create_board_thread
+from utils.economy import spend_points as economy_spend_points
+
 from cogs.adventure.adventure_utils import (
     ensure_adventure_profile,
     add_adventure_item,
@@ -18,6 +21,15 @@ from cogs.adventure.adventure_utils import (
 )
 
 DB_PATH = "database/bot.db"
+
+
+async def resolve_result_target(interaction: discord.Interaction):
+    if interaction.guild:
+        thread = await get_or_create_board_thread(interaction.client, interaction.guild.id, "adventure")
+        if thread:
+            return thread
+
+    return interaction.channel
 
 
 async def ensure_user_points(user_id: int):
@@ -44,36 +56,7 @@ async def get_user_points(user_id: int) -> int:
 
 
 async def spend_points(user_id: int, amount: int) -> bool:
-    if amount <= 0:
-        return True
-
-    await ensure_user_points(user_id)
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("""
-        SELECT points
-        FROM users
-        WHERE user_id = ?
-        """, (user_id,)) as cursor:
-            row = await cursor.fetchone()
-
-        points = row[0] if row else 0
-
-        if points < amount:
-            return False
-
-        await db.execute("""
-        UPDATE users
-        SET points = points - ?
-        WHERE user_id = ?
-        """, (
-            amount,
-            user_id,
-        ))
-
-        await db.commit()
-
-    return True
+    return await economy_spend_points(user_id, amount, source="blacksmith")
 
 
 SMELT_RECIPES = {
@@ -467,7 +450,8 @@ class SmeltQuantityModal(discord.ui.Modal):
             view=None,
         )
 
-        await interaction.channel.send(embed=embed)
+        target = await resolve_result_target(interaction)
+        await target.send(embed=embed)
 
 class SmeltSelect(discord.ui.Select):
     def __init__(self, recipe_keys):
@@ -602,7 +586,8 @@ class EquipmentCraftSelect(discord.ui.Select):
             view=None,
         )
 
-        await interaction.channel.send(embed=embed)
+        target = await resolve_result_target(interaction)
+        await target.send(embed=embed)
 
 
 class RepairSelect(discord.ui.Select):
@@ -749,7 +734,8 @@ class RepairSelect(discord.ui.Select):
             view=None,
         )
 
-        await interaction.channel.send(embed=embed)
+        target = await resolve_result_target(interaction)
+        await target.send(embed=embed)
 
 
 class EnhanceSelect(discord.ui.Select):
@@ -890,7 +876,8 @@ class EnhanceSelect(discord.ui.Select):
             view=None,
         )
 
-        await interaction.channel.send(embed=embed)
+        target = await resolve_result_target(interaction)
+        await target.send(embed=embed)
 
 
 class BlacksmithMenuSelect(discord.ui.Select):

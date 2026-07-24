@@ -490,6 +490,11 @@ class Sticky(commands.Cog):
 
         self.bot.add_view(StickyButtonView())
 
+        # /서버설정 > 모험/출석 게시판에서 만드는 고정 버튼 조합
+        # (sticky_messages 테이블 밖에서 관리되므로 별도로 재등록)
+        self.bot.add_view(StickyButtonView(["adventure", "casino", "inventory"]))
+        self.bot.add_view(StickyButtonView(["attendance"]))
+
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("""
             SELECT button_actions, recruit_button

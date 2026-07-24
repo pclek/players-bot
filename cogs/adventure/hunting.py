@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from discord import app_commands
 from discord.ext import commands
 
-from utils.xp import add_xp
+from utils.economy import add_xp, apply_points_loss_rate
 from utils.notifications import notify_if_enabled
 from cogs.adventure.adventure_utils import (
     ensure_adventure_profile,
@@ -48,26 +48,10 @@ EQUIPMENT_MAX_DURABILITY = {'녹슨검': 999999, '구리검': 90, '철검': 110,
 async def apply_death_penalty(user_id: int, weapon_name: str, armor_name: str):
     dead_until = datetime.now(KST) + timedelta(hours=DEATH_PENALTY_HOURS)
 
+    old_points, new_points = await apply_points_loss_rate(user_id, DEATH_POINT_LOSS_RATE)
+    point_loss = old_points - new_points
+
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("""
-        SELECT points
-        FROM users
-        WHERE user_id = ?
-        """, (user_id,)) as cursor:
-            row = await cursor.fetchone()
-
-        points = row[0] if row else 0
-        point_loss = int(points * DEATH_POINT_LOSS_RATE)
-
-        await db.execute("""
-        UPDATE users
-        SET points = MAX(points - ?, 0)
-        WHERE user_id = ?
-        """, (
-            point_loss,
-            user_id,
-        ))
-
         await db.execute("""
         UPDATE adventure_profiles
         SET current_hp = 0,

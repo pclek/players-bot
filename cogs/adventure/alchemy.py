@@ -5,6 +5,8 @@ from cogs.adventure.adventure_utils import (
     ensure_adventure_profile,
     get_adventure_inventory,
 )
+from utils.activity_boards import get_or_create_board_thread
+from utils.economy import ensure_points_log_table, log_point_adjustment
 
 
 DB_PATH = "database/bot.db"
@@ -154,6 +156,7 @@ async def execute_ore_alchemy(
 
     await ensure_adventure_profile(user_id)
     await ensure_user_points(user_id)
+    await ensure_points_log_table()
 
     async with aiosqlite.connect(DB_PATH) as db:
         try:
@@ -230,6 +233,7 @@ async def execute_ore_alchemy(
                     user_id,
                 ),
             )
+            await log_point_adjustment(db, user_id, -ALCHEMY_POINT_COST, f"연금술: {result_name}", None, "alchemy")
 
             # 하위 광석 차감
             remaining_amount = (
@@ -599,6 +603,25 @@ class AlchemyQuantitySelect(discord.ui.Select):
                 else discord.Color.red()
             ),
         )
+
+        if success:
+            thread = None
+            if interaction.guild:
+                thread = await get_or_create_board_thread(
+                    interaction.client, interaction.guild.id, "adventure",
+                )
+
+            target = thread or interaction.channel
+
+            public_embed = discord.Embed(
+                title="⚗️ 연금술 완료",
+                description=f"👤 {interaction.user.mention}\n\n{message}",
+                color=discord.Color.green(),
+            )
+
+            await target.send(embed=public_embed)
+
+            embed.description = f"{message}\n\n결과를 {target.mention}에 게시했습니다."
 
         await interaction.edit_original_response(
             embed=embed,

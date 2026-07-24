@@ -8,6 +8,8 @@ from discord.ext import commands, tasks
 
 from utils.checks import is_bot_admin
 from utils.admin_log import send_admin_log
+from utils.activity_boards import get_or_create_board_thread
+from utils.economy import ensure_points_log_table, log_point_adjustment
 
 DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
@@ -378,6 +380,7 @@ class RoleShopBuySelect(discord.ui.Select):
                 "UPDATE users SET points = points - ? WHERE user_id = ?",
                 (int(price), member.id),
             )
+            await log_point_adjustment(db, member.id, -int(price), f"역할상점 구매: {role.name}", None, "role_shop")
 
             if int(stock) > 0:
                 await db.execute("""
@@ -423,6 +426,7 @@ class RoleShopBuySelect(discord.ui.Select):
             async with aiosqlite.connect(DB_PATH) as db:
                 await db.execute("BEGIN IMMEDIATE")
                 await db.execute("UPDATE users SET points = points + ? WHERE user_id = ?", (int(price), member.id))
+                await log_point_adjustment(db, member.id, int(price), f"역할상점 구매 실패 환불: {role.name}", None, "role_shop_refund")
                 if int(stock) >= 0:
                     await db.execute("""
                     UPDATE role_shop_items
@@ -462,8 +466,24 @@ class RoleShopBuySelect(discord.ui.Select):
             return
 
         remaining_points = current_points - int(price)
+
+        thread = await get_or_create_board_thread(interaction.client, guild.id, "shop")
+        target = thread or interaction.channel
+
+        public_embed = discord.Embed(
+            title="✅ 역할상점 구매",
+            description=(
+                f"{member.mention} 님이 {role.mention} 역할을 구매했습니다.\n\n"
+                f"가격 : `{int(price):,}P`\n"
+                f"사용 기한 : {format_dt(new_expiry)} ({discord.utils.format_dt(new_expiry, style='R')})"
+            ),
+            color=discord.Color.green(),
+        )
+
+        await target.send(embed=public_embed)
+
         await interaction.followup.send(
-            f"✅ {role.mention} 역할을 구매했습니다.\n"
+            f"✅ {role.mention} 역할을 구매했습니다. (결과 {target.mention}에 게시)\n"
             f"사용 기한: {format_dt(new_expiry)} ({discord.utils.format_dt(new_expiry, style='R')})\n"
             f"남은 포인트: `{remaining_points:,}P`",
             ephemeral=True,
@@ -1226,6 +1246,7 @@ class RoleShop(commands.Cog):
 
     async def cog_load(self):
         await ensure_role_shop_tables()
+        await ensure_points_log_table()
 
     def cog_unload(self):
         self.expire_rentals.cancel()

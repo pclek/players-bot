@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from cogs.profile.profile import has_attended_today
-from utils.xp import add_xp
+from utils.economy import add_xp
 from utils.notifications import notify_if_enabled
 
 DB_PATH = "database/bot.db"

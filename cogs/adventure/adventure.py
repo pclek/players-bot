@@ -57,6 +57,7 @@ from cogs.adventure.adventure_utils import (
 
 from cogs.adventure.hunting import HuntView, ARMOR_SHIELDS
 from cogs.adventure.hunting import WEAPON_STATS
+from utils.activity_boards import get_or_create_board_thread
 
 DB_PATH = "database/bot.db"
 HUNTING_DAILY_LIMIT = 5
@@ -610,9 +611,13 @@ class AdventureSelect(discord.ui.Select):
                 print(f"[전투 시작 메시지 삭제 실패] {e}")
 
             await add_adventure_daily_count(user_id, "hunting")
-            await start_user_battle(user_id, interaction.channel.id, None)
 
-            battle_message = await interaction.channel.send(
+            thread = await get_or_create_board_thread(interaction.client, interaction.guild.id, "adventure")
+            battle_channel = thread or interaction.channel
+
+            await start_user_battle(user_id, battle_channel.id, None)
+
+            battle_message = await battle_channel.send(
                 embed=view.make_embed(
                     f"전투를 시작합니다.\n"
                     f"오늘 사냥 횟수 : `{hunting_count + 1}/{HUNTING_DAILY_LIMIT}`"
@@ -622,7 +627,7 @@ class AdventureSelect(discord.ui.Select):
 
             await update_user_battle_message(
                 user_id,
-                interaction.channel.id,
+                battle_channel.id,
                 battle_message.id,
             )
             return
@@ -813,7 +818,9 @@ class AdventureSelect(discord.ui.Select):
         except discord.HTTPException:
             pass
 
-        await interaction.channel.send(embed=embed)
+        thread = await get_or_create_board_thread(interaction.client, interaction.guild.id, "adventure")
+        target = thread or interaction.channel
+        await target.send(embed=embed)
 
 
 class AdventureView(discord.ui.View):
@@ -1059,10 +1066,13 @@ class Adventure(commands.Cog):
             await db.commit()
 
         for user_id, job_type, channel_id in rows:
-            channel = self.bot.get_channel(channel_id)
+            origin_channel = self.bot.get_channel(channel_id)
 
-            if not channel:
+            if not origin_channel or not getattr(origin_channel, "guild", None):
                 continue
+
+            thread = await get_or_create_board_thread(self.bot, origin_channel.guild.id, "adventure")
+            target = thread or origin_channel
 
             embed = discord.Embed(
                 title=f"🧭 {get_job_name(job_type)} 완료",
@@ -1076,7 +1086,7 @@ class Adventure(commands.Cog):
             view = discord.ui.View(timeout=300)
             view.add_item(AdventureResultButton(user_id))
 
-            message = await channel.send(embed=embed, view=view)
+            message = await target.send(embed=embed, view=view)
 
             async with aiosqlite.connect(DB_PATH) as db:
                 await db.execute("""
@@ -1091,15 +1101,15 @@ class Adventure(commands.Cog):
                 await db.commit()
 
         for user_id, job_type, channel_id, notify_message_id in auto_rows:
-            channel = self.bot.get_channel(channel_id)
+            origin_channel = self.bot.get_channel(channel_id)
 
-            if not channel:
+            if not origin_channel or not getattr(origin_channel, "guild", None):
                 continue
 
-            member = None
+            thread = await get_or_create_board_thread(self.bot, origin_channel.guild.id, "adventure")
+            target = thread or origin_channel
 
-            if getattr(channel, "guild", None):
-                member = channel.guild.get_member(user_id)
+            member = target.guild.get_member(user_id) if getattr(target, "guild", None) else None
 
             embed = await settle_adventure_result(user_id, job_type, member)
 
@@ -1107,13 +1117,13 @@ class Adventure(commands.Cog):
 
             if notify_message_id:
                 try:
-                    old_message = await channel.fetch_message(notify_message_id)
+                    old_message = await target.fetch_message(notify_message_id)
                     await old_message.edit(embed=embed, view=None)
                     continue
                 except discord.HTTPException:
                     pass
 
-            await channel.send(embed=embed)
+            await target.send(embed=embed)
 
     @adventure_notify_loop.before_loop
     async def before_adventure_notify_loop(self):
@@ -1167,8 +1177,13 @@ class Adventure(commands.Cog):
                         + embed.description
                     )
 
+                    thread = await get_or_create_board_thread(interaction.client, interaction.guild.id, "adventure")
+                    target = thread or interaction.channel
+                    await target.send(embed=embed)
+
                     await interaction.response.send_message(
-                        embed=embed,
+                        f"✅ 지난 모험 결과를 정산해 {target.mention}에 게시했습니다.",
+                        ephemeral=True,
                     )
                     return
 

@@ -3,7 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils.checks import is_bot_admin
-from utils.points import ensure_points_log_table, adjust_points_bulk
+from utils.economy import ensure_points_log_table, adjust_points_bulk
 from utils.notifications import notify_if_enabled
 from utils.admin_log import send_admin_log
 

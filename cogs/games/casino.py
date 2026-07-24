@@ -16,9 +16,20 @@ from cogs.adventure.adventure_utils import (
     format_dead_until,
 )
 from cogs.adventure.hunting import apply_death_penalty
+from utils.activity_boards import get_or_create_board_thread
+from utils.economy import adjust_points, spend_points as economy_spend_points
 
 DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
+
+
+async def resolve_casino_target(interaction: discord.Interaction):
+    if interaction.guild:
+        thread = await get_or_create_board_thread(interaction.client, interaction.guild.id, "adventure")
+        if thread:
+            return thread
+
+    return interaction.channel
 
 
 MIN_BET = 50
@@ -205,45 +216,11 @@ async def get_points(user_id: int) -> int:
 
 
 async def add_points(user_id: int, amount: int):
-    await ensure_user(user_id)
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-        UPDATE users
-        SET points = points + ?
-        WHERE user_id = ?
-        """, (amount, user_id))
-        await db.commit()
+    await adjust_points(user_id, amount, source="casino")
 
 
 async def spend_points(user_id: int, amount: int) -> bool:
-    if amount <= 0:
-        return True
-
-    await ensure_user(user_id)
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("""
-        SELECT points
-        FROM users
-        WHERE user_id = ?
-        """, (user_id,)) as cursor:
-            row = await cursor.fetchone()
-
-        points = row[0] if row else 0
-
-        if points < amount:
-            return False
-
-        await db.execute("""
-        UPDATE users
-        SET points = points - ?
-        WHERE user_id = ?
-        """, (amount, user_id))
-
-        await db.commit()
-
-    return True
+    return await economy_spend_points(user_id, amount, source="casino")
 
 
 def validate_bet(bet: int):
@@ -693,16 +670,18 @@ class PokerBetButton(discord.ui.Button):
 
         game = PokerGame(interaction.user.id, interaction.user.display_name, self.bet)
 
+        target = await resolve_casino_target(interaction)
+
         await interaction.response.edit_message(
-            content="✅ 포커 게임을 공개 채널에 시작했습니다.",
+            content=f"✅ 포커 게임을 {target.mention}에 시작했습니다.",
             embed=None,
             view=None,
         )
 
-        table_message = await interaction.channel.send(embed=game.make_table_embed())
+        table_message = await target.send(embed=game.make_table_embed())
         game.table_message = table_message
 
-        reaction_message = await interaction.channel.send(
+        reaction_message = await target.send(
             embed=game.make_reaction_embed(
                 f"{interaction.user.mention} 님의 포커 게임이 시작되었습니다.\n"
                 "프리플랍입니다. 체크하면 플랍 카드 3장이 공개됩니다."
@@ -1327,13 +1306,15 @@ class TreasureBetButton(discord.ui.Button):
             color=discord.Color.dark_gold(),
         )
 
+        target_channel = await resolve_casino_target(interaction)
+
         await interaction.response.edit_message(
-            content="✅ 보물찾기 신청을 공개 채널에 보냈습니다.",
+            content=f"✅ 보물찾기 신청을 {target_channel.mention}에 보냈습니다.",
             embed=None,
             view=None,
         )
 
-        await interaction.channel.send(
+        await target_channel.send(
             content=view.target.mention,
             embed=embed,
             view=TreasureAcceptView(
@@ -1952,13 +1933,15 @@ class RouletteBetButton(discord.ui.Button):
             self.bet,
         )
 
+        target = await resolve_casino_target(interaction)
+
         await interaction.response.edit_message(
-            content="✅ 러시안 룰렛을 공개 채널에 시작했습니다.",
+            content=f"✅ 러시안 룰렛을 {target.mention}에 시작했습니다.",
             embed=None,
             view=None,
         )
 
-        await interaction.channel.send(
+        await target.send(
             embed=game.make_embed(
                 f"{interaction.user.mention} 님이 목숨을 건 룰렛을 시작했습니다."
             ),
@@ -2261,13 +2244,15 @@ class SlotBetButton(discord.ui.Button):
             color=discord.Color.gold(),
         )
 
+        target = await resolve_casino_target(interaction)
+
         await interaction.response.edit_message(
-            content="✅ 슬롯머신을 공개 채널에 시작했습니다.",
+            content=f"✅ 슬롯머신을 {target.mention}에 시작했습니다.",
             embed=None,
             view=None,
         )
 
-        slot_message = await interaction.channel.send(embed=spin_embed)
+        slot_message = await target.send(embed=spin_embed)
 
         reveal_states = [
             f"[ {symbols[0]} | ❔ | ❔ ]",

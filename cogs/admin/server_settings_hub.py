@@ -15,9 +15,14 @@ from cogs.admin.server_settings.game_screen import build_game_screen
 from cogs.admin.server_settings.stock_screen import build_stock_screen
 from cogs.admin.server_settings.shop_screen import build_shop_screen
 from cogs.admin.server_settings.sticky_screen import build_sticky_screen
+from cogs.admin.server_settings.reauth_screen import build_reauth_screen
+from cogs.admin.server_settings.role_management_screen import build_role_management_screen
+from cogs.admin.server_settings.activity_board_screen import build_activity_board_screen
 
 CATEGORY_LABELS = {
     "punish": "🛡 제재",
+    "reauth": "🔁 재인증",
+    "role_management": "🏷 역할관리",
     "log": "🗒 로그",
     "civilwar": "⚔ 내전",
     "stock": "📈 주식",
@@ -27,6 +32,7 @@ CATEGORY_LABELS = {
     "sticky": "📌 스티키",
     "shop": "🛒 상점",
     "role_shop": "🎨 역할상점",
+    "activity_board": "🎯 모험/출석 게시판",
 }
 
 
@@ -39,6 +45,10 @@ async def build_category_screen(
         return build_role_shop_screen(nav)
     if category_key == "punish":
         return build_punish_screen(nav)
+    if category_key == "reauth":
+        return await build_reauth_screen(nav, guild)
+    if category_key == "role_management":
+        return build_role_management_screen(nav)
     if category_key == "civilwar":
         return await build_civilwar_screen(nav)
     if category_key == "matching":
@@ -53,6 +63,8 @@ async def build_category_screen(
         return build_shop_screen(nav)
     if category_key == "sticky":
         return await build_sticky_screen(nav)
+    if category_key == "activity_board":
+        return await build_activity_board_screen(nav, guild)
 
     raise ValueError(f"unknown category_key: {category_key}")
 

@@ -4,9 +4,10 @@ from discord.ext import commands
 import aiosqlite
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from cogs.adventure.adventure_utils import get_adventure_profile, is_user_dead, format_dead_until, get_user_max_hp, get_user_attack_bonus
-from utils.xp import required_xp, add_xp
+from cogs.adventure.adventure_utils import get_adventure_profile, is_user_dead, format_dead_until, get_user_max_hp, get_user_attack_bonus, get_equipment_enhance_level
+from utils.economy import required_xp, add_xp
 from utils.notifications import notify_if_enabled
+from utils.activity_boards import get_or_create_board_thread
 from cogs.punish.punish_records import count_active_records
 
 DB_PATH = "database/bot.db"
@@ -142,12 +143,54 @@ async def get_level_rank(guild: discord.Guild, user_id: int):
     return "-", len(active_rows)
 
 
-async def make_profile_embed(member: discord.Member):
+async def make_profile_embed(member: discord.Member, banner: str | None = None) -> discord.ui.LayoutView:
     data = await get_or_create_user(member.id)
     xp, level, points, attendance, voice_time, _legacy_warnings = data
 
     warnings = await count_active_records("warning", member.id)
 
+    need_xp = required_xp(level)
+    rank, total = await get_level_rank(member.guild, member.id)
+
+    header = discord.ui.Section(
+        discord.ui.TextDisplay(f"## 👑 {member.display_name}님의 정보"),
+        discord.ui.TextDisplay(
+            f"⬆️ **레벨 {level}**\n"
+            f"EXP `{xp} / {need_xp}`\n"
+            f"{progress_bar(xp, need_xp)}"
+        ),
+        accessory=discord.ui.Thumbnail(media=member.display_avatar.url),
+    )
+
+    combined_stats = (
+        f"💰 포인트 · `{points}`\n"
+        f"🚨 경고 · `{warnings}`\n"
+        f"🏆 랭킹 · `#{rank} / {total}`\n\n"
+        f"📅 출석일수 · `{attendance}일`\n"
+        f"🎧 음성채팅 · `{format_voice_time(voice_time)}`"
+    )
+
+    children = []
+
+    if banner:
+        children.append(discord.ui.TextDisplay(banner))
+        children.append(discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small))
+
+    children.extend([
+        header,
+        discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+        discord.ui.TextDisplay(combined_stats),
+        discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+        discord.ui.ActionRow(AdventureProfileButton(member.id)),
+    ])
+
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(discord.ui.Container(*children, accent_colour=discord.Colour.blue()))
+
+    return view
+
+
+async def make_adventure_profile_embed(member: discord.Member):
     adventure_profile = await get_adventure_profile(member.id)
     is_dead, dead_until = await is_user_dead(member.id)
 
@@ -163,100 +206,109 @@ async def make_profile_embed(member: discord.Member):
         equipped_weapon = adventure_profile[1] or "녹슨검"
         equipped_armor = adventure_profile[2] or "없음"
 
+    weapon_enhance_level = await get_equipment_enhance_level(member.id, equipped_weapon)
+    armor_enhance_level = await get_equipment_enhance_level(member.id, equipped_armor)
+
     attack_min, attack_max = WEAPON_STATS.get(equipped_weapon, (1, 3))
-    attack_min += attack_bonus
-    attack_max += attack_bonus
+    enhance_multiplier = 1 + (weapon_enhance_level * 0.05)
+    attack_min = int(attack_min * enhance_multiplier) + attack_bonus
+    attack_max = int(attack_max * enhance_multiplier) + attack_bonus
     shield = ARMOR_SHIELDS.get(equipped_armor, 0)
 
-    need_xp = required_xp(level)
-    rank, total = await get_level_rank(member.guild, member.id)
-
     if is_dead:
-        title_icon = "💀"
-        embed_color = discord.Color.dark_grey()
-    else:
-        title_icon = "👑"
-        embed_color = discord.Color.blue()
-
-    embed = discord.Embed(
-        title=f"{title_icon} {member.display_name}님의 정보",
-        color=embed_color,
-    )
-
-    embed.description = (
-        f"⬆️ **레벨 {level}**\n"
-        f"EXP: `{xp} / {need_xp}`\n"
-        f"{progress_bar(xp, need_xp)}"
-    )
-
-    embed.add_field(name="💰 포인트", value=f"`{points}`", inline=True)
-    embed.add_field(name="🚨 현재 경고 횟수", value=f"`{warnings}`", inline=True)
-    embed.add_field(name="🏆 레벨 랭킹", value=f"`#{rank} / {total}`", inline=True)
-
-    embed.add_field(name="📅 출석일수", value=f"`{attendance}일`", inline=True)
-    embed.add_field(name="🎧 음성채팅 시간", value=f"`{format_voice_time(voice_time)}`", inline=True)
-    embed.add_field(name="\u200b", value="\u200b", inline=True)
-
-    if is_dead:
-        embed.add_field(
-            name="❤️ 체력",
-            value=(
-                "`💀 사망 상태`\n"
-                f"부활 예정 : `{format_dead_until(dead_until)}`"
-            ),
-            inline=True,
-        )
-
-        embed.add_field(
-            name="⚔ 공격력",
-            value="`관짝 정비중`",
-            inline=True,
-        )
-
-        embed.add_field(name="\u200b", value="\u200b", inline=True)
-
-        embed.add_field(
-            name="🧰 장비",
-            value="🪦 `부활 전까지 사용 불가`",
-            inline=False,
-        )
-
-        embed.set_footer(text="영혼은 접속했지만 몸이 로그아웃 상태입니다.")
+        file = None
+        thumbnail_media = member.display_avatar.url
 
         if TOMBSTONE_IMAGE_PATH.exists():
-            file = discord.File(
-                TOMBSTONE_IMAGE_PATH,
-                filename="tombstone.png",
+            file = discord.File(TOMBSTONE_IMAGE_PATH, filename="tombstone.png")
+            thumbnail_media = file
+
+        header = discord.ui.Section(
+            discord.ui.TextDisplay(f"## 💀 {member.display_name}님의 모험 프로필"),
+            discord.ui.TextDisplay(
+                "❤️ `💀 사망 상태`\n"
+                f"⏰ 부활 예정 · `{format_dead_until(dead_until)}`"
+            ),
+            accessory=discord.ui.Thumbnail(media=thumbnail_media),
+        )
+
+        body_text = (
+            "⚔ 공격력 · `관짝 정비중`\n"
+            "🧰 장비 · 🪦 `부활 전까지 사용 불가`"
+        )
+
+        view = discord.ui.LayoutView(timeout=None)
+        view.add_item(discord.ui.Container(
+            header,
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            discord.ui.TextDisplay(body_text),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            discord.ui.TextDisplay("-# 영혼은 접속했지만 몸이 로그아웃 상태입니다."),
+            accent_colour=discord.Colour.dark_grey(),
+        ))
+
+        return view, file
+
+    header = discord.ui.Section(
+        discord.ui.TextDisplay(f"## 🗺 {member.display_name}님의 모험 프로필"),
+        discord.ui.TextDisplay(
+            f"❤️ 체력 `{current_hp}/{max_hp}`\n"
+            f"🛡 실드 `+{shield}`\n"
+            f"⚔ 공격력 `{attack_min} ~ {attack_max}`"
+        ),
+        accessory=discord.ui.Thumbnail(media=member.display_avatar.url),
+    )
+
+    equipment_text = (
+        f"🛡 방어구 · `{equipped_armor} +{armor_enhance_level}`\n"
+        f"🗡 무기 · `{equipped_weapon} +{weapon_enhance_level}`"
+    )
+
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(discord.ui.Container(
+        header,
+        discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+        discord.ui.TextDisplay(equipment_text),
+        accent_colour=discord.Colour.blue(),
+    ))
+
+    return view, None
+
+
+class AdventureProfileButton(discord.ui.Button):
+    def __init__(self, user_id: int):
+        super().__init__(label="🗺 모험 프로필", style=discord.ButtonStyle.blurple)
+        self.user_id = user_id
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "❌ 본인의 모험 프로필만 확인할 수 있습니다.", ephemeral=True,
             )
-            embed.set_thumbnail(url="attachment://tombstone.png")
-            return embed, file
+            return
 
-        embed.set_thumbnail(url=member.display_avatar.url)
-        return embed, None
+        member = interaction.guild.get_member(self.user_id) if interaction.guild else None
 
-    embed.add_field(
-        name="❤️ 체력",
-        value=f"`{current_hp}/{max_hp}`  🛡 `+{shield}`",
-        inline=True,
-    )
+        if member is None:
+            await interaction.response.send_message("❌ 멤버 정보를 찾을 수 없습니다.", ephemeral=True)
+            return
 
-    embed.add_field(
-        name="⚔ 공격력",
-        value=f"`{attack_min} ~ {attack_max}`",
-        inline=True,
-    )
+        view, file = await make_adventure_profile_embed(member)
 
-    embed.add_field(name="\u200b", value="\u200b", inline=True)
+        thread = None
+        if interaction.guild:
+            thread = await get_or_create_board_thread(interaction.client, interaction.guild.id, "adventure")
 
-    embed.add_field(
-        name="🧰 장비",
-        value=f"🛡 `{equipped_armor}`\n🗡 `{equipped_weapon}`",
-        inline=False,
-    )
+        target = thread or interaction.channel
 
-    embed.set_thumbnail(url=member.display_avatar.url)
+        if file:
+            await target.send(view=view, file=file)
+        else:
+            await target.send(view=view)
 
-    return embed, None
+        await interaction.response.send_message(
+            f"✅ 모험 프로필을 {target.mention}에 게시했습니다.", ephemeral=True,
+        )
 
 
 class Profile(commands.Cog):
@@ -267,16 +319,13 @@ class Profile(commands.Cog):
     async def my_profile(self, interaction: discord.Interaction):
         await interaction.response.defer()
 
-        embed, file = await make_profile_embed(interaction.user)
+        view = await make_profile_embed(interaction.user)
 
-        if file:
-            await interaction.followup.send(embed=embed, file=file)
-        else:
-            await interaction.followup.send(embed=embed)
+        await interaction.followup.send(view=view)
 
     @app_commands.command(name="출석", description="하루 1회 출석체크를 합니다.")
     async def attendance(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
 
         user_id = interaction.user.id
         await get_or_create_user(user_id)
@@ -339,8 +388,6 @@ class Profile(commands.Cog):
                 f"⬆️ 레벨업! 레벨 `{level}`이 되었습니다.",
             )
 
-        embed, file = await make_profile_embed(interaction.user)
-
         content = (
             f"✨ 출석 성공!\n"
             f"포인트 {reward_points}, 경험치 {reward_xp}이 지급되었습니다.\n"
@@ -348,17 +395,25 @@ class Profile(commands.Cog):
             f"채팅 및 음성통화 활동의 포인트/경험치가 집계됩니다."
         )
 
-        if file:
+        view = await make_profile_embed(interaction.user, banner=content)
+
+        thread = None
+        if interaction.guild:
+            thread = await get_or_create_board_thread(interaction.client, interaction.guild.id, "attendance")
+
+        if thread:
+            await thread.send(view=view)
+
             await interaction.followup.send(
-                content=content,
-                embed=embed,
-                file=file,
+                f"✅ 출석 완료! 결과를 {thread.mention}에 게시했습니다.",
+                ephemeral=True,
             )
-        else:
-            await interaction.followup.send(
-                content=content,
-                embed=embed,
-            )
+            return
+
+        await interaction.followup.send(
+            view=view,
+            ephemeral=True,
+        )
 
 
 async def setup(bot: commands.Bot):

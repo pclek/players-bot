@@ -13,6 +13,7 @@ from cogs.adventure.adventure_utils import (
     remove_adventure_item,
     EQUIPMENT_NAMES,
 )
+from utils.economy import adjust_points, spend_points
 
 DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
@@ -451,33 +452,12 @@ async def move_trade_asset(from_user_id: int, to_user_id: int, kind: str, name: 
         fee_rate = 0.05
         receive_amount = int(amount * (1 - fee_rate))
 
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("""
-            UPDATE users
-            SET points = points - ?
-            WHERE user_id = ?
-            """, (
-                amount,
-                from_user_id,
-            ))
+        paid = await spend_points(from_user_id, amount, source="trade")
 
-            await db.execute("""
-            INSERT OR IGNORE INTO users (
-                user_id
-            )
-            VALUES (?)
-            """, (to_user_id,))
+        if not paid:
+            return False
 
-            await db.execute("""
-            UPDATE users
-            SET points = points + ?
-            WHERE user_id = ?
-            """, (
-                receive_amount,
-                to_user_id,
-            ))
-
-            await db.commit()
+        await adjust_points(to_user_id, receive_amount, source="trade")
 
         return True
 

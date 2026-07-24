@@ -3,157 +3,28 @@ from discord.ext import commands, tasks
 import aiosqlite
 from datetime import datetime, timedelta, timezone
 
+from cogs.punish.punish_settings import (
+    get_setting,
+    set_setting,
+    parse_id_list,
+    ensure_inactive_rule_schema,
+)
+from utils.admin_log import send_admin_log
+
 DB_PATH = "database/bot.db"
 KST = timezone(timedelta(hours=9))
 
-
-
-
-async def get_setting(key: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT value FROM settings WHERE key = ?",
-            (key,),
-        ) as cursor:
-            row = await cursor.fetchone()
-
-    return row[0] if row else None
-
-async def set_setting(key: str, value: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-        INSERT INTO settings (key, value)
-        VALUES (?, ?)
-        ON CONFLICT(key)
-        DO UPDATE SET value = excluded.value
-        """, (key, value))
-
-        await db.commit()
-
-
-def parse_id_list(raw: str | None):
-    if not raw:
-        return []
-
-    ids = []
-
-    for value in str(raw).split(","):
-        value = value.strip()
-
-        if not value:
-            continue
-
-        try:
-            ids.append(int(value))
-        except ValueError:
-            continue
-
-    return ids
-
-
-async def ensure_inactive_rule_schema():
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS inactive_role_rules (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            guild_id INTEGER,
-            rule_name TEXT DEFAULT '장기 미활동 설정',
-            base_role_ids TEXT NOT NULL,
-            inactive_role_ids TEXT NOT NULL,
-            reauth_remove_role_ids TEXT,
-            inactive_days INTEGER NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-        """)
-
-        for sql in [
-            "ALTER TABLE inactive_role_rules ADD COLUMN rule_name TEXT DEFAULT '장기 미활동 설정'",
-            "ALTER TABLE inactive_role_rules ADD COLUMN reauth_remove_role_ids TEXT",
-        ]:
-            try:
-                await db.execute(sql)
-            except aiosqlite.OperationalError:
-                pass
-
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS inactive_reauth_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            guild_id INTEGER,
-            rule_id INTEGER,
-            rule_name TEXT,
-            removed_role_ids TEXT,
-            restored_role_ids TEXT,
-            reauth_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-        """)
-
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS inactive_user_states (
-            user_id INTEGER NOT NULL,
-            guild_id INTEGER NOT NULL,
-            rule_id INTEGER NOT NULL,
-            rule_name TEXT,
-            inactive_role_ids TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (user_id, guild_id, rule_id)
-        )
-        """)
-
-        await db.commit()
-
-
-async def migrate_old_inactive_settings():
-    await ensure_inactive_rule_schema()
-
-    base_role_id = await get_setting("inactive_base_role_id")
-    inactive_days = await get_setting("inactive_days")
-    inactive_role_id = await get_setting("inactive_role_id")
-
-    if not base_role_id or not inactive_days or not inactive_role_id:
-        return
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("""
-        SELECT id
-        FROM inactive_role_rules
-        LIMIT 1
-        """) as cursor:
-            existing = await cursor.fetchone()
-
-        if existing:
-            return
-
-        await db.execute("""
-        INSERT INTO inactive_role_rules (
-            guild_id,
-            rule_name,
-            base_role_ids,
-            inactive_role_ids,
-            reauth_remove_role_ids,
-            inactive_days,
-            enabled
-        )
-        VALUES (NULL, '기존 미활동 설정', ?, ?, ?, ?, 1)
-        """, (
-            str(base_role_id),
-            str(inactive_role_id),
-            str(inactive_role_id),
-            int(inactive_days),
-        ))
-
-        await db.commit()
+EMPLOYEE_BADGE_ROLE_KEY = "employee_badge_role_id"
+REAUTH_DEFAULT_ROLE_KEY = "reauth_default_role_id"
 
 
 async def get_inactive_rules(guild_id: int | None = None):
-    await migrate_old_inactive_settings()
+    await ensure_inactive_rule_schema()
 
     async with aiosqlite.connect(DB_PATH) as db:
         if guild_id is None:
             async with db.execute("""
-            SELECT id, guild_id, rule_name, base_role_ids, inactive_role_ids,
-                   reauth_remove_role_ids, inactive_days, enabled
+            SELECT id, guild_id, rule_name, base_role_ids, inactive_role_ids, inactive_days, enabled
             FROM inactive_role_rules
             WHERE enabled = 1
             ORDER BY inactive_days ASC, id ASC
@@ -161,14 +32,66 @@ async def get_inactive_rules(guild_id: int | None = None):
                 return await cursor.fetchall()
 
         async with db.execute("""
-        SELECT id, guild_id, rule_name, base_role_ids, inactive_role_ids,
-               reauth_remove_role_ids, inactive_days, enabled
+        SELECT id, guild_id, rule_name, base_role_ids, inactive_role_ids, inactive_days, enabled
         FROM inactive_role_rules
         WHERE enabled = 1
         AND (guild_id IS NULL OR guild_id = ?)
         ORDER BY inactive_days ASC, id ASC
         """, (guild_id,)) as cursor:
             return await cursor.fetchall()
+
+
+async def grant_employee_badge_if_missing(bot: commands.Bot, member: discord.Member) -> bool:
+    """사원증이 없으면 지급. 지급했으면 True, 이미 있었거나 설정이 없으면 False."""
+    if member.bot:
+        return False
+
+    badge_role_id = await get_setting(EMPLOYEE_BADGE_ROLE_KEY)
+
+    if not badge_role_id:
+        return False
+
+    badge_role = member.guild.get_role(int(badge_role_id))
+
+    if not badge_role or badge_role in member.roles:
+        return False
+
+    try:
+        await member.add_roles(badge_role, reason="사원증 자동 부여 안전장치")
+    except discord.HTTPException:
+        return False
+
+    await send_admin_log(
+        bot, bot.user, "사원증 자동 지급",
+        target=member,
+        reason="신규/누락 멤버 안전장치",
+    )
+
+    return True
+
+
+async def sweep_employee_badges(bot: commands.Bot, guild: discord.Guild) -> int:
+    """서버 전체 멤버 중 사원증 없는 사람을 찾아 지급. 지급한 인원 수를 반환."""
+    badge_role_id = await get_setting(EMPLOYEE_BADGE_ROLE_KEY)
+
+    if not badge_role_id:
+        return 0
+
+    badge_role = guild.get_role(int(badge_role_id))
+
+    if not badge_role:
+        return 0
+
+    granted = 0
+
+    for member in guild.members:
+        if member.bot or badge_role in member.roles:
+            continue
+
+        if await grant_employee_badge_if_missing(bot, member):
+            granted += 1
+
+    return granted
 
 
 async def update_user_activity(user_id: int):
@@ -265,16 +188,14 @@ def find_reauth_rule(rules, before_role_ids: set[int], stored_states):
             rule_name,
             base_role_ids,
             inactive_role_ids,
-            reauth_remove_role_ids,
             inactive_days,
             enabled,
         ) = rule
         base_ids = parse_id_list(base_role_ids)
         inactive_ids = parse_id_list(inactive_role_ids)
-        remove_ids = parse_id_list(reauth_remove_role_ids) or inactive_ids
 
         has_base_role = any(role_id in before_role_ids for role_id in base_ids)
-        has_remove_role = any(role_id in before_role_ids for role_id in remove_ids)
+        has_remove_role = any(role_id in before_role_ids for role_id in inactive_ids)
 
         if has_base_role and has_remove_role:
             matched_rules.append(rule)
@@ -282,7 +203,7 @@ def find_reauth_rule(rules, before_role_ids: set[int], stored_states):
     if not matched_rules:
         return None, False
 
-    matched_rules.sort(key=lambda rule: (int(rule[6]), rule[0]))
+    matched_rules.sort(key=lambda rule: (int(rule[5]), rule[0]))
     return matched_rules[0], False
 
 
@@ -338,22 +259,14 @@ class InactiveRole(commands.Cog):
             rule_name,
             base_role_ids,
             inactive_role_ids,
-            reauth_remove_role_ids,
             inactive_days,
             enabled,
         ) = selected_rule
 
-        base_ids = parse_id_list(base_role_ids)
         inactive_ids = parse_id_list(inactive_role_ids)
-        remove_ids = parse_id_list(reauth_remove_role_ids) or inactive_ids
 
         remove_roles = [
-            role for role_id in remove_ids
-            if (role := message.guild.get_role(role_id)) is not None
-        ]
-
-        base_roles = [
-            role for role_id in base_ids
+            role for role_id in inactive_ids
             if (role := message.guild.get_role(role_id)) is not None
         ]
 
@@ -362,25 +275,15 @@ class InactiveRole(commands.Cog):
             if role.id in before_role_ids
         ]
 
-        reauth_add_role_ids_raw = await get_setting("reauth_add_role_ids")
-        reauth_add_ids = parse_id_list(reauth_add_role_ids_raw)
+        # 재인증 시에는 기본역할(인턴)만 부여한다. 사원증은 이 흐름에서 건드리지 않음
+        # (사원증은 별도 안전장치가 항상 유지하도록 관리).
+        reauth_default_role_id = await get_setting(REAUTH_DEFAULT_ROLE_KEY)
+        roles_to_add = []
 
-        reauth_add_roles = [
-            role for role_id in reauth_add_ids
-            if (role := message.guild.get_role(role_id)) is not None
-        ]
-
-        roles_to_add_dict = {}
-
-        for role in base_roles:
-            if role.id not in before_role_ids:
-                roles_to_add_dict[role.id] = role
-
-        for role in reauth_add_roles:
-            if role.id not in before_role_ids:
-                roles_to_add_dict[role.id] = role
-
-        roles_to_add = list(roles_to_add_dict.values())
+        if reauth_default_role_id:
+            default_role = message.guild.get_role(int(reauth_default_role_id))
+            if default_role and default_role.id not in before_role_ids:
+                roles_to_add.append(default_role)
 
         if not roles_to_remove and not roles_to_add:
             return
@@ -395,7 +298,7 @@ class InactiveRole(commands.Cog):
             if roles_to_add:
                 await member.add_roles(
                     *roles_to_add,
-                    reason=f"재인증 채널 활동으로 기준 역할 복구 - {rule_name} #{rule_id}",
+                    reason=f"재인증 채널 활동으로 기본역할 부여 - {rule_name} #{rule_id}",
                 )
 
             async with aiosqlite.connect(DB_PATH) as db:
@@ -508,7 +411,6 @@ class InactiveRole(commands.Cog):
             rule_name,
             base_role_ids,
             inactive_role_ids,
-            reauth_remove_role_ids,
             inactive_days,
             enabled,
         ) in rules:
@@ -520,11 +422,14 @@ class InactiveRole(commands.Cog):
     @tasks.loop(hours=1)
     async def inactive_check_loop(self):
         await self.bot.wait_until_ready()
-        await migrate_old_inactive_settings()
 
         now = datetime.now(KST)
 
         for guild in self.bot.guilds:
+            # 미활동 체크의 사각지대(사원증 없는 신규멤버는 base_role_ids 대상에서 애초에 빠짐)를
+            # 없애기 위해, 같은 tick 안에서 사원증 안전장치를 먼저 실행한다.
+            await sweep_employee_badges(self.bot, guild)
+
             rules = await get_inactive_rules(guild.id)
 
             if not rules:
@@ -573,7 +478,6 @@ class InactiveRole(commands.Cog):
                     rule_name,
                     base_role_ids,
                     inactive_role_ids,
-                    reauth_remove_role_ids,
                     inactive_days,
                     enabled,
                 ) in rules:
@@ -589,7 +493,6 @@ class InactiveRole(commands.Cog):
                     rule_name,
                     base_role_ids,
                     inactive_role_ids,
-                    reauth_remove_role_ids,
                     inactive_days,
                     enabled,
                 ) in rules:

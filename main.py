@@ -40,6 +40,7 @@ async def setup_hook():
     await setup_database()
 
     await bot.load_extension("cogs.admin.admin_settings")
+    await bot.load_extension("cogs.admin.announcement_builder")
     await bot.load_extension("cogs.profile.profile")
     await bot.load_extension("cogs.xp.xp_system")
     await bot.load_extension("cogs.xp.voice_time")

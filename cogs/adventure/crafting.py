@@ -8,6 +8,8 @@ from cogs.adventure.adventure_utils import (
     get_adventure_item_count,
     get_adventure_inventory,
 )
+from utils.activity_boards import get_or_create_board_thread
+from utils.economy import spend_points
 
 import aiosqlite
 
@@ -38,34 +40,7 @@ async def get_user_points(user_id: int) -> int:
 
 
 async def spend_user_points(user_id: int, amount: int) -> bool:
-    if amount <= 0:
-        return True
-
-    await ensure_user_points(user_id)
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("""
-        SELECT points
-        FROM users
-        WHERE user_id = ?
-        """, (user_id,)) as cursor:
-            row = await cursor.fetchone()
-
-        points = row[0] if row else 0
-
-        if points < amount:
-            return False
-
-        await db.execute("""
-        UPDATE users
-        SET points = points - ?
-        WHERE user_id = ?
-        """, (
-            amount,
-            user_id,
-        ))
-
-        await db.commit()
+    return await spend_points(user_id, amount, source="cooking")
 
     return True
 
@@ -371,8 +346,16 @@ class CraftQuantityModal(discord.ui.Modal):
         except Exception:
             pass
 
+        thread = None
+        if interaction.guild:
+            thread = await get_or_create_board_thread(interaction.client, interaction.guild.id, "adventure")
+
+        target = thread or interaction.channel
+        await target.send(embed=embed)
+
         await interaction.response.send_message(
-            embed=embed,
+            f"✅ 요리 완료! 결과를 {target.mention}에 게시했습니다.",
+            ephemeral=True,
         )
 
 class CraftSelect(discord.ui.Select):

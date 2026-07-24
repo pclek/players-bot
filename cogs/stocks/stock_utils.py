@@ -27,7 +27,7 @@ TIER_EMOJI = {
 TIER_CONFIG = {
     "동전주": {
         "count": 6,
-        "max_change_pct": 50,
+        "max_change_pct": 9,
         "price_min": 10,
         "price_max": 150,
         "price_floor": 5,
@@ -36,7 +36,7 @@ TIER_CONFIG = {
     },
     "소형주": {
         "count": 5,
-        "max_change_pct": 30,
+        "max_change_pct": 5.5,
         "price_min": 150,
         "price_max": 800,
         "price_floor": 50,
@@ -45,7 +45,7 @@ TIER_CONFIG = {
     },
     "중형주": {
         "count": 5,
-        "max_change_pct": 20,
+        "max_change_pct": 3.5,
         "price_min": 800,
         "price_max": 3000,
         "price_floor": 300,
@@ -54,7 +54,7 @@ TIER_CONFIG = {
     },
     "대형주": {
         "count": 4,
-        "max_change_pct": 10,
+        "max_change_pct": 1.75,
         "price_min": 3000,
         "price_max": 10000,
         "price_floor": 1500,
@@ -87,11 +87,11 @@ async def get_active_user_baseline() -> int:
 
 
 DAILY_BUY_LIMIT = 20000
-NEWS_EVENT_CHANCE = 0.08
-MERGE_CHANCE = 0.05
-DELIST_CHANCE = 0.03
+NEWS_EVENT_CHANCE = 0.0033  # 시간당 확률. 24시간 누적 시 기존 "하루 1회 체크, 8%" 기댓값과 동일
+MERGE_CHANCE = 0.05  # 자정 롤오버 때만 체크되므로 하루 1회 기준 그대로 유지 (월 기대치 ~1.5회)
+DELIST_CHANCE = 0.03  # 마찬가지로 자정 1회 기준 유지 (월 기대치 ~0.9회)
 EVENT_MAGNITUDE_MULT = 1.5
-BREAKER_MULT = 1.2
+CIRCUIT_BREAKER_DAILY_PCT = 27  # 그날 00:00 KST 시가 대비 누적 변동폭이 이 값을 넘으면 그날 남은 시간 거래정지
 REVERSION_DOWN_PROB = 0.65
 
 PREFIX_POOL = [
@@ -184,6 +184,11 @@ async def ensure_stock_tables():
         )
         """)
 
+        try:
+            await db.execute("ALTER TABLE stocks ADD COLUMN day_open_price INTEGER")
+        except aiosqlite.OperationalError:
+            pass
+
         await db.execute("""
         CREATE TABLE IF NOT EXISTS user_stock_holdings (
             user_id       INTEGER NOT NULL,
@@ -242,6 +247,11 @@ async def ensure_stock_tables():
             last_processed_day_key TEXT
         )
         """)
+
+        try:
+            await db.execute("ALTER TABLE stock_market_schedule ADD COLUMN last_processed_hour_key TEXT")
+        except aiosqlite.OperationalError:
+            pass
 
         await db.execute("""
         INSERT OR IGNORE INTO stock_market_schedule (id, last_processed_day_key)

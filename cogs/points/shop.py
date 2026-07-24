@@ -20,6 +20,8 @@ from cogs.adventure.adventure_utils import (
     EQUIPMENT_NAMES,
 )
 from cogs.adventure.crafting import RECIPES
+from utils.activity_boards import get_or_create_board_thread
+from utils.economy import spend_points
 
 DB_PATH = "database/bot.db"
 
@@ -147,7 +149,6 @@ async def equip_inventory_equipment_by_id(
         "enhance_level": int(enhance_level or 0),
     }
 
-SHOP_STICKY_COOLDOWN_MINUTES = 30
 INVENTORY_FOOD_COOLDOWN_HOURS = 2
 
 
@@ -201,10 +202,17 @@ async def send_public_shop_purchase_embed(
 ):
     """
     /상점 메뉴가 나만보기(ephemeral)로 열려 있어도
-    구매 완료 알림은 공개 채널에 별도로 출력합니다.
+    구매 완료 알림은 상점 게시판 스레드(또는 폴백 채널)에 별도로 출력합니다.
     """
+    thread = None
+
+    if interaction.guild:
+        thread = await get_or_create_board_thread(interaction.client, interaction.guild.id, "shop")
+
+    target = thread or interaction.channel
+
     try:
-        await interaction.channel.send(embed=embed)
+        await target.send(embed=embed)
     except Exception:
         await interaction.followup.send(embed=embed)
 
@@ -351,14 +359,14 @@ class AdventureShopQuantityModal(discord.ui.Modal):
                 )
                 return
 
-            await db.execute("""
-            UPDATE users
-            SET points = points - ?
-            WHERE user_id = ?
-            """, (
-                total_price,
-                user_id,
-            ))
+            paid = await spend_points(user_id, total_price, source="adventure_shop")
+
+            if not paid:
+                await interaction.response.send_message(
+                    "❌ 포인트가 부족합니다.",
+                    ephemeral=True,
+                )
+                return
 
             await db.execute("""
             UPDATE adventure_shop_items
@@ -412,7 +420,7 @@ class AdventureShopQuantityModal(discord.ui.Modal):
         await send_public_shop_purchase_embed(interaction, embed)
 
         await interaction.response.send_message(
-            "✅ 구매가 완료되었습니다. 공개 채널에 구매 알림을 보냈습니다.",
+            "✅ 구매가 완료되었습니다. 상점 게시판 스레드에 구매 알림을 보냈습니다.",
             ephemeral=True,
         )
 
@@ -1683,9 +1691,12 @@ class AdventureItemUseFoodButton(discord.ui.Button):
             view=None,
         )
 
-        await interaction.channel.send(
-            embed=embed
-        )
+        thread = None
+        if interaction.guild:
+            thread = await get_or_create_board_thread(interaction.client, interaction.guild.id, "adventure")
+
+        target = thread or interaction.channel
+        await target.send(embed=embed)
 
 class AdventureItemDiscardButton(discord.ui.Button):
     def __init__(self, item_name: str):
@@ -2037,72 +2048,6 @@ class Shop(commands.Cog):
             ephemeral=True,
         )
 
-    @commands.Cog.listener()
-    async def on_message(self, message: discord.Message):
-        if message.author.bot:
-            return
-
-        if not message.guild:
-            return
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute("""
-            SELECT shop_channel_id, shop_message_id, shop_last_sticky_at
-            FROM shop_settings
-            WHERE guild_id = ?
-            """, (message.guild.id,)) as cursor:
-                row = await cursor.fetchone()
-
-        if not row:
-            return
-
-        shop_channel_id, shop_message_id, shop_last_sticky_at = row
-
-        if not shop_channel_id:
-            return
-
-        if message.channel.id != shop_channel_id:
-            return
-
-        now = datetime.now()
-
-        if shop_last_sticky_at:
-            try:
-                last_time = datetime.fromisoformat(shop_last_sticky_at)
-
-                if now - last_time < timedelta(minutes=SHOP_STICKY_COOLDOWN_MINUTES):
-                    return
-            except ValueError:
-                pass
-
-        if shop_message_id:
-            try:
-                old_message = await message.channel.fetch_message(shop_message_id)
-                await old_message.delete()
-            except discord.HTTPException:
-                pass
-
-        adventure_embed, adventure_rows = await make_adventure_shop_embed(message.guild)
-
-        new_message = await message.channel.send(
-            embeds=[
-                adventure_embed,
-            ]
-        )
-
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("""
-            UPDATE shop_settings
-            SET shop_message_id = ?,
-                shop_last_sticky_at = ?
-            WHERE guild_id = ?
-            """, (
-                new_message.id,
-                now.isoformat(),
-                message.guild.id,
-            ))
-
-            await db.commit()        
     @app_commands.command(name="인벤토리", description="구매한 상품 목록을 확인합니다.")
     async def inventory(self, interaction: discord.Interaction):
 
